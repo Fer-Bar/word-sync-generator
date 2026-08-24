@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -170,6 +170,13 @@ def _validate_installation() -> None:
 def _resolve_source(value: str) -> tuple[str, str]:
     parsed = urlparse(value)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
+        hostname = (parsed.hostname or "").lower()
+        if hostname in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}:
+            if parsed.path.rstrip("/") == "/watch" and not parse_qs(parsed.query).get("v"):
+                raise ValueError(
+                    "Invalid YouTube watch URL: missing the 'v=' parameter. "
+                    "Use https://www.youtube.com/watch?v=VIDEO_ID"
+                )
         return "url", value
     path = Path(value).expanduser().resolve()
     if not path.is_file():
