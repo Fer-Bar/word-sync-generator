@@ -1,0 +1,460 @@
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+CONFIG_PATH = Path("/content/karaoke_job.json")
+WORK_DIR = Path("/content/karaoke_workspace")
+LOGGER = logging.getLogger(__name__)
+
+
+def main() -> None:
+    """Generate karaoke artifacts inside a Colab runtime."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    _require_commands("ffmpeg", "ffprobe")
+
+    source_path, metadata = _acquire_source(config)
+    mixture_path = _prepare_mixture(source_path)
+    vocals_path, instrumental_path = _separate_vocals(mixture_path, config["demucs_model"])
+    transcript = _transcribe(vocals_path, metadata, config)
+
+    safe_title = _safe_filename(metadata["title"])
+    output_dir = WORK_DIR / safe_title
+    output_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = output_dir / f"{safe_title}_transcript.json"
+    ass_path = output_dir / f"{safe_title}_karaoke.ass"
+    transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_ass(transcript, ass_path, config["video"])
+
+    karaoke_video = output_dir / f"{safe_title}_karaoke.mp4"
+    lyrics_video = output_dir / f"{safe_title}_lyrics.mp4"
+    instrumental_flac = output_dir / f"{safe_title}_instrumental.flac"
+    _render_video(instrumental_path, ass_path, karaoke_video, config)
+    _render_video(source_path, ass_path, lyrics_video, config)
+    _run(["ffmpeg", "-y", "-i", str(instrumental_path), "-c:a", "flac", str(instrumental_flac)])
+
+    manifest = _build_manifest(config, metadata, output_dir)
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    _create_archive(output_dir, Path(config["archive_path"]))
+    LOGGER.info("Pipeline completed: %s", config["archive_path"])
+
+
+def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    source = config["source"]
+    if source["kind"] == "file":
+        source_path = Path(source["value"])
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Uploaded source not found: {source_path}")
+        return source_path, {
+            "title": source.get("name") or source_path.stem,
+            "uploader": None,
+            "duration": _probe_duration(source_path),
+            "source_url": None,
+        }
+
+    _ensure_deno()
+    url = source["value"]
+    command = _yt_dlp_base(config)
+    metadata_result = _run([*command, "--dump-single-json", "--skip-download", url], capture_output=True)
+    raw_metadata = json.loads(metadata_result.stdout)
+    template = WORK_DIR / "source.%(ext)s"
+    _run([*command, "-f", "bestaudio/best", "--output", str(template), url])
+    candidates = [path for path in WORK_DIR.glob("source.*") if path.suffix not in {".json", ".part", ".ytdl"}]
+    if not candidates:
+        raise RuntimeError("yt-dlp did not produce an audio file")
+    source_path = max(candidates, key=lambda path: path.stat().st_mtime)
+    return source_path, {
+        "title": raw_metadata.get("title") or "karaoke",
+        "uploader": raw_metadata.get("uploader"),
+        "duration": raw_metadata.get("duration") or _probe_duration(source_path),
+        "source_url": raw_metadata.get("webpage_url") or url,
+    }
+
+
+def _yt_dlp_base(config: dict[str, Any]) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--no-playlist",
+        "--remote-components",
+        "ejs:github",
+        "--js-runtimes",
+        "deno",
+    ]
+    cookies_path = config.get("cookies_path")
+    if cookies_path and Path(cookies_path).is_file():
+        command.extend(["--cookies", cookies_path])
+    return command
+
+
+def _ensure_deno() -> None:
+    if shutil.which("deno"):
+        return
+    installer = Path("/tmp/install-deno.sh")
+    LOGGER.info("Installing the Deno runtime required by yt-dlp")
+    urllib.request.urlretrieve("https://deno.land/install.sh", installer)
+    _run(["sh", str(installer)])
+    deno_bin = Path.home() / ".deno" / "bin"
+    os.environ["PATH"] = f"{deno_bin}:{os.environ['PATH']}"
+    if not shutil.which("deno"):
+        raise RuntimeError("Deno installation failed")
+
+
+def _prepare_mixture(source_path: Path) -> Path:
+    mixture_path = WORK_DIR / "mixture.wav"
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-c:a",
+            "pcm_s16le",
+            str(mixture_path),
+        ]
+    )
+    return mixture_path
+
+
+def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
+    separated_dir = WORK_DIR / "separated"
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "demucs",
+            "--name",
+            model_name,
+            "--two-stems",
+            "vocals",
+            "--out",
+            str(separated_dir),
+            str(mixture_path),
+        ]
+    )
+    track_dir = separated_dir / model_name / mixture_path.stem
+    vocals_path = track_dir / "vocals.wav"
+    instrumental_path = track_dir / "no_vocals.wav"
+    if not vocals_path.is_file() or not instrumental_path.is_file():
+        raise RuntimeError("Demucs did not produce the expected vocal stems")
+    return vocals_path, instrumental_path
+
+
+def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    import torch
+    from faster_whisper import WhisperModel
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    if device == "cpu":
+        LOGGER.warning("CUDA is unavailable; transcription will run on CPU")
+
+    model = WhisperModel(
+        config["whisper_model"],
+        device=device,
+        compute_type=compute_type,
+        download_root=str(WORK_DIR / "models"),
+    )
+    language = None if config["language"] == "auto" else config["language"]
+    segments, info = model.transcribe(
+        str(vocals_path),
+        language=language,
+        beam_size=5,
+        word_timestamps=True,
+        vad_filter=True,
+        vad_parameters={
+            "threshold": 0.25,
+            "min_silence_duration_ms": 500,
+            "speech_pad_ms": 250,
+        },
+        condition_on_previous_text=False,
+    )
+
+    words = []
+    for segment in segments:
+        for word in segment.words or []:
+            text = word.word.strip()
+            if not text or word.start is None or word.end is None:
+                continue
+            words.append(
+                {
+                    "start": round(float(word.start), 3),
+                    "end": round(float(word.end), 3),
+                    "text": text,
+                    "probability": round(float(word.probability or 0), 4),
+                }
+            )
+    if not words:
+        raise RuntimeError("Faster Whisper did not produce word timestamps")
+
+    grouped_segments = _group_words(words, max_chars=42, max_gap=0.8)
+    return {
+        "schema_version": 1,
+        "song": {
+            "title": metadata["title"],
+            "uploader": metadata["uploader"],
+            "duration": metadata["duration"],
+        },
+        "transcription": {
+            "engine": "faster-whisper",
+            "model": config["whisper_model"],
+            "language": info.language,
+            "language_probability": round(float(info.language_probability), 4),
+        },
+        "segments": grouped_segments,
+    }
+
+
+def _group_words(words: list[dict[str, Any]], max_chars: int, max_gap: float) -> list[dict[str, Any]]:
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+
+    for word in words:
+        prospective_text = " ".join(item["text"] for item in [*current, word])
+        gap = word["start"] - current[-1]["end"] if current else 0
+        punctuation_break = bool(current and re.search(r"[.!?]$", current[-1]["text"]))
+        should_break = current and (len(prospective_text) > max_chars or gap > max_gap or punctuation_break)
+        if should_break:
+            groups.append(current)
+            current = []
+        current.append(word)
+    if current:
+        groups.append(current)
+
+    segments = []
+    for segment_index, group in enumerate(groups):
+        normalized_words = []
+        for word_index, word in enumerate(group):
+            normalized_words.append({"id": f"s{segment_index}-w{word_index}", **word})
+        segments.append(
+            {
+                "id": f"s{segment_index}",
+                "start": group[0]["start"],
+                "end": group[-1]["end"],
+                "text": " ".join(word["text"] for word in group),
+                "words": normalized_words,
+            }
+        )
+    return segments
+
+
+def _write_ass(transcript: dict[str, Any], ass_path: Path, video: dict[str, int]) -> None:
+    width = video["width"]
+    height = video["height"]
+    font_size = 64 if height >= 1080 else 46
+    margin = 70 if height >= 1080 else 48
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,DejaVu Sans,{font_size},&H0000D7FF,&H00FFFFFF,&H00000000,&H70000000,-1,0,0,0,"
+        f"100,100,0,0,1,4,1,2,{margin},{margin},{margin},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for segment in transcript["segments"]:
+        words = segment["words"]
+        karaoke_parts = []
+        for index, word in enumerate(words):
+            next_start = words[index + 1]["start"] if index + 1 < len(words) else word["end"]
+            duration = max(1, round((next_start - word["start"]) * 100))
+            karaoke_parts.append(f"{{\\kf{duration}}}{_escape_ass_text(word['text'])}")
+        text = " ".join(karaoke_parts)
+        lines.append(
+            f"Dialogue: 0,{_ass_timestamp(segment['start'])},{_ass_timestamp(segment['end'])},Default,,0,0,0,,{text}"
+        )
+    ass_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _render_video(audio_path: Path, ass_path: Path, output_path: Path, config: dict[str, Any]) -> None:
+    video = config["video"]
+    width = video["width"]
+    height = video["height"]
+    fps = video["fps"]
+    duration = _probe_duration(audio_path)
+    background = config["background"]
+
+    if background["kind"] == "image":
+        background_path = Path(background["value"])
+        if not background_path.is_file():
+            raise FileNotFoundError(f"Uploaded background not found: {background_path}")
+        input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(background_path)]
+        video_filter = (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
+            f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.38:t=fill,ass={_escape_filter_path(ass_path)}"
+        )
+    else:
+        color = background["value"].lstrip("#")
+        input_args = ["-f", "lavfi", "-i", f"color=c=0x{color}:s={width}x{height}:r={fps}"]
+        video_filter = f"ass={_escape_filter_path(ass_path)}"
+
+    base_command = [
+        "ffmpeg",
+        "-y",
+        *input_args,
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-vf",
+        video_filter,
+        "-t",
+        f"{duration:.3f}",
+        "-r",
+        str(fps),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
+
+    if _nvenc_available():
+        try:
+            _run(
+                [
+                    *base_command,
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p4",
+                    "-rc",
+                    "vbr",
+                    "-cq",
+                    "25",
+                    "-b:v",
+                    "0",
+                    str(output_path),
+                ]
+            )
+            return
+        except subprocess.CalledProcessError:
+            LOGGER.warning("NVENC failed; retrying with libx264")
+            output_path.unlink(missing_ok=True)
+
+    _run([*base_command, "-c:v", "libx264", "-preset", "medium", "-crf", "25", str(output_path)])
+
+
+def _nvenc_available() -> bool:
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        encoders = _run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True)
+        return "h264_nvenc" in encoders.stdout
+    except (ImportError, subprocess.CalledProcessError):
+        return False
+
+
+def _build_manifest(config: dict[str, Any], metadata: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    files = []
+    for path in sorted(output_dir.iterdir()):
+        if path.is_file():
+            files.append({"name": path.name, "size_bytes": path.stat().st_size})
+    return {
+        "schema_version": 1,
+        "job_id": config["job_id"],
+        "status": "completed",
+        "source": {
+            "kind": config["source"]["kind"],
+            "name": metadata["title"],
+            "url": metadata["source_url"],
+        },
+        "configuration": {
+            "language": config["language"],
+            "whisper_model": config["whisper_model"],
+            "demucs_model": config["demucs_model"],
+            "background_kind": config["background"]["kind"],
+            "video": config["video"],
+        },
+        "files": files,
+    }
+
+
+def _create_archive(output_dir: Path, archive_path: Path) -> None:
+    archive_path.unlink(missing_ok=True)
+    created_path = Path(shutil.make_archive(str(archive_path.with_suffix("")), "zip", root_dir=output_dir))
+    if created_path != archive_path:
+        created_path.replace(archive_path)
+
+
+def _probe_duration(path: Path) -> float:
+    result = _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+    )
+    return float(result.stdout.strip())
+
+
+def _safe_filename(value: str) -> str:
+    normalized = re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._")
+    return normalized[:80] or "karaoke"
+
+
+def _escape_ass_text(value: str) -> str:
+    return value.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def _escape_filter_path(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def _ass_timestamp(seconds: float) -> str:
+    centiseconds = max(0, round(seconds * 100))
+    hours, remainder = divmod(centiseconds, 360_000)
+    minutes, remainder = divmod(remainder, 6_000)
+    whole_seconds, fraction = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{fraction:02d}"
+
+
+def _require_commands(*commands: str) -> None:
+    missing = [command for command in commands if not shutil.which(command)]
+    if missing:
+        raise RuntimeError(f"Missing required commands: {', '.join(missing)}")
+
+
+def _run(command: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
+    LOGGER.info("Running %s", " ".join(command))
+    return subprocess.run(command, check=True, capture_output=capture_output, text=True)
+
+
+if __name__ == "__main__":
+    main()
