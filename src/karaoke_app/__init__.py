@@ -1,0 +1,1 @@
+"""Karaoke video generator."""
