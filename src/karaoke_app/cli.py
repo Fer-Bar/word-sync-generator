@@ -18,6 +18,7 @@ COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
+REMOTE_STATUS = Path("/content/karaoke_status.json")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
@@ -50,7 +51,7 @@ def main() -> int:
     except KeyboardInterrupt:
         LOGGER.error("Interrupted")
         return 130
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         LOGGER.error("%s", error)
         return 1
     return 0
@@ -81,6 +82,7 @@ def run_job(args: argparse.Namespace) -> Path:
         temporary_path = Path(temporary_directory)
         job_path = temporary_path / "job.json"
         archive_path = temporary_path / "result.zip"
+        status_path = temporary_path / "status.json"
         remote_source = source_value
         remote_background = None
         remote_cookies = None
@@ -140,6 +142,14 @@ def run_job(args: argparse.Namespace) -> Path:
                     str(args.timeout),
                 ]
             )
+            status_download = _run(
+                [*colab, "download", "--session", session, str(REMOTE_STATUS), str(status_path)], check=False
+            )
+            if status_download.returncode != 0:
+                raise RuntimeError("Remote pipeline ended without reporting its status")
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            if status.get("status") != "completed":
+                raise RuntimeError(f"Remote pipeline failed: {status.get('error', 'unknown error')}")
             _run([*colab, "download", "--session", session, str(REMOTE_ARCHIVE), str(archive_path)])
             _extract_archive(archive_path, output_dir)
         finally:

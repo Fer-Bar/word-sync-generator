@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_PATH = Path("/content/karaoke_job.json")
+STATUS_PATH = Path("/content/karaoke_status.json")
 WORK_DIR = Path("/content/karaoke_workspace")
 LOGGER = logging.getLogger(__name__)
 
@@ -63,14 +64,33 @@ def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     _ensure_deno()
     url = source["value"]
     command = _yt_dlp_base(config)
-    metadata_result = _run([*command, "--dump-single-json", "--skip-download", url], capture_output=True)
+    try:
+        metadata_result = _run([*command, "--dump-single-json", "--skip-download", url], capture_output=True)
+        template = WORK_DIR / "source.%(ext)s"
+        download_result = _run(
+            [
+                *command,
+                "--no-simulate",
+                "-f",
+                "bestaudio/best",
+                "--output",
+                str(template),
+                "--print",
+                "after_move:filepath",
+                url,
+            ],
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or error.stdout or str(error)).strip()
+        raise RuntimeError(f"yt-dlp failed: {details}") from error
+
     raw_metadata = json.loads(metadata_result.stdout)
-    template = WORK_DIR / "source.%(ext)s"
-    _run([*command, "-f", "bestaudio/best", "--output", str(template), url])
-    candidates = [path for path in WORK_DIR.glob("source.*") if path.suffix not in {".json", ".part", ".ytdl"}]
-    if not candidates:
-        raise RuntimeError("yt-dlp did not produce an audio file")
-    source_path = max(candidates, key=lambda path: path.stat().st_mtime)
+    reported_paths = [Path(line.strip()) for line in download_result.stdout.splitlines() if line.strip()]
+    source_path = next((path for path in reversed(reported_paths) if path.is_file()), None)
+    if source_path is None:
+        details = download_result.stderr.strip() or download_result.stdout.strip() or "no filepath reported"
+        raise RuntimeError(f"yt-dlp did not produce a usable audio file: {details}")
     return source_path, {
         "title": raw_metadata.get("title") or "karaoke",
         "uploader": raw_metadata.get("uploader"),
@@ -84,6 +104,7 @@ def _yt_dlp_base(config: dict[str, Any]) -> list[str]:
         sys.executable,
         "-m",
         "yt_dlp",
+        "--no-config",
         "--no-playlist",
         "--remote-components",
         "ejs:github",
@@ -456,5 +477,17 @@ def _run(command: list[str], *, capture_output: bool = False) -> subprocess.Comp
     return subprocess.run(command, check=True, capture_output=capture_output, text=True)
 
 
+def _run_with_status() -> None:
+    STATUS_PATH.unlink(missing_ok=True)
+    try:
+        main()
+    except Exception as error:
+        STATUS_PATH.write_text(
+            json.dumps({"status": "failed", "error": str(error)}, ensure_ascii=False), encoding="utf-8"
+        )
+        raise
+    STATUS_PATH.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+
+
 if __name__ == "__main__":
-    main()
+    _run_with_status()
