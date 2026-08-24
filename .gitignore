@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.python-version
+# Virtual environments
+.venv
+.env
+# Project data
+data/indexes/
+cookies.txt
+outputs/
+*.zip
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.atl/
+# Local tooling
+.codegraph/
+.ruff_cache/
+.pytest_cache/
+.uv-cache/
+frontend/node_modules/
+frontend/.astro/

@@ -1,0 +1,37 @@
+[project]
+name = "karaoke-video-generator"
+version = "0.1.0"
+description = "Generate karaoke and lyrics videos on Google Colab"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+karaoke = "karaoke_app.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/karaoke_app"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [
+    ".uv-cache",
+    ".venv",
+    "ENV",
+    "__pycache__",
+    "env",
+    "venv",
+    "**/migrations/**",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
