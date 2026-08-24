@@ -3,7 +3,10 @@ name = "karaoke-video-generator"
 version = "0.1.0"
 description = "Generate karaoke and lyrics videos on Google Colab"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "google-colab-cli==0.6.0",
+    "jupyter-kernel-client==0.15.0",
+]
 
 [project.scripts]
 karaoke = "karaoke_app.cli:main"

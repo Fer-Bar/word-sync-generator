@@ -152,7 +152,7 @@ def run_job(args: argparse.Namespace) -> Path:
 
 def _validate_installation() -> None:
     if not shutil.which("colab"):
-        raise OSError("The 'colab' executable is not available. Install google-colab-cli with uv.")
+        raise OSError("The 'colab' executable is not available. Run 'uv sync --dev' to install project dependencies.")
     if not COLAB_SCRIPT.is_file() or not COLAB_REQUIREMENTS.is_file():
         raise OSError("Colab pipeline files are missing from the project")
 
