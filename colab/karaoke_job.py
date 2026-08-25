@@ -13,6 +13,12 @@ CONFIG_PATH = Path("/content/karaoke_job.json")
 STATUS_PATH = Path("/content/karaoke_status.json")
 WORK_DIR = Path("/content/karaoke_workspace")
 LOGGER = logging.getLogger(__name__)
+MAX_LYRIC_LINES_PER_PAGE = 3
+PAGE_BREAK_SILENCE_SECONDS = 1.5
+MAX_PAGE_DURATION_SECONDS = 15.0
+PAGE_LEAD_SECONDS = 0.35
+PAGE_TAIL_SECONDS = 0.35
+PAGE_FADE_MILLISECONDS = 150
 
 
 def main() -> None:
@@ -273,12 +279,149 @@ def _group_words(words: list[dict[str, Any]], max_chars: int, max_gap: float) ->
     return segments
 
 
+def _group_page_lines(
+    segments: list[dict[str, Any]],
+    *,
+    max_lines: int = MAX_LYRIC_LINES_PER_PAGE,
+    break_silence: float = PAGE_BREAK_SILENCE_SECONDS,
+    max_duration: float = MAX_PAGE_DURATION_SECONDS,
+) -> list[list[dict[str, Any]]]:
+    if max_lines < 1:
+        raise ValueError("Lyric pages must allow at least one line")
+
+    grouped_lines: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for segment in segments:
+        if not segment.get("words"):
+            continue
+        gap = segment["start"] - current[-1]["end"] if current else 0
+        duration = segment["end"] - current[0]["start"] if current else 0
+        should_break = current and (
+            len(current) >= max_lines or gap >= break_silence or duration > max_duration
+        )
+        if should_break:
+            grouped_lines.append(current)
+            current = []
+        current.append(segment)
+    if current:
+        grouped_lines.append(current)
+    return grouped_lines
+
+
+def _page_words(page: dict[str, Any]) -> list[dict[str, Any]]:
+    return [word for line in page["lines"] for word in line["words"]]
+
+
+def _normalize_karaoke_timeline(
+    words: list[dict[str, Any]], event_start_cs: int
+) -> tuple[list[int], list[int], int]:
+    word_starts_cs: list[int] = []
+    for word in words:
+        earliest_start_cs = word_starts_cs[-1] + 1 if word_starts_cs else event_start_cs
+        word_starts_cs.append(max(earliest_start_cs, _to_centiseconds(word["start"])))
+
+    karaoke_end_cs = max(word_starts_cs[-1] + 1, _to_centiseconds(words[-1]["end"]))
+    durations_cs = [
+        following_start_cs - start_cs
+        for start_cs, following_start_cs in zip(
+            word_starts_cs, [*word_starts_cs[1:], karaoke_end_cs], strict=True
+        )
+    ]
+    return word_starts_cs, durations_cs, karaoke_end_cs
+
+
+def _build_lyric_pages(
+    segments: list[dict[str, Any]],
+    *,
+    max_lines: int = MAX_LYRIC_LINES_PER_PAGE,
+    break_silence: float = PAGE_BREAK_SILENCE_SECONDS,
+    max_duration: float = MAX_PAGE_DURATION_SECONDS,
+    lead: float = PAGE_LEAD_SECONDS,
+    tail: float = PAGE_TAIL_SECONDS,
+) -> list[dict[str, Any]]:
+    grouped_lines = _group_page_lines(
+        segments,
+        max_lines=max_lines,
+        break_silence=break_silence,
+        max_duration=max_duration,
+    )
+    pages: list[dict[str, Any]] = [{"lines": lines} for lines in grouped_lines]
+    lead_centiseconds = _to_centiseconds(lead)
+    tail_centiseconds = _to_centiseconds(tail)
+    next_display_start_cs: int | None = None
+
+    for page_index, page in enumerate(pages):
+        words = _page_words(page)
+        source_start_cs = _to_centiseconds(words[0]["start"])
+        desired_display_start_cs = max(0, source_start_cs - lead_centiseconds)
+        display_start_cs = (
+            desired_display_start_cs if next_display_start_cs is None else next_display_start_cs
+        )
+        word_starts_cs, durations_cs, karaoke_end_cs = _normalize_karaoke_timeline(words, display_start_cs)
+        desired_display_end_cs = max(
+            karaoke_end_cs, _to_centiseconds(words[-1]["end"]) + tail_centiseconds
+        )
+
+        page.update(
+            {
+                "start": words[0]["start"],
+                "end": words[-1]["end"],
+                "display_start_cs": display_start_cs,
+                "word_starts_cs": word_starts_cs,
+                "durations_cs": durations_cs,
+                "karaoke_end_cs": karaoke_end_cs,
+            }
+        )
+        if page_index + 1 == len(pages):
+            page["display_end_cs"] = desired_display_end_cs
+            continue
+
+        following_words = _page_words(pages[page_index + 1])
+        following_source_start_cs = _to_centiseconds(following_words[0]["start"])
+        following_desired_start_cs = max(0, following_source_start_cs - lead_centiseconds)
+        if desired_display_end_cs <= following_desired_start_cs:
+            page["display_end_cs"] = desired_display_end_cs
+            next_display_start_cs = following_desired_start_cs
+            continue
+
+        if karaoke_end_cs <= following_source_start_cs:
+            boundary_cs = (karaoke_end_cs + following_source_start_cs) // 2
+        else:
+            boundary_cs = karaoke_end_cs
+        page["display_end_cs"] = boundary_cs
+        next_display_start_cs = boundary_cs
+
+    return pages
+
+
+def _render_page_text(page: dict[str, Any]) -> str:
+    words = _page_words(page)
+    if not words:
+        return ""
+
+    karaoke_parts = [f"{{\\fad({PAGE_FADE_MILLISECONDS},{PAGE_FADE_MILLISECONDS})}}"]
+    initial_delay = page["word_starts_cs"][0] - page["display_start_cs"]
+    if initial_delay:
+        karaoke_parts.append(f"{{\\k{initial_delay}}}")
+
+    word_index = 0
+    for line_index, line in enumerate(page["lines"]):
+        for line_word_index, word in enumerate(line["words"]):
+            if line_word_index:
+                karaoke_parts.append(" ")
+            karaoke_parts.append(f"{{\\kf{page['durations_cs'][word_index]}}}{_escape_ass_text(word['text'])}")
+            word_index += 1
+        if line_index + 1 < len(page["lines"]):
+            karaoke_parts.append(r"\N")
+    return "".join(karaoke_parts)
+
+
 def _write_ass(transcript: dict[str, Any], ass_path: Path, video: dict[str, int]) -> None:
     width = video["width"]
     height = video["height"]
     font_size = 64 if height >= 1080 else 46
     margin = 70 if height >= 1080 else 48
-    lines = [
+    ass_lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
         f"PlayResX: {width}",
@@ -291,23 +434,18 @@ def _write_ass(transcript: dict[str, Any], ass_path: Path, video: dict[str, int]
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
         "MarginL, MarginR, MarginV, Encoding",
         f"Style: Default,DejaVu Sans,{font_size},&H0000D7FF,&H00FFFFFF,&H00000000,&H70000000,-1,0,0,0,"
-        f"100,100,0,0,1,4,1,2,{margin},{margin},{margin},1",
+        f"100,100,0,0,1,4,1,5,{margin},{margin},{margin},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    for segment in transcript["segments"]:
-        words = segment["words"]
-        karaoke_parts = []
-        for index, word in enumerate(words):
-            next_start = words[index + 1]["start"] if index + 1 < len(words) else word["end"]
-            duration = max(1, round((next_start - word["start"]) * 100))
-            karaoke_parts.append(f"{{\\kf{duration}}}{_escape_ass_text(word['text'])}")
-        text = " ".join(karaoke_parts)
-        lines.append(
-            f"Dialogue: 0,{_ass_timestamp(segment['start'])},{_ass_timestamp(segment['end'])},Default,,0,0,0,,{text}"
+    for page in _build_lyric_pages(transcript["segments"]):
+        ass_lines.append(
+            f"Dialogue: 0,{_ass_timestamp_from_centiseconds(page['display_start_cs'])},"
+            f"{_ass_timestamp_from_centiseconds(page['display_end_cs'])},"
+            f"Default,,0,0,0,,{_render_page_text(page)}"
         )
-    ass_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ass_path.write_text("\n".join(ass_lines) + "\n", encoding="utf-8")
 
 
 def _render_video(audio_path: Path, ass_path: Path, output_path: Path, config: dict[str, Any]) -> None:
@@ -458,12 +596,16 @@ def _escape_filter_path(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
-def _ass_timestamp(seconds: float) -> str:
-    centiseconds = max(0, round(seconds * 100))
+def _ass_timestamp_from_centiseconds(centiseconds: int) -> str:
+    centiseconds = max(0, centiseconds)
     hours, remainder = divmod(centiseconds, 360_000)
     minutes, remainder = divmod(remainder, 6_000)
     whole_seconds, fraction = divmod(remainder, 100)
     return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{fraction:02d}"
+
+
+def _to_centiseconds(seconds: float) -> int:
+    return max(0, round(seconds * 100))
 
 
 def _require_commands(*commands: str) -> None:

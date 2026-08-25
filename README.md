@@ -32,6 +32,8 @@ directory. It does not mount or use Google Drive.
 The command creates a T4 session, uploads the required files, installs the pinned remote dependencies, executes the
 pipeline, downloads a ZIP, extracts it under `outputs/<job-id>/`, and stops the Colab session.
 
+Subtitle paging is automatic; the standard commands above do not require synchronization or alignment flags.
+
 ## Colab Sessions
 
 The number of simultaneous runtimes depends on the Colab account. If the account only supports one runtime, stop any
@@ -92,6 +94,27 @@ Each output directory contains:
 
 Temporary source audio, vocal stems, models, and cookies remain on the ephemeral Colab VM and are removed when the
 session stops.
+
+## Subtitle Behavior
+
+Production transcription uses one Faster Whisper pass with Silero VAD and word timestamps. Those words are grouped into
+lyric lines at 42 characters, sentence-ending punctuation, or gaps longer than 0.8 seconds. Consecutive lines form
+centered, timing-aware pages with at most three explicit lines. A new page starts before a silence of 1.5 seconds, before
+a fourth line, or before the page would exceed 15 seconds.
+
+Each ASS page requests short lead and tail visibility with fade-in and fade-out. Available lead or tail time is shortened
+at the start of the track or when an overlapping schedule requires a shared boundary; page display windows never overlap.
+For non-overlapping source timestamps, karaoke highlighting follows absolute word starts after ASS centisecond
+quantization. Words that quantize to the same instant are serialized in transcript order with a minimum one-centisecond
+duration. If source words overlap across a page boundary, non-overlapping ASS dialogues cannot represent both timestamps
+simultaneously: the earlier page finishes its complete schedule, then the following page starts immediately and delays
+overlapping words by the minimum required time. Segments without words are skipped. Review `*_transcript.json` and
+`*_karaoke.ass` when speech recognition needs manual correction; no subtitle strategy can infer reliable lyrics from
+every vocal mix.
+
+WhisperX forced alignment is intentionally not the production default. The full alignment experiment is preserved on
+`experiment/whisperx-alignment` at commit `85f2d93` for future research without adding its runtime or dependencies to
+the main pipeline.
 
 ## Dependency Choices
 
