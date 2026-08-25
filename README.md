@@ -116,6 +116,10 @@ WhisperX forced alignment is intentionally not the production default. The full 
 `experiment/whisperx-alignment` at commit `85f2d93` for future research without adding its runtime or dependencies to
 the main pipeline.
 
+## Planned Editor
+
+The manual timing editor is paused and not yet available. See the [editor progress plan](docs/editor-progress.md).
+
 ## Dependency Choices
 
 The project pins `google-colab-cli==0.6.0` with `jupyter-kernel-client==0.15.0`. Colab CLI 0.6.0 still uses the pre-1.0
