@@ -2,8 +2,7 @@
 
 ## Status
 
-The editor is paused. `main` contains only the stable CLI and renderer behavior, with commit `9c0e24b` as the baseline.
-No editor is currently delivered from `main`.
+The web editor slice 1 is implemented on the `feat/web-editor` branch under the `editor/` directory using React 19, TypeScript, Tailwind CSS v4, and Vite with `pnpm`. It operates 100% in-browser with zero backend dependencies.
 
 ## Preserved work
 
