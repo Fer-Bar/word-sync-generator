@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from dotenv import dotenv_values
+
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
@@ -19,6 +22,7 @@ DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
+REMOTE_HF_TOKEN = Path("/content/.hf_token")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
@@ -70,6 +74,7 @@ def run_job(args: argparse.Namespace) -> Path:
     if cookies and not cookies.is_file():
         LOGGER.warning("Cookies file not found; continuing without cookies: %s", cookies)
         cookies = None
+    hf_token = _load_hf_token()
 
     now = datetime.now(UTC)
     job_id = f"karaoke-{now:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
@@ -83,6 +88,7 @@ def run_job(args: argparse.Namespace) -> Path:
         job_path = temporary_path / "job.json"
         archive_path = temporary_path / "result.zip"
         status_path = temporary_path / "status.json"
+        hf_token_path = temporary_path / "hf_token"
         remote_source = source_value
         remote_background = None
         remote_cookies = None
@@ -116,6 +122,9 @@ def run_job(args: argparse.Namespace) -> Path:
             "archive_path": str(REMOTE_ARCHIVE),
         }
         job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        if hf_token:
+            hf_token_path.write_text(hf_token, encoding="utf-8")
+            hf_token_path.chmod(0o600)
 
         colab = ["colab", f"--auth={args.auth}"]
         try:
@@ -127,6 +136,8 @@ def run_job(args: argparse.Namespace) -> Path:
                 _upload(colab, session, background_image, Path(remote_background))
             if cookies and remote_cookies:
                 _upload(colab, session, cookies, Path(remote_cookies))
+            if hf_token:
+                _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
             _upload(colab, session, job_path, REMOTE_JOB)
 
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
@@ -188,6 +199,11 @@ def _normalize_color(value: str) -> str:
     if not COLOR_PATTERN.fullmatch(value):
         raise ValueError("Background color must use the #RRGGBB format")
     return f"#{value.lstrip('#').upper()}"
+
+
+def _load_hf_token() -> str | None:
+    token = os.environ.get("HF_TOKEN") or dotenv_values(PROJECT_ROOT / ".env").get("HF_TOKEN")
+    return token.strip() if token and token.strip() else None
 
 
 def _upload(colab: list[str], session: str, local_path: Path, remote_path: Path) -> None:

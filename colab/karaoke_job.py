@@ -11,6 +11,7 @@ from typing import Any
 
 CONFIG_PATH = Path("/content/karaoke_job.json")
 STATUS_PATH = Path("/content/karaoke_status.json")
+HF_TOKEN_PATH = Path("/content/.hf_token")
 WORK_DIR = Path("/content/karaoke_workspace")
 LOGGER = logging.getLogger(__name__)
 MAX_LYRIC_LINES_PER_PAGE = 3
@@ -24,6 +25,7 @@ PAGE_FADE_MILLISECONDS = 150
 def main() -> None:
     """Generate karaoke artifacts inside a Colab runtime."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _configure_huggingface()
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     _require_commands("ffmpeg", "ffprobe")
@@ -52,6 +54,17 @@ def main() -> None:
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     _create_archive(output_dir, Path(config["archive_path"]))
     LOGGER.info("Pipeline completed: %s", config["archive_path"])
+
+
+def _configure_huggingface() -> None:
+    if not HF_TOKEN_PATH.is_file():
+        return
+    try:
+        token = HF_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    finally:
+        HF_TOKEN_PATH.unlink(missing_ok=True)
+    if token:
+        os.environ["HF_TOKEN"] = token
 
 
 def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:

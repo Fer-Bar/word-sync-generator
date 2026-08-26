@@ -17,6 +17,10 @@ directory. It does not mount or use Google Drive.
    uv run colab version
    ```
 
+   To authenticate Hugging Face model downloads, set `HF_TOKEN` in the project `.env` or in the shell environment. The
+   CLI sends only the token to the ephemeral Colab runtime and removes the temporary remote token file before loading
+   models. Never commit or publish the token.
+
 3. Generate videos from YouTube:
 
    ```bash
