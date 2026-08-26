@@ -120,8 +120,11 @@ export const LyricsEditor: FC<Props> = ({ state, dispatch }) => {
           return (
             <div
               key={seg.id || `seg-${segIdx}`}
-              onClick={() => dispatch({ type: 'SELECT_SEGMENT', payload: segIdx })}
-              className={`border rounded-xl p-4 transition-all ${
+              onClick={() => {
+                dispatch({ type: 'SELECT_SEGMENT', payload: segIdx })
+                dispatch({ type: 'SET_CURRENT_TIME', payload: Math.max(0, seg.start) })
+              }}
+              className={`border rounded-xl p-4 transition-all cursor-pointer ${
                 isSegmentActive
                   ? 'bg-cyan-950/20 border-cyan-500/60 shadow-lg ring-1 ring-cyan-500/30'
                   : isSegmentSelected
@@ -131,12 +134,15 @@ export const LyricsEditor: FC<Props> = ({ state, dispatch }) => {
             >
               {/* Segment Header */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-gray-800">
-                <div className="flex items-center gap-2">
+                <div
+                  className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                  title="Clic para saltar al inicio del segmento"
+                >
                   <span className="px-2 py-0.5 bg-gray-800 text-cyan-300 font-mono text-xs font-bold rounded">
                     #{segIdx + 1}
                   </span>
-                  <span className="flex items-center gap-1 text-xs font-mono text-gray-400">
-                    <Clock className="w-3 h-3" />
+                  <span className="flex items-center gap-1 text-xs font-mono text-gray-300 font-medium">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
                     {seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s (
                     {(seg.end - seg.start).toFixed(2)}s)
                   </span>
@@ -210,35 +216,47 @@ export const LyricsEditor: FC<Props> = ({ state, dispatch }) => {
                       onClick={(e) => {
                         e.stopPropagation()
                         dispatch({
+                          type: 'SET_CURRENT_TIME',
+                          payload: Math.max(0, word.start),
+                        })
+                        dispatch({
                           type: 'SELECT_WORD',
                           payload: { segmentIndex: segIdx, wordIndex: wordIdx },
                         })
                       }}
-                      className={`group relative flex flex-col p-2 rounded-lg border transition-all cursor-pointer ${
+                      className={`group relative flex flex-col p-2.5 rounded-xl border transition-all cursor-pointer select-none ${
                         isWordActive
-                          ? 'bg-cyan-500 text-gray-950 border-cyan-400 shadow-md font-bold scale-105'
+                          ? 'bg-cyan-500 text-gray-950 border-cyan-300 shadow-lg shadow-cyan-500/20 font-bold scale-105 ring-2 ring-cyan-300'
                           : isWordSelected
                           ? 'bg-gray-800 text-cyan-300 border-cyan-500/80 shadow'
-                          : 'bg-gray-800/80 text-gray-200 border-gray-700 hover:border-gray-600'
+                          : 'bg-gray-800/90 text-gray-200 border-gray-700/80 hover:border-cyan-500/50 hover:bg-gray-800'
                       }`}
                     >
                       {/* Word Text (or Input when editing) */}
-                      <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
                         {editingWordId === word.id ? (
                           <input
                             type="text"
                             value={editingText}
                             autoFocus
+                            onClick={(e) => e.stopPropagation()}
                             onChange={(e) => setEditingText(e.target.value)}
                             onBlur={() => handleSaveEditText(segIdx, wordIdx)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') handleSaveEditText(segIdx, wordIdx)
                               if (e.key === 'Escape') setEditingWordId(null)
                             }}
-                            className="bg-black/80 text-white font-medium px-1.5 py-0.5 rounded text-sm w-24 focus:outline-none border border-cyan-400"
+                            className="bg-black/90 text-white font-medium px-2 py-0.5 rounded text-sm w-28 focus:outline-none border border-cyan-400"
                           />
                         ) : (
-                          <span className="text-sm font-semibold tracking-wide">
+                          <span
+                            onDoubleClick={(e) => {
+                              e.stopPropagation()
+                              handleStartEditText(word.id, word.text)
+                            }}
+                            title="Doble clic para editar texto • Clic para saltar audio"
+                            className="text-sm font-semibold tracking-wide"
+                          >
                             {word.text}
                           </span>
                         )}
@@ -256,7 +274,7 @@ export const LyricsEditor: FC<Props> = ({ state, dispatch }) => {
                       </div>
 
                       {/* Timestamps & Micro Adjustments */}
-                      <div className="flex items-center justify-between gap-2 mt-1 pt-1 border-t border-black/10 text-[10px] font-mono opacity-80">
+                      <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-black/10 text-[10px] font-mono opacity-80">
                         <span>{word.start.toFixed(2)}s</span>
                         <span>{word.end.toFixed(2)}s</span>
                       </div>

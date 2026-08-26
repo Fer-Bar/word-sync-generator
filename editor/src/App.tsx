@@ -87,35 +87,77 @@ export function App() {
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col gap-6">
-        {/* File Loader Header */}
+      {/* Main Studio Container */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
+        {/* File Ingestion Bar (Audio & JSON First) */}
         <FileLoader state={state} dispatch={dispatch} />
 
-        {/* Two-Column Grid: Left (Video & Live Preview), Right (Active Workspace Tab) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Player & Live Preview */}
-          <div className="lg:col-span-5 flex flex-col gap-4 sticky top-20">
-            <LivePreview state={state} dispatch={dispatch} />
-            <VideoPlayer state={state} dispatch={dispatch} />
-          </div>
+        {/* Studio Upper Deck: Live ASS Preview & Media Player / Scrubber */}
+        <section className="bg-gray-900/90 border border-gray-800 rounded-2xl p-4 sm:p-5 shadow-2xl backdrop-blur-sm flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            {/* 16:9 Live Preview Canvas */}
+            <div className="lg:col-span-7 xl:col-span-8 flex flex-col justify-center">
+              <LivePreview state={state} dispatch={dispatch} />
+            </div>
 
-          {/* Right Column: Tab View */}
-          <div className="lg:col-span-7 flex flex-col gap-4">
-            {state.activeTab === 'lyrics' && <LyricsEditor state={state} dispatch={dispatch} />}
-            {state.activeTab === 'styles' && <StyleEditor state={state} dispatch={dispatch} />}
-            {state.activeTab === 'preview' && (
-              <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl flex flex-col gap-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Eye className="w-5 h-5 text-cyan-400" />
-                  Previsualización en Pantalla Completa
-                </h3>
-                <LivePreview state={state} dispatch={dispatch} />
-              </div>
-            )}
-            {state.activeTab === 'export' && <ExportBar state={state} />}
+            {/* Transport Deck & Scrubber Controls */}
+            <div className="lg:col-span-5 xl:col-span-4 flex flex-col justify-center h-full">
+              <VideoPlayer state={state} dispatch={dispatch} />
+            </div>
           </div>
-        </div>
+        </section>
+
+        {/* Studio Lower Deck: Interactive Workspace (Full-Width Lyrics Timeline / Styles / Export) */}
+        <section className="flex flex-col gap-4">
+          {state.activeTab === 'lyrics' && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <SlidersHorizontal className="w-4 h-4" />
+                  Línea de Tiempo y Sincronización de Letras (Click-to-Seek)
+                </h3>
+                <span className="text-xs text-gray-400">
+                  Haz clic en cualquier palabra para saltar el audio • Doble clic para editar texto
+                </span>
+              </div>
+              <LyricsEditor state={state} dispatch={dispatch} />
+            </div>
+          )}
+
+          {state.activeTab === 'styles' && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <Palette className="w-4 h-4" />
+                  Personalización Visual: Colores, Tipografías y Fondo
+                </h3>
+              </div>
+              <StyleEditor state={state} dispatch={dispatch} />
+            </div>
+          )}
+
+          {state.activeTab === 'preview' && (
+            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl flex flex-col gap-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Eye className="w-5 h-5 text-cyan-400" />
+                Previsualización en Pantalla Completa
+              </h3>
+              <LivePreview state={state} dispatch={dispatch} />
+            </div>
+          )}
+
+          {state.activeTab === 'export' && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <Download className="w-4 h-4" />
+                  Exportación de Subtítulos ASS y Transcript JSON
+                </h3>
+              </div>
+              <ExportBar state={state} />
+            </div>
+          )}
+        </section>
       </main>
     </div>
   )

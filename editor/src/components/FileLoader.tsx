@@ -113,21 +113,58 @@ export const FileLoader: FC<Props> = ({ state, dispatch }) => {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl">
-      <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+    <div className="bg-gray-900/90 border border-gray-800 rounded-2xl p-5 shadow-xl backdrop-blur-sm">
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <Music className="w-5 h-5 text-cyan-400" />
-            {state.transcript ? state.transcript.song.title : 'Editor de Karaoke y Subtítulos ASS'}
-          </h2>
-          <p className="text-sm text-gray-400 mt-1">
-            {state.transcript
-              ? `${state.transcript.segments.length} segmentos • ${state.transcript.segments.reduce((acc, s) => acc + s.words.length, 0)} palabras sincronizadas`
-              : 'Carga un archivo *_transcript.json y un video/audio de referencia para comenzar.'}
-          </p>
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg border border-cyan-500/20">
+              <Music className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white leading-tight">
+                {state.transcript ? state.transcript.song.title : 'Estudio de Karaoke & Sincronización'}
+              </h2>
+              <p className="text-xs text-gray-400">
+                {state.transcript
+                  ? `${state.transcript.segments.length} segmentos • ${state.transcript.segments.reduce((acc, s) => acc + s.words.length, 0)} palabras • Audio: ${state.mediaName || 'Sintético'}`
+                  : 'Carga tu pista de audio (.mp3, .wav, .flac) y el archivo transcript.json para comenzar.'}
+              </p>
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          {/* Audio / Media File Button */}
+          <input
+            type="file"
+            ref={mediaInputRef}
+            accept="audio/*,video/*,.mp3,.wav,.flac,.m4a,.ogg,.mp4,.webm"
+            onChange={handleMediaUpload}
+            className="hidden"
+          />
+          <button
+            onClick={() => mediaInputRef.current?.click()}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+              state.mediaUrl
+                ? 'bg-emerald-950/40 border-emerald-600/50 text-emerald-300 hover:bg-emerald-900/50'
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-200 border-gray-700 hover:border-gray-600'
+            }`}
+          >
+            {state.mediaType === 'video' ? (
+              <FileVideo className="w-4 h-4 text-purple-400" />
+            ) : state.mediaType === 'audio' ? (
+              <FileAudio className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <Upload className="w-4 h-4 text-cyan-400" />
+            )}
+            <span>
+              {state.mediaName
+                ? `Audio: ${state.mediaName.length > 22 ? state.mediaName.slice(0, 19) + '...' : state.mediaName}`
+                : '1. Cargar Audio (MP3/WAV/FLAC)'}
+            </span>
+          </button>
+
+          {/* Transcript JSON Button */}
           <input
             type="file"
             ref={jsonInputRef}
@@ -137,39 +174,24 @@ export const FileLoader: FC<Props> = ({ state, dispatch }) => {
           />
           <button
             onClick={() => jsonInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+              state.transcript
+                ? 'bg-cyan-950/40 border border-cyan-600/50 text-cyan-300 hover:bg-cyan-900/50'
+                : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-500/20'
+            }`}
           >
             <FileJson className="w-4 h-4" />
-            {state.transcript ? 'Cambiar Transcript JSON' : 'Cargar Transcript (*.json)'}
-          </button>
-
-          <input
-            type="file"
-            ref={mediaInputRef}
-            accept="video/*,audio/*,.mp4,.mp3,.flac,.wav,.m4a"
-            onChange={handleMediaUpload}
-            className="hidden"
-          />
-          <button
-            onClick={() => mediaInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm font-medium rounded-lg border border-gray-700 transition-colors"
-          >
-            {state.mediaType === 'video' ? (
-              <FileVideo className="w-4 h-4 text-purple-400" />
-            ) : state.mediaType === 'audio' ? (
-              <FileAudio className="w-4 h-4 text-emerald-400" />
-            ) : (
-              <Upload className="w-4 h-4 text-gray-400" />
-            )}
-            {state.mediaName ? `Media: ${state.mediaName.slice(0, 20)}...` : 'Cargar Audio/Video'}
+            <span>
+              {state.transcript ? 'Cambiar JSON' : '2. Cargar Transcript (*.json)'}
+            </span>
           </button>
 
           {!state.transcript && (
             <button
               onClick={loadSample}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-900/60 hover:bg-purple-800/80 text-purple-200 text-sm font-medium rounded-lg border border-purple-700/50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 bg-purple-900/40 hover:bg-purple-800/60 text-purple-200 text-xs font-medium rounded-xl border border-purple-700/40 transition-colors"
             >
-              <Sparkles className="w-4 h-4 text-purple-300" />
+              <Sparkles className="w-3.5 h-3.5 text-purple-300" />
               Cargar Ejemplo
             </button>
           )}
