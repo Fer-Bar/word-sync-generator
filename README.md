@@ -120,9 +120,15 @@ WhisperX forced alignment is intentionally not the production default. The full 
 `experiment/whisperx-alignment` at commit `85f2d93` for future research without adding its runtime or dependencies to
 the main pipeline.
 
-## Planned Editor
+## Web Editor
 
-The manual timing editor is paused and not yet available. See the [editor progress plan](docs/editor-progress.md).
+An in-browser timing and styling studio is available under `editor/`. It allows aligning word timestamps, customizing fonts, colors, and backgrounds, and exporting updated `*_transcript.json` and `*_karaoke.ass` files:
+
+```bash
+cd editor
+pnpm install
+pnpm dev
+```
 
 ## Dependency Choices
 
