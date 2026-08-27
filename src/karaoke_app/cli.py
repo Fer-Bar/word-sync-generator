@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -17,18 +18,21 @@ from dotenv import dotenv_values
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
+ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
 COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
 REMOTE_HF_TOKEN = Path("/content/.hf_token")
+REMOTE_ASS_MODULE = Path("/content/karaoke_ass.py")
+REMOTE_RENDER_JOB = Path("/content/karaoke_render_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser."""
-    parser = argparse.ArgumentParser(description="Generate karaoke videos on a Google Colab GPU runtime.")
+    """Build the preparation command parser."""
+    parser = argparse.ArgumentParser(description="Prepare a durable karaoke editing job on Google Colab.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--whisper-model", default="large-v3", help="Faster Whisper model")
@@ -42,16 +46,49 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
     parser.add_argument("--timeout", type=int, default=14_400, help="Remote execution timeout in seconds")
+    parser.add_argument("--render-now", action="store_true", help="Also render both videos during preparation")
+    return parser
+
+
+def build_edit_parser() -> argparse.ArgumentParser:
+    """Build the lightweight editor parser."""
+    parser = argparse.ArgumentParser(prog="karaoke edit", description="Open a prepared job in the local editor.")
+    parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--port", type=int, default=0, help="Loopback API port; zero selects a free port")
+    parser.add_argument("--editor-port", type=int, default=5173, help="Vite editor port")
+    return parser
+
+
+def build_render_colab_parser() -> argparse.ArgumentParser:
+    """Build the render-only Colab parser."""
+    parser = argparse.ArgumentParser(
+        prog="karaoke render-colab",
+        description="Render a prepared job on Colab without running acquisition, Demucs, or Whisper.",
+    )
+    parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--mode", choices=("karaoke", "lyrics"), required=True)
+    parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
+    parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
+    parser.add_argument("--timeout", type=int, default=14_400)
     return parser
 
 
 def main() -> int:
-    """Run the local Colab orchestration CLI."""
+    """Run preparation, local editing, or render-only Colab orchestration."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    args = build_parser().parse_args()
 
     try:
-        run_job(args)
+        if sys.argv[1:2] == ["edit"]:
+            from karaoke_app.editor_server import serve_editor
+
+            args = build_edit_parser().parse_args(sys.argv[2:])
+            serve_editor(args.job_dir, args.port, args.editor_port)
+        elif sys.argv[1:2] == ["render-colab"]:
+            args = build_render_colab_parser().parse_args(sys.argv[2:])
+            render_colab(args)
+        else:
+            args = build_parser().parse_args()
+            run_job(args)
     except KeyboardInterrupt:
         LOGGER.error("Interrupted")
         return 130
@@ -104,6 +141,7 @@ def run_job(args: argparse.Namespace) -> Path:
         width, height = (1920, 1080) if args.resolution == "1080p" else (1280, 720)
         job = {
             "schema_version": 1,
+            "operation": "prepare",
             "job_id": job_id,
             "source": {
                 "kind": source_kind,
@@ -119,6 +157,7 @@ def run_job(args: argparse.Namespace) -> Path:
             "whisper_model": args.whisper_model,
             "demucs_model": args.demucs_model,
             "video": {"width": width, "height": height, "fps": 24},
+            "render_now": args.render_now,
             "archive_path": str(REMOTE_ARCHIVE),
         }
         job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
@@ -139,6 +178,7 @@ def run_job(args: argparse.Namespace) -> Path:
             if hf_token:
                 _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
             _upload(colab, session, job_path, REMOTE_JOB)
+            _upload(colab, session, ASS_MODULE, REMOTE_ASS_MODULE)
 
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
             _run(
@@ -171,10 +211,95 @@ def run_job(args: argparse.Namespace) -> Path:
     return output_dir
 
 
+def render_colab(args: argparse.Namespace) -> Path:
+    """Upload canonical job state and run only ASS generation and FFmpeg on Colab."""
+    from karaoke_app.edit_document import load_edit_document
+
+    _validate_installation()
+    root = args.job_dir.expanduser().resolve()
+    document = load_edit_document(root)
+    render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
+    output_dir = root / "renders" / render_id
+    session = f"render-{uuid.uuid4().hex[:10]}"
+    session_created = False
+
+    with tempfile.TemporaryDirectory(prefix="karaoke-render-") as temporary_directory:
+        temporary = Path(temporary_directory)
+        bundle_path = temporary / "render-job.zip"
+        config_path = temporary / "job.json"
+        archive_path = temporary / "result.zip"
+        status_path = temporary / "status.json"
+        _create_render_bundle(root, document, args.mode, bundle_path)
+        config_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "operation": "render",
+                    "mode": args.mode,
+                    "archive_path": str(REMOTE_ARCHIVE),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        colab = ["colab", f"--auth={args.auth}"]
+        try:
+            _run([*colab, "new", "--session", session, "--gpu", args.gpu])
+            session_created = True
+            _upload(colab, session, config_path, REMOTE_JOB)
+            _upload(colab, session, bundle_path, REMOTE_RENDER_JOB)
+            _upload(colab, session, ASS_MODULE, REMOTE_ASS_MODULE)
+            _run(
+                [
+                    *colab,
+                    "exec",
+                    "--session",
+                    session,
+                    "--file",
+                    str(COLAB_SCRIPT),
+                    "--timeout",
+                    str(args.timeout),
+                ]
+            )
+            _run([*colab, "download", "--session", session, str(REMOTE_STATUS), str(status_path)])
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            if status.get("status") != "completed":
+                raise RuntimeError(f"Remote render failed: {status.get('error', 'unknown error')}")
+            _run([*colab, "download", "--session", session, str(REMOTE_ARCHIVE), str(archive_path)])
+            output_dir.parent.mkdir(parents=True, exist_ok=True)
+            _extract_archive(archive_path, output_dir)
+        finally:
+            if session_created:
+                _run([*colab, "stop", "--session", session], check=False)
+
+    LOGGER.info("Rendered artifacts saved to %s", output_dir)
+    return output_dir
+
+
+def _create_render_bundle(
+    job_dir: Path, document: dict[str, object], mode: str, destination: Path
+) -> None:
+    from karaoke_app.edit_document import resolve_job_asset
+
+    media = document["media"]
+    if not isinstance(media, dict):
+        raise ValueError("Invalid edit media configuration")
+    audio_key = "instrumental_audio" if mode == "karaoke" else "original_audio"
+    required = {str(media[audio_key])}
+    background = document["background"]
+    if isinstance(background, dict) and background.get("kind") == "image":
+        required.add(str(background["path"]))
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("edit.json", json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+        for relative_path in sorted(required):
+            path = resolve_job_asset(job_dir, relative_path, relative_path)
+            archive.write(path, relative_path)
+
+
 def _validate_installation() -> None:
     if not shutil.which("colab"):
         raise OSError("The 'colab' executable is not available. Run 'uv sync --dev' to install project dependencies.")
-    if not COLAB_SCRIPT.is_file() or not COLAB_REQUIREMENTS.is_file():
+    if not COLAB_SCRIPT.is_file() or not COLAB_REQUIREMENTS.is_file() or not ASS_MODULE.is_file():
         raise OSError("Colab pipeline files are missing from the project")
 
 

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import logging
 import os
@@ -13,6 +14,8 @@ CONFIG_PATH = Path("/content/karaoke_job.json")
 STATUS_PATH = Path("/content/karaoke_status.json")
 HF_TOKEN_PATH = Path("/content/.hf_token")
 WORK_DIR = Path("/content/karaoke_workspace")
+ASS_MODULE_PATH = Path("/content/karaoke_ass.py")
+RENDER_JOB_PATH = Path("/content/karaoke_render_job.zip")
 LOGGER = logging.getLogger(__name__)
 MAX_LYRIC_LINES_PER_PAGE = 3
 PAGE_BREAK_SILENCE_SECONDS = 1.5
@@ -25,10 +28,14 @@ PAGE_FADE_MILLISECONDS = 150
 def main() -> None:
     """Generate karaoke artifacts inside a Colab runtime."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    _configure_huggingface()
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     _require_commands("ffmpeg", "ffprobe")
+    if config.get("operation") == "render":
+        _render_existing_job(config)
+        return
+
+    _configure_huggingface()
 
     source_path, metadata = _acquire_source(config)
     mixture_path = _prepare_mixture(source_path)
@@ -38,22 +45,95 @@ def main() -> None:
     safe_title = _safe_filename(metadata["title"])
     output_dir = WORK_DIR / safe_title
     output_dir.mkdir(parents=True, exist_ok=True)
-    transcript_path = output_dir / f"{safe_title}_transcript.json"
-    ass_path = output_dir / f"{safe_title}_karaoke.ass"
-    transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
-    _write_ass(transcript, ass_path, config["video"])
-
-    karaoke_video = output_dir / f"{safe_title}_karaoke.mp4"
-    lyrics_video = output_dir / f"{safe_title}_lyrics.mp4"
-    instrumental_flac = output_dir / f"{safe_title}_instrumental.flac"
-    _render_video(instrumental_path, ass_path, karaoke_video, config)
-    _render_video(source_path, ass_path, lyrics_video, config)
+    original_audio = output_dir / f"original_audio{source_path.suffix.lower()}"
+    instrumental_flac = output_dir / "instrumental.flac"
+    original_transcript = output_dir / "original_transcript.json"
+    shutil.copy2(source_path, original_audio)
+    original_transcript.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
     _run(["ffmpeg", "-y", "-i", str(instrumental_path), "-c:a", "flac", str(instrumental_flac)])
+
+    canonical_transcript = {**transcript, "schema_version": 2}
+    background = {"kind": config["background"]["kind"], "color": "#0B1020"}
+    if config["background"]["kind"] == "image":
+        source_background = Path(config["background"]["value"])
+        background_path = output_dir / f"background{source_background.suffix.lower()}"
+        shutil.copy2(source_background, background_path)
+        background["path"] = background_path.name
+    else:
+        background["color"] = config["background"]["value"]
+    edit_document = {
+        "schema_version": 2,
+        "revision": 1,
+        "transcript": canonical_transcript,
+        "media": {
+            "original_audio": original_audio.name,
+            "instrumental_audio": instrumental_flac.name,
+            "original_transcript": original_transcript.name,
+        },
+        "video": config["video"],
+        "background": background,
+    }
+    (output_dir / "edit.json").write_text(json.dumps(edit_document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if config.get("render_now"):
+        ass_path = output_dir / f"{safe_title}.ass"
+        ass_path.write_text(_generate_ass(canonical_transcript, config["video"]), encoding="utf-8")
+        render_config = {
+            "video": config["video"],
+            "background": config["background"],
+        }
+        _render_video(instrumental_path, ass_path, output_dir / f"{safe_title}_karaoke.mp4", render_config)
+        _render_video(source_path, ass_path, output_dir / f"{safe_title}_lyrics.mp4", render_config)
 
     manifest = _build_manifest(config, metadata, output_dir)
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     _create_archive(output_dir, Path(config["archive_path"]))
     LOGGER.info("Pipeline completed: %s", config["archive_path"])
+
+
+def _render_existing_job(config: dict[str, Any]) -> None:
+    if not RENDER_JOB_PATH.is_file():
+        raise FileNotFoundError("Missing uploaded render job")
+    job_dir = WORK_DIR / "render_job"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _extract_archive(RENDER_JOB_PATH, job_dir)
+    document = json.loads((job_dir / "edit.json").read_text(encoding="utf-8"))
+    mode = config["mode"]
+    audio_key = "instrumental_audio" if mode == "karaoke" else "original_audio"
+    audio_path = job_dir / document["media"][audio_key]
+    output_dir = WORK_DIR / "render_result"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    title = _safe_filename(document["transcript"]["song"]["title"])
+    ass_path = output_dir / f"{title}_{mode}.ass"
+    video_path = output_dir / f"{title}_{mode}.mp4"
+    ass_path.write_text(_generate_ass(document["transcript"], document["video"]), encoding="utf-8")
+    background = document["background"]
+    render_background = {
+        "kind": background["kind"],
+        "value": str(job_dir / background["path"]) if background["kind"] == "image" else background["color"],
+    }
+    _render_video(audio_path, ass_path, video_path, {"video": document["video"], "background": render_background})
+    _create_archive(output_dir, Path(config["archive_path"]))
+
+
+def _generate_ass(transcript: dict[str, Any], video: dict[str, int]) -> str:
+    spec = importlib.util.spec_from_file_location("karaoke_ass", ASS_MODULE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load the uploaded ASS generator")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return str(module.generate_ass(transcript, video))
+
+
+def _extract_archive(archive_path: Path, destination: Path) -> None:
+    import zipfile
+
+    root = destination.resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            if not (destination / member.filename).resolve().is_relative_to(root):
+                raise ValueError(f"Unsafe render archive member: {member.filename}")
+        archive.extractall(destination)
 
 
 def _configure_huggingface() -> None:

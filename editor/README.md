@@ -1,32 +1,25 @@
-# React + TypeScript + Vite
+# Karaoke transcript editor
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This React application corrects the lyrics and timing in a prepared karaoke job. FastAPI only loads audio, returns the canonical document, and handles explicit revisioned saves.
 
-Currently, two official plugins are available:
+## Open a prepared job
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the repository root:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+uv run karaoke edit outputs/JOB_ID
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The command reuses `editor/node_modules/.bin/vite` for development. If Vite is not installed, it serves an existing `editor/dist` build. It does not install dependencies or build the frontend.
+
+Press **Save** or `Ctrl/Cmd+S` to update `edit.json`. There is no autosave. A stale revision is rejected so another write cannot be overwritten silently.
+
+## Editing model
+
+- Select a word to correct its text or timestamps.
+- Set start/end from the audio playhead or nudge either boundary by 0.01 or 0.05 seconds.
+- Split a line before the selection, move the word to the next line, merge with the next line, or normalize only the selected line's gaps.
+- Replay or loop the selected word and use undo/redo for transcript operations.
+- Enter `am|o|r` to split `amor` into timed fragments. The joined fragment text must remain exactly `amor`.
+
+Local audio and transcript files can also be loaded for temporary inspection, but only prepared jobs have a canonical Save target.

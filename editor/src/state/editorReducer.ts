@@ -1,5 +1,15 @@
 import { DEFAULT_STYLE_CONFIG } from '../domain/assGenerator'
-import { addWord, deleteWord, shiftSegment, shiftWord, updateWord } from '../domain/timing'
+import {
+  deleteWord,
+  mergeLineWithNext,
+  moveWordToNextLine,
+  normalizeLineGaps,
+  nudgeWordBoundary,
+  setFragmentBoundary,
+  setWordTimingPattern,
+  splitLineBefore,
+  updateWord,
+} from '../domain/timing'
 import { validateTranscript } from '../domain/transcript'
 import type { StyleConfig, Transcript, ValidationError, Word } from '../domain/types'
 
@@ -60,6 +70,19 @@ export type EditorAction =
     }
   | { type: 'ADD_WORD'; payload: { segmentIndex: number; afterWordIndex: number; text: string } }
   | { type: 'DELETE_WORD'; payload: { segmentIndex: number; wordIndex: number } }
+  | { type: 'SPLIT_LINE'; payload: { segmentIndex: number; wordIndex: number } }
+  | { type: 'MOVE_WORD_NEXT'; payload: { segmentIndex: number; wordIndex: number } }
+  | { type: 'MERGE_LINE_NEXT'; payload: { segmentIndex: number } }
+  | { type: 'NORMALIZE_LINE'; payload: { segmentIndex: number } }
+  | {
+      type: 'NUDGE_BOUNDARY'
+      payload: { segmentIndex: number; wordIndex: number; boundary: 'start' | 'end'; delta: number }
+    }
+  | { type: 'SET_TIMING_PATTERN'; payload: { segmentIndex: number; wordIndex: number; pattern: string } }
+  | {
+      type: 'SET_FRAGMENT_BOUNDARY'
+      payload: { segmentIndex: number; wordIndex: number; boundaryIndex: number; value: number }
+    }
   | { type: 'UPDATE_STYLE'; payload: Partial<StyleConfig> }
   | { type: 'RESET_STYLE' }
   | { type: 'UNDO' }
@@ -67,6 +90,7 @@ export type EditorAction =
   | { type: 'SET_TAB'; payload: 'lyrics' | 'styles' | 'preview' | 'export' }
 
 function pushHistory(state: EditorState, newTranscript: Transcript): Partial<EditorState> {
+  if (newTranscript === state.transcript) return {}
   const history = state.transcript ? [...state.history.slice(-20), state.transcript] : state.history
   const errors = validateTranscript(newTranscript)
   return {
@@ -134,18 +158,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'SHIFT_WORD': {
       if (!state.transcript) return state
-      const updated = shiftWord(
-        state.transcript,
-        action.payload.segmentIndex,
-        action.payload.wordIndex,
-        action.payload.delta
-      )
+      const word = state.transcript.segments[action.payload.segmentIndex]?.words[action.payload.wordIndex]
+      if (!word) return state
+      const updated = updateWord(state.transcript, action.payload.segmentIndex, action.payload.wordIndex, {
+        start: word.start + action.payload.delta,
+        end: word.end + action.payload.delta,
+      })
       return { ...state, ...pushHistory(state, updated) }
     }
 
     case 'SHIFT_SEGMENT': {
       if (!state.transcript) return state
-      const updated = shiftSegment(state.transcript, action.payload.segmentIndex, action.payload.delta)
+      const segment = state.transcript.segments[action.payload.segmentIndex]
+      if (!segment) return state
+      let updated = state.transcript
+      segment.words.forEach((word, wordIndex) => {
+        updated = updateWord(updated, action.payload.segmentIndex, wordIndex, {
+          start: word.start + action.payload.delta,
+          end: word.end + action.payload.delta,
+        })
+      })
       return { ...state, ...pushHistory(state, updated) }
     }
 
@@ -161,14 +193,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case 'ADD_WORD': {
-      if (!state.transcript) return state
-      const updated = addWord(
-        state.transcript,
-        action.payload.segmentIndex,
-        action.payload.afterWordIndex,
-        action.payload.text
-      )
-      return { ...state, ...pushHistory(state, updated) }
+      return state
     }
 
     case 'DELETE_WORD': {
@@ -177,6 +202,86 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         state.transcript,
         action.payload.segmentIndex,
         action.payload.wordIndex
+      )
+      if (updated === state.transcript) return state
+      const segmentIndex = Math.min(action.payload.segmentIndex, updated.segments.length - 1)
+      const wordIndex = Math.min(action.payload.wordIndex, updated.segments[segmentIndex].words.length - 1)
+      return {
+        ...state,
+        ...pushHistory(state, updated),
+        selectedSegmentIndex: segmentIndex,
+        selectedWordIndex: wordIndex,
+      }
+    }
+
+    case 'SPLIT_LINE': {
+      if (!state.transcript) return state
+      const updated = splitLineBefore(state.transcript, action.payload.segmentIndex, action.payload.wordIndex)
+      if (updated === state.transcript) return state
+      return {
+        ...state,
+        ...pushHistory(state, updated),
+        selectedSegmentIndex: action.payload.segmentIndex + 1,
+        selectedWordIndex: 0,
+      }
+    }
+
+    case 'MOVE_WORD_NEXT': {
+      if (!state.transcript) return state
+      const sourceLength = state.transcript.segments[action.payload.segmentIndex]?.words.length ?? 0
+      const updated = moveWordToNextLine(state.transcript, action.payload.segmentIndex, action.payload.wordIndex)
+      if (updated === state.transcript) return state
+      return {
+        ...state,
+        ...pushHistory(state, updated),
+        selectedSegmentIndex: sourceLength === 1 ? action.payload.segmentIndex : action.payload.segmentIndex + 1,
+        selectedWordIndex: 0,
+      }
+    }
+
+    case 'MERGE_LINE_NEXT': {
+      if (!state.transcript) return state
+      const updated = mergeLineWithNext(state.transcript, action.payload.segmentIndex)
+      return { ...state, ...pushHistory(state, updated) }
+    }
+
+    case 'NORMALIZE_LINE': {
+      if (!state.transcript) return state
+      const updated = normalizeLineGaps(state.transcript, action.payload.segmentIndex)
+      return { ...state, ...pushHistory(state, updated) }
+    }
+
+    case 'NUDGE_BOUNDARY': {
+      if (!state.transcript) return state
+      const updated = nudgeWordBoundary(
+        state.transcript,
+        action.payload.segmentIndex,
+        action.payload.wordIndex,
+        action.payload.boundary,
+        action.payload.delta,
+      )
+      return { ...state, ...pushHistory(state, updated) }
+    }
+
+    case 'SET_TIMING_PATTERN': {
+      if (!state.transcript) return state
+      const updated = setWordTimingPattern(
+        state.transcript,
+        action.payload.segmentIndex,
+        action.payload.wordIndex,
+        action.payload.pattern,
+      )
+      return { ...state, ...pushHistory(state, updated) }
+    }
+
+    case 'SET_FRAGMENT_BOUNDARY': {
+      if (!state.transcript) return state
+      const updated = setFragmentBoundary(
+        state.transcript,
+        action.payload.segmentIndex,
+        action.payload.wordIndex,
+        action.payload.boundaryIndex,
+        action.payload.value,
       )
       return { ...state, ...pushHistory(state, updated) }
     }

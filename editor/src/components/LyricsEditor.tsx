@@ -1,347 +1,273 @@
-import { useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { Dispatch, FC } from 'react'
-import {
-  Clock,
-  Edit2,
-  MoveLeft,
-  MoveRight,
-  Plus,
-  Redo2,
-  Search,
-  Trash2,
-  Undo2,
-} from 'lucide-react'
+import { formatTimestamp, parseTimestamp } from '../domain/time'
 import type { EditorAction, EditorState } from '../state/editorReducer'
 
 interface Props {
   state: EditorState
   dispatch: Dispatch<EditorAction>
+  dispatchEdit: Dispatch<EditorAction>
+  activeSegmentId: string | null
+  activeWordId: string | null
+  getPlayhead: () => number
+  seek: (time: number) => void
+  replaySelected: () => void
 }
 
-export const LyricsEditor: FC<Props> = ({ state, dispatch }) => {
-  const [searchQuery, setSearchQuery] = useState('')
-  const [editingWordId, setEditingWordId] = useState<string | null>(null)
-  const [editingText, setEditingText] = useState('')
+const LyricsEditorComponent: FC<Props> = ({
+  state,
+  dispatch,
+  dispatchEdit,
+  activeSegmentId,
+  activeWordId,
+  getPlayhead,
+  seek,
+  replaySelected,
+}) => {
+  const [wordText, setWordText] = useState('')
+  const [pattern, setPattern] = useState('')
+  const [boundaryIndex, setBoundaryIndex] = useState(0)
+  const [startText, setStartText] = useState('')
+  const [endText, setEndText] = useState('')
+  const [timeError, setTimeError] = useState<string | null>(null)
+  const transcript = state.transcript
+  const segmentIndex = state.selectedSegmentIndex
+  const wordIndex = state.selectedWordIndex
+  const selectedSegment = segmentIndex === null ? null : transcript?.segments[segmentIndex] ?? null
+  const selectedWord = wordIndex === null ? null : selectedSegment?.words[wordIndex] ?? null
+  const selectedPattern = selectedWord?.timing?.map((fragment) => fragment.text).join('|') ?? ''
 
-  if (!state.transcript) {
-    return (
-      <div className="p-8 text-center text-gray-400 bg-gray-900 border border-gray-800 rounded-xl">
-        <p>No hay transcript cargado. Carga un archivo JSON arriba o haz clic en "Cargar Ejemplo".</p>
-      </div>
-    )
+  useEffect(() => {
+    setWordText(selectedWord?.text ?? '')
+    setPattern(selectedPattern)
+    setStartText(selectedWord ? formatTimestamp(selectedWord.start) : '')
+    setEndText(selectedWord ? formatTimestamp(selectedWord.end) : '')
+    setTimeError(null)
+    setBoundaryIndex(0)
+  }, [selectedPattern, selectedWord?.end, selectedWord?.id, selectedWord?.start, selectedWord?.text])
+
+  if (!transcript) {
+    return <p className="rounded-xl border border-gray-800 bg-gray-900 p-6 text-gray-400">Load a prepared job or local transcript.</p>
   }
 
-  const { segments } = state.transcript
-  const filteredSegments = segments
-    .map((seg, segIdx) => ({ seg, segIdx }))
-    .filter(({ seg }) =>
-      !searchQuery || seg.text.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-
-  const handleStartEditText = (wordId: string, currentText: string) => {
-    setEditingWordId(wordId)
-    setEditingText(currentText)
-  }
-
-  const handleSaveEditText = (segIdx: number, wordIdx: number) => {
-    if (editingText.trim()) {
-      dispatch({
-        type: 'UPDATE_WORD',
-        payload: {
-          segmentIndex: segIdx,
-          wordIndex: wordIdx,
-          updates: { text: editingText.trim() },
-        },
-      })
+  const editSelected = (action: EditorAction) => dispatchEdit(action)
+  const selection = segmentIndex !== null && wordIndex !== null ? { segmentIndex, wordIndex } : null
+  const patternValid = !selectedWord || !pattern || (pattern.includes('|') && pattern.split('|').every(Boolean) && pattern.split('|').join('') === selectedWord.text)
+  const applyTimestamps = () => {
+    if (!selection) return
+    const start = parseTimestamp(startText)
+    const end = parseTimestamp(endText)
+    if (start === null || end === null) {
+      setTimeError('Use MM:SS.mmm, for example 01:23.450.')
+      return
     }
-    setEditingWordId(null)
-  }
-
-  const handleAddWordPrompt = (segIdx: number, afterWordIdx: number) => {
-    const text = prompt('Escribe el texto de la nueva palabra:')
-    if (text && text.trim()) {
-      dispatch({
-        type: 'ADD_WORD',
-        payload: {
-          segmentIndex: segIdx,
-          afterWordIndex: afterWordIdx,
-          text: text.trim(),
-        },
-      })
+    if (end <= start) {
+      setTimeError('End must be later than start.')
+      return
     }
+    setTimeError(null)
+    editSelected({ type: 'UPDATE_WORD', payload: { ...selection, updates: { start, end } } })
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Top Toolbar: Search, Undo, Redo */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-900 border border-gray-800 p-3 rounded-xl">
-        {/* Search */}
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Buscar en la letra..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 pl-9 pr-4 py-1.5 rounded-lg focus:outline-none focus:border-cyan-500 transition-colors"
-          />
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <section className="min-w-0 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-800 bg-gray-900 p-3">
+          <button className="editor-button" disabled={!state.history.length} onClick={() => dispatchEdit({ type: 'UNDO' })}>Undo</button>
+          <button className="editor-button" disabled={!state.future.length} onClick={() => dispatchEdit({ type: 'REDO' })}>Redo</button>
+          {state.validationErrors.slice(0, 4).map((error, index) => (
+            <span key={`${error.field}-${index}`} className={error.type === 'error' ? 'warning error' : 'warning'}>
+              {error.message}
+            </span>
+          ))}
         </div>
 
-        {/* Undo / Redo */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => dispatch({ type: 'UNDO' })}
-            disabled={state.history.length === 0}
-            title="Deshacer cambio (Ctrl+Z)"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:hover:bg-gray-800 text-gray-200 text-xs font-medium rounded-lg border border-gray-700 transition-colors"
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-            Deshacer ({state.history.length})
-          </button>
-          <button
-            onClick={() => dispatch({ type: 'REDO' })}
-            disabled={state.future.length === 0}
-            title="Rehacer cambio (Ctrl+Y)"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:hover:bg-gray-800 text-gray-200 text-xs font-medium rounded-lg border border-gray-700 transition-colors"
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-            Rehacer ({state.future.length})
-          </button>
-        </div>
-      </div>
-
-      {/* Segments List */}
-      <div className="flex flex-col gap-3 max-h-[600px] overflow-y-auto pr-1">
-        {filteredSegments.map(({ seg, segIdx }) => {
-          const isSegmentActive =
-            state.currentTime >= seg.start && state.currentTime <= seg.end
-          const isSegmentSelected = state.selectedSegmentIndex === segIdx
-
-          return (
-            <div
-              key={seg.id || `seg-${segIdx}`}
-              onClick={() => {
-                dispatch({ type: 'SELECT_SEGMENT', payload: segIdx })
-                dispatch({ type: 'SET_CURRENT_TIME', payload: Math.max(0, seg.start) })
-              }}
-              className={`border rounded-xl p-4 transition-all cursor-pointer ${
-                isSegmentActive
-                  ? 'bg-cyan-950/20 border-cyan-500/60 shadow-lg ring-1 ring-cyan-500/30'
-                  : isSegmentSelected
-                  ? 'bg-gray-850 border-gray-700 shadow-md'
-                  : 'bg-gray-900 border-gray-800 hover:border-gray-700'
-              }`}
+        <div className="max-h-[65vh] space-y-2 overflow-y-auto pr-1">
+          {transcript.segments.map((segment, currentSegmentIndex) => (
+            <article
+              key={segment.id}
+              className={`rounded-xl border p-3 ${segment.id === activeSegmentId ? 'border-cyan-500 bg-cyan-950/20' : 'border-gray-800 bg-gray-900'}`}
             >
-              {/* Segment Header */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-gray-800">
-                <div
-                  className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                  title="Clic para saltar al inicio del segmento"
-                >
-                  <span className="px-2 py-0.5 bg-gray-800 text-cyan-300 font-mono text-xs font-bold rounded">
-                    #{segIdx + 1}
-                  </span>
-                  <span className="flex items-center gap-1 text-xs font-mono text-gray-300 font-medium">
-                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                    {seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s (
-                    {(seg.end - seg.start).toFixed(2)}s)
-                  </span>
-                </div>
-
-                {/* Segment Shift Controls */}
-                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                  <span className="text-[11px] text-gray-400 mr-1">Mover segmento:</span>
-                  <button
-                    onClick={() =>
-                      dispatch({
-                        type: 'SHIFT_SEGMENT',
-                        payload: { segmentIndex: segIdx, delta: -0.1 },
-                      })
-                    }
-                    title="Atrasar segmento 100ms"
-                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-700 transition-colors"
-                  >
-                    -100ms
-                  </button>
-                  <button
-                    onClick={() =>
-                      dispatch({
-                        type: 'SHIFT_SEGMENT',
-                        payload: { segmentIndex: segIdx, delta: -0.05 },
-                      })
-                    }
-                    title="Atrasar segmento 50ms"
-                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-700 transition-colors"
-                  >
-                    -50ms
-                  </button>
-                  <button
-                    onClick={() =>
-                      dispatch({
-                        type: 'SHIFT_SEGMENT',
-                        payload: { segmentIndex: segIdx, delta: 0.05 },
-                      })
-                    }
-                    title="Adelantar segmento 50ms"
-                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-700 transition-colors"
-                  >
-                    +50ms
-                  </button>
-                  <button
-                    onClick={() =>
-                      dispatch({
-                        type: 'SHIFT_SEGMENT',
-                        payload: { segmentIndex: segIdx, delta: 0.1 },
-                      })
-                    }
-                    title="Adelantar segmento 100ms"
-                    className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-700 transition-colors"
-                  >
-                    +100ms
-                  </button>
-                </div>
-              </div>
-
-              {/* Words Chips in Segment */}
-              <div className="flex flex-wrap items-center gap-2">
-                {seg.words.map((word, wordIdx) => {
-                  const isWordActive =
-                    state.currentTime >= word.start && state.currentTime <= word.end
-                  const isWordSelected =
-                    state.selectedSegmentIndex === segIdx && state.selectedWordIndex === wordIdx
-
-                  return (
-                    <div
-                      key={word.id || `word-${wordIdx}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        dispatch({
-                          type: 'SET_CURRENT_TIME',
-                          payload: Math.max(0, word.start),
-                        })
-                        dispatch({
-                          type: 'SELECT_WORD',
-                          payload: { segmentIndex: segIdx, wordIndex: wordIdx },
-                        })
-                      }}
-                      className={`group relative flex flex-col p-2.5 rounded-xl border transition-all cursor-pointer select-none ${
-                        isWordActive
-                          ? 'bg-cyan-500 text-gray-950 border-cyan-300 shadow-lg shadow-cyan-500/20 font-bold scale-105 ring-2 ring-cyan-300'
-                          : isWordSelected
-                          ? 'bg-gray-800 text-cyan-300 border-cyan-500/80 shadow'
-                          : 'bg-gray-800/90 text-gray-200 border-gray-700/80 hover:border-cyan-500/50 hover:bg-gray-800'
-                      }`}
-                    >
-                      {/* Word Text (or Input when editing) */}
-                      <div className="flex items-center justify-between gap-2">
-                        {editingWordId === word.id ? (
-                          <input
-                            type="text"
-                            value={editingText}
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => setEditingText(e.target.value)}
-                            onBlur={() => handleSaveEditText(segIdx, wordIdx)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSaveEditText(segIdx, wordIdx)
-                              if (e.key === 'Escape') setEditingWordId(null)
-                            }}
-                            className="bg-black/90 text-white font-medium px-2 py-0.5 rounded text-sm w-28 focus:outline-none border border-cyan-400"
-                          />
-                        ) : (
-                          <span
-                            onDoubleClick={(e) => {
-                              e.stopPropagation()
-                              handleStartEditText(word.id, word.text)
-                            }}
-                            title="Doble clic para editar texto • Clic para saltar audio"
-                            className="text-sm font-semibold tracking-wide"
-                          >
-                            {word.text}
-                          </span>
-                        )}
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleStartEditText(word.id, word.text)
-                          }}
-                          title="Editar texto"
-                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-cyan-400 transition-opacity"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      {/* Timestamps & Micro Adjustments */}
-                      <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-black/10 text-[10px] font-mono opacity-80">
-                        <span>{word.start.toFixed(2)}s</span>
-                        <span>{word.end.toFixed(2)}s</span>
-                      </div>
-
-                      {/* Micro shift hover bar */}
-                      <div
-                        className="opacity-0 group-hover:opacity-100 flex items-center justify-center gap-1 mt-1 pt-1 border-t border-gray-700/50 transition-opacity"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          onClick={() =>
-                            dispatch({
-                              type: 'SHIFT_WORD',
-                              payload: { segmentIndex: segIdx, wordIndex: wordIdx, delta: -0.05 },
-                            })
-                          }
-                          title="Mover palabra -50ms"
-                          className="p-1 bg-black/40 hover:bg-black/80 rounded text-[10px]"
-                        >
-                          <MoveLeft className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() =>
-                            dispatch({
-                              type: 'SHIFT_WORD',
-                              payload: { segmentIndex: segIdx, wordIndex: wordIdx, delta: 0.05 },
-                            })
-                          }
-                          title="Mover palabra +50ms"
-                          className="p-1 bg-black/40 hover:bg-black/80 rounded text-[10px]"
-                        >
-                          <MoveRight className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() =>
-                            dispatch({
-                              type: 'DELETE_WORD',
-                              payload: { segmentIndex: segIdx, wordIndex: wordIdx },
-                            })
-                          }
-                          title="Eliminar palabra"
-                          className="p-1 text-red-400 hover:text-red-300 hover:bg-black/80 rounded text-[10px]"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {/* Add Word Button */}
+              <div className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-400">
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleAddWordPrompt(segIdx, seg.words.length - 1)
+                  className="font-mono text-cyan-300"
+                  onClick={() => {
+                    dispatch({ type: 'SELECT_SEGMENT', payload: currentSegmentIndex })
+                    seek(segment.start)
                   }}
-                  title="Agregar palabra a este segmento"
-                  className="flex items-center gap-1 px-2 py-1.5 bg-gray-800/50 hover:bg-gray-700 text-gray-400 hover:text-cyan-300 border border-dashed border-gray-700 hover:border-cyan-500/50 rounded-lg text-xs transition-colors"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  Palabra
+                   Line {currentSegmentIndex + 1} · {formatTimestamp(segment.start)}–{formatTimestamp(segment.end)}
+                </button>
+                <button
+                  className="editor-button"
+                  disabled={currentSegmentIndex === transcript.segments.length - 1}
+                  onClick={() => editSelected({ type: 'MERGE_LINE_NEXT', payload: { segmentIndex: currentSegmentIndex } })}
+                >
+                  Merge next
                 </button>
               </div>
+              <div className="flex flex-wrap gap-2">
+                {segment.words.map((word, currentWordIndex) => {
+                  const isSelected = currentSegmentIndex === segmentIndex && currentWordIndex === wordIndex
+                  return (
+                    <button
+                      key={word.id}
+                      className={`word-chip ${word.id === activeWordId ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
+                      onClick={() => {
+                        dispatch({
+                          type: 'SELECT_WORD',
+                          payload: { segmentIndex: currentSegmentIndex, wordIndex: currentWordIndex },
+                        })
+                        seek(word.start)
+                      }}
+                    >
+                      <strong>{word.text}</strong>
+                       <span>{formatTimestamp(word.start)}–{formatTimestamp(word.end)}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <aside className="h-fit space-y-4 rounded-xl border border-gray-800 bg-gray-900 p-4 lg:sticky lg:top-24">
+        <div>
+          <h2 className="m-0 text-base font-semibold text-white">Selected word</h2>
+          <p className="mt-1 text-xs text-gray-400">Correct text, line placement, and exact timing.</p>
+        </div>
+        {selectedWord && selection && selectedSegment ? (
+          <>
+            <label className="field-label">
+              Text
+              <div className="flex gap-2">
+                <input className="editor-input min-w-0 flex-1" value={wordText} onChange={(event) => setWordText(event.target.value)} />
+                <button
+                  className="primary-button"
+                  disabled={!wordText.trim() || wordText.trim() === selectedWord.text}
+                  onClick={() => editSelected({ type: 'UPDATE_WORD', payload: { ...selection, updates: { text: wordText } } })}
+                >
+                  Apply
+                </button>
+              </div>
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="field-label">
+                Start
+                <input
+                  className="editor-input font-mono"
+                  value={startText}
+                  onChange={(event) => setStartText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') applyTimestamps()
+                  }}
+                  inputMode="decimal"
+                />
+              </label>
+              <label className="field-label">
+                End
+                <input
+                  className="editor-input font-mono"
+                  value={endText}
+                  onChange={(event) => setEndText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') applyTimestamps()
+                  }}
+                  inputMode="decimal"
+                />
+              </label>
+              <button className="primary-button col-span-2" onClick={applyTimestamps}>Apply timestamps</button>
+              {timeError ? <p className="warning error col-span-2 m-0">{timeError}</p> : null}
+               <button className="editor-button" onClick={() => editSelected({ type: 'UPDATE_WORD', payload: { ...selection, updates: { start: getPlayhead() } } })}>Start = playhead</button>
+               <button className="editor-button" onClick={() => editSelected({ type: 'UPDATE_WORD', payload: { ...selection, updates: { end: getPlayhead() } } })}>End = playhead</button>
+             </div>
+
+            {(['start', 'end'] as const).map((boundary) => (
+              <div key={boundary} className="flex flex-wrap items-center gap-1">
+                <span className="w-10 text-xs capitalize text-gray-400">{boundary}</span>
+                 {[-0.05, -0.01, -0.001, 0.001, 0.01, 0.05].map((delta) => (
+                  <button
+                    key={delta}
+                    className="editor-button"
+                    onClick={() => editSelected({ type: 'NUDGE_BOUNDARY', payload: { ...selection, boundary, delta } })}
+                  >
+                     {delta > 0 ? '+' : ''}{Math.round(delta * 1000)} ms
+                  </button>
+                ))}
+              </div>
+            ))}
+
+            <div className="grid grid-cols-2 gap-2">
+              <button className="editor-button" disabled={wordIndex === 0} onClick={() => editSelected({ type: 'SPLIT_LINE', payload: selection })}>Split line before</button>
+              <button className="editor-button" onClick={() => editSelected({ type: 'MOVE_WORD_NEXT', payload: selection })}>Move to next line</button>
+              <button className="editor-button" onClick={() => editSelected({ type: 'NORMALIZE_LINE', payload: { segmentIndex } })}>Normalize line gaps</button>
+              <button className="editor-button" onClick={replaySelected}>Replay word</button>
+              <button
+                className="editor-button col-span-2 text-red-300"
+                disabled={transcript.segments.length === 1 && selectedSegment.words.length === 1}
+                onClick={() => editSelected({ type: 'DELETE_WORD', payload: selection })}
+              >
+                Remove word
+              </button>
             </div>
-          )
-        })}
-      </div>
+
+            <div className="space-y-2 border-t border-gray-800 pt-4">
+              <label className="field-label">
+                Sustained-vowel pattern
+                <input className="editor-input" value={pattern} placeholder="am|o|r" onChange={(event) => setPattern(event.target.value)} />
+              </label>
+              {!patternValid ? <p className="m-0 text-xs text-amber-300">Fragments must be non-empty and join exactly to “{selectedWord.text}”.</p> : null}
+              <button
+                className="editor-button w-full"
+                disabled={!patternValid || !pattern.includes('|')}
+                onClick={() => editSelected({ type: 'SET_TIMING_PATTERN', payload: { ...selection, pattern } })}
+              >
+                Apply fragment pattern
+              </button>
+              {selectedWord.timing && selectedWord.timing.length > 1 ? (
+                <div className="space-y-2">
+                  <label className="field-label">
+                    Internal boundary
+                    <select className="editor-input" value={boundaryIndex} onChange={(event) => setBoundaryIndex(Number(event.target.value))}>
+                      {selectedWord.timing.slice(0, -1).map((fragment, index) => (
+                         <option key={fragment.id} value={index}>
+                           {fragment.text} | {selectedWord.timing![index + 1].text} ({formatTimestamp(fragment.end)})
+                         </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap gap-1">
+                     {[-0.05, -0.01, -0.001, 0.001, 0.01, 0.05].map((delta) => (
+                      <button
+                        key={delta}
+                        className="editor-button"
+                        onClick={() => editSelected({
+                          type: 'SET_FRAGMENT_BOUNDARY',
+                          payload: { ...selection, boundaryIndex, value: selectedWord.timing![boundaryIndex].end + delta },
+                        })}
+                      >
+                         {delta > 0 ? '+' : ''}{Math.round(delta * 1000)} ms
+                      </button>
+                    ))}
+                    <button
+                      className="editor-button"
+                      onClick={() => editSelected({ type: 'SET_FRAGMENT_BOUNDARY', payload: { ...selection, boundaryIndex, value: getPlayhead() } })}
+                    >
+                      Set from playhead
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400">Select a word in the transcript.</p>
+        )}
+      </aside>
     </div>
   )
 }
+
+export const LyricsEditor = memo(LyricsEditorComponent)

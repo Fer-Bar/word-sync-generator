@@ -1,4 +1,5 @@
-import type { Segment, Transcript, ValidationError, Word } from './types'
+import type { Segment, TimingFragment, Transcript, ValidationError, Word } from './types'
+import { formatTimestamp } from './time'
 
 export function parseTranscript(jsonString: string): Transcript {
   const data = JSON.parse(jsonString)
@@ -28,12 +29,21 @@ export function parseTranscript(jsonString: string): Transcript {
       const start = Number(w.start) || 0
       const end = Number(w.end) || start + 0.1
       const text = typeof w.text === 'string' ? w.text : ''
+      const timing: TimingFragment[] | undefined = Array.isArray(w.timing)
+        ? w.timing.map((fragment: any, fragmentIdx: number) => ({
+            id: String(fragment.id || `${wordId}-f${fragmentIdx}`),
+            text: String(fragment.text || ''),
+            start: Number(fragment.start),
+            end: Number(fragment.end),
+          }))
+        : undefined
       return {
         id: wordId,
         start: Math.round(start * 1000) / 1000,
         end: Math.round(end * 1000) / 1000,
         text,
         probability: typeof w.probability === 'number' ? w.probability : 1.0,
+        ...(timing ? { timing } : {}),
       }
     })
 
@@ -51,7 +61,7 @@ export function parseTranscript(jsonString: string): Transcript {
   })
 
   return {
-    schema_version: data.schema_version,
+    schema_version: 2,
     song: {
       title: String(data.song.title),
       uploader: data.song.uploader ?? null,
@@ -99,7 +109,7 @@ export function validateTranscript(transcript: Transcript): ValidationError[] {
     if (segment.start < 0 || !Number.isFinite(segment.start)) {
       errors.push({
         type: 'error',
-        message: `Segment ${segIdx + 1} start time is invalid (${segment.start}s)`,
+        message: `Segment ${segIdx + 1} start time is invalid (${formatTimestamp(segment.start)})`,
         segmentIndex: segIdx,
         field: 'segment.start',
       })
@@ -108,7 +118,7 @@ export function validateTranscript(transcript: Transcript): ValidationError[] {
     if (segment.end <= segment.start || !Number.isFinite(segment.end)) {
       errors.push({
         type: 'error',
-        message: `Segment ${segIdx + 1} end time (${segment.end}s) must be greater than start (${segment.start}s)`,
+        message: `Segment ${segIdx + 1} end time (${formatTimestamp(segment.end)}) must be greater than start (${formatTimestamp(segment.start)})`,
         segmentIndex: segIdx,
         field: 'segment.end',
       })
@@ -149,7 +159,7 @@ export function validateTranscript(transcript: Transcript): ValidationError[] {
       if (word.start < 0 || !Number.isFinite(word.start)) {
         errors.push({
           type: 'error',
-          message: `Word "${word.text}" start time is invalid (${word.start}s)`,
+          message: `Word "${word.text}" start time is invalid (${formatTimestamp(word.start)})`,
           segmentIndex: segIdx,
           wordIndex: wordIdx,
           field: 'word.start',
@@ -159,21 +169,43 @@ export function validateTranscript(transcript: Transcript): ValidationError[] {
       if (word.end <= word.start || !Number.isFinite(word.end)) {
         errors.push({
           type: 'error',
-          message: `Word "${word.text}" end (${word.end}s) must be greater than start (${word.start}s)`,
+          message: `Word "${word.text}" end (${formatTimestamp(word.end)}) must be greater than start (${formatTimestamp(word.start)})`,
           segmentIndex: segIdx,
           wordIndex: wordIdx,
           field: 'word.end',
         })
       }
 
-      if (wordIdx > 0 && word.start < prevWordEnd - 0.05) {
+      if (wordIdx > 0 && word.start < prevWordEnd) {
         errors.push({
           type: 'warning',
-          message: `Word "${word.text}" starts (${word.start}s) before previous word ends (${prevWordEnd}s)`,
+          message: `Word "${word.text}" starts (${formatTimestamp(word.start)}) before previous word ends (${formatTimestamp(prevWordEnd)})`,
           segmentIndex: segIdx,
           wordIndex: wordIdx,
           field: 'word.start',
         })
+      }
+      if (word.timing) {
+        const joinedText = word.timing.map((fragment) => fragment.text).join('')
+        const contiguous = word.timing.every(
+          (fragment, index) =>
+            fragment.end > fragment.start &&
+            (index === 0 || Math.abs(fragment.start - word.timing![index - 1].end) <= 0.001)
+        )
+        if (
+          joinedText !== word.text ||
+          !contiguous ||
+          Math.abs(word.timing[0].start - word.start) > 0.001 ||
+          Math.abs(word.timing[word.timing.length - 1].end - word.end) > 0.001
+        ) {
+          errors.push({
+            type: 'error',
+            message: `Word "${word.text}" has invalid fragment timing`,
+            segmentIndex: segIdx,
+            wordIndex: wordIdx,
+            field: 'word.timing',
+          })
+        }
       }
       prevWordEnd = word.end
     })

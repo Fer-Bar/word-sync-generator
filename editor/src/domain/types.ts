@@ -17,6 +17,14 @@ export interface Word {
   end: number
   text: string
   probability?: number
+  timing?: TimingFragment[]
+}
+
+export interface TimingFragment {
+  id: string
+  text: string
+  start: number
+  end: number
 }
 
 export interface Segment {
@@ -32,6 +40,19 @@ export interface Transcript {
   song: SongMetadata
   transcription?: TranscriptionInfo
   segments: Segment[]
+}
+
+export interface EditDocument {
+  schema_version: 2
+  revision: number
+  transcript: Transcript
+  media: {
+    original_audio: string
+    instrumental_audio: string
+    original_transcript: string
+  }
+  video: { width: number; height: number; fps: number }
+  background: { kind: 'solid' | 'image'; color: string; path?: string }
 }
 
 export interface StyleConfig {
