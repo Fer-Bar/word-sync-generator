@@ -1,12 +1,16 @@
 import importlib.util
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +18,12 @@ CONFIG_PATH = Path("/content/karaoke_job.json")
 STATUS_PATH = Path("/content/karaoke_status.json")
 HF_TOKEN_PATH = Path("/content/.hf_token")
 WORK_DIR = Path("/content/karaoke_workspace")
-ASS_MODULE_PATH = Path("/content/karaoke_ass.py")
+LYRICS_MODULE_PATH = Path("/content/karaoke_lyrics_file.py")
 RENDER_JOB_PATH = Path("/content/karaoke_render_job.zip")
 LOGGER = logging.getLogger(__name__)
+LRCLIB_API = "https://lrclib.net/api"
+CTC_ALIGNER_MODEL = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+CTC_ALIGNER_MODEL_REVISION = "49402e9577b1158620820667c218cd494cc44486"
 MAX_LYRIC_LINES_PER_PAGE = 3
 PAGE_BREAK_SILENCE_SECONDS = 1.5
 MAX_PAGE_DURATION_SECONDS = 15.0
@@ -40,19 +47,23 @@ def main() -> None:
     source_path, metadata = _acquire_source(config)
     mixture_path = _prepare_mixture(source_path)
     vocals_path, instrumental_path = _separate_vocals(mixture_path, config["demucs_model"])
-    transcript = _transcribe(vocals_path, metadata, config)
+    lyrics, alignment = _prepare_lyrics(vocals_path, metadata, config)
 
     safe_title = _safe_filename(metadata["title"])
     output_dir = WORK_DIR / safe_title
     output_dir.mkdir(parents=True, exist_ok=True)
     original_audio = output_dir / f"original_audio{source_path.suffix.lower()}"
+    vocals_flac = output_dir / "vocals.flac"
     instrumental_flac = output_dir / "instrumental.flac"
-    original_transcript = output_dir / "original_transcript.json"
+    lyrics_path = output_dir / "lyrics.lyricsfile.yaml"
+    alignment_path = output_dir / "alignment.json"
     shutil.copy2(source_path, original_audio)
-    original_transcript.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+    _run(["ffmpeg", "-y", "-i", str(vocals_path), "-c:a", "flac", str(vocals_flac)])
     _run(["ffmpeg", "-y", "-i", str(instrumental_path), "-c:a", "flac", str(instrumental_flac)])
+    lyrics_module = _load_lyrics_module()
+    lyrics_path.write_text(lyrics_module.dump_lyrics_file(lyrics), encoding="utf-8")
+    alignment_path.write_text(json.dumps(alignment, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    canonical_transcript = {**transcript, "schema_version": 2}
     background = {"kind": config["background"]["kind"], "color": "#0B1020"}
     if config["background"]["kind"] == "image":
         source_background = Path(config["background"]["value"])
@@ -61,32 +72,23 @@ def main() -> None:
         background["path"] = background_path.name
     else:
         background["color"] = config["background"]["value"]
-    edit_document = {
-        "schema_version": 2,
-        "revision": 1,
-        "transcript": canonical_transcript,
+    job_document = {
+        "schema_version": 1,
+        "job_id": config["job_id"],
+        "title": metadata["title"],
+        "source": metadata,
+        "alignment": {key: value for key, value in alignment.items() if key != "words"},
         "media": {
             "original_audio": original_audio.name,
+            "vocals_audio": vocals_flac.name,
             "instrumental_audio": instrumental_flac.name,
-            "original_transcript": original_transcript.name,
+            "lyrics": lyrics_path.name,
         },
         "video": config["video"],
         "background": background,
     }
-    (output_dir / "edit.json").write_text(json.dumps(edit_document, ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / "job.json").write_text(json.dumps(job_document, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if config.get("render_now"):
-        ass_path = output_dir / f"{safe_title}.ass"
-        ass_path.write_text(_generate_ass(canonical_transcript, config["video"]), encoding="utf-8")
-        render_config = {
-            "video": config["video"],
-            "background": config["background"],
-        }
-        _render_video(instrumental_path, ass_path, output_dir / f"{safe_title}_karaoke.mp4", render_config)
-        _render_video(source_path, ass_path, output_dir / f"{safe_title}_lyrics.mp4", render_config)
-
-    manifest = _build_manifest(config, metadata, output_dir)
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     _create_archive(output_dir, Path(config["archive_path"]))
     LOGGER.info("Pipeline completed: %s", config["archive_path"])
 
@@ -97,32 +99,37 @@ def _render_existing_job(config: dict[str, Any]) -> None:
     job_dir = WORK_DIR / "render_job"
     job_dir.mkdir(parents=True, exist_ok=True)
     _extract_archive(RENDER_JOB_PATH, job_dir)
-    document = json.loads((job_dir / "edit.json").read_text(encoding="utf-8"))
-    mode = config["mode"]
-    audio_key = "instrumental_audio" if mode == "karaoke" else "original_audio"
-    audio_path = job_dir / document["media"][audio_key]
+    document = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    requested_mode = config["mode"]
+    modes = ("karaoke", "lyrics") if requested_mode == "both" else (requested_mode,)
+    audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
     output_dir = WORK_DIR / "render_result"
     output_dir.mkdir(parents=True, exist_ok=True)
-    title = _safe_filename(document["transcript"]["song"]["title"])
-    ass_path = output_dir / f"{title}_{mode}.ass"
-    video_path = output_dir / f"{title}_{mode}.mp4"
-    ass_path.write_text(_generate_ass(document["transcript"], document["video"]), encoding="utf-8")
+    title = _safe_filename(document["title"])
+    source_ass = job_dir / "lyrics.ass"
+    if not source_ass.is_file():
+        raise FileNotFoundError("Missing generated ASS file in render bundle")
     background = document["background"]
     render_background = {
         "kind": background["kind"],
         "value": str(job_dir / background["path"]) if background["kind"] == "image" else background["color"],
     }
-    _render_video(audio_path, ass_path, video_path, {"video": document["video"], "background": render_background})
+    for mode in modes:
+        audio_path = job_dir / document["media"][audio_keys[mode]]
+        ass_path = output_dir / f"{title}_{mode}.ass"
+        video_path = output_dir / f"{title}_{mode}.mp4"
+        shutil.copy2(source_ass, ass_path)
+        _render_video(audio_path, ass_path, video_path, {"video": document["video"], "background": render_background})
     _create_archive(output_dir, Path(config["archive_path"]))
 
 
-def _generate_ass(transcript: dict[str, Any], video: dict[str, int]) -> str:
-    spec = importlib.util.spec_from_file_location("karaoke_ass", ASS_MODULE_PATH)
+def _load_lyrics_module() -> Any:
+    spec = importlib.util.spec_from_file_location("karaoke_lyrics_file", LYRICS_MODULE_PATH)
     if spec is None or spec.loader is None:
-        raise RuntimeError("Unable to load the uploaded ASS generator")
+        raise RuntimeError("Unable to load the uploaded LyricsFile module")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return str(module.generate_ass(transcript, video))
+    return module
 
 
 def _extract_archive(archive_path: Path, destination: Path) -> None:
@@ -153,8 +160,12 @@ def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         source_path = Path(source["value"])
         if not source_path.is_file():
             raise FileNotFoundError(f"Uploaded source not found: {source_path}")
+        lyrics_options = config.get("lyrics", {})
         return source_path, {
-            "title": source.get("name") or source_path.stem,
+            "title": lyrics_options.get("title") or source.get("name") or source_path.stem,
+            "track": lyrics_options.get("title") or source.get("name") or source_path.stem,
+            "artist": lyrics_options.get("artist"),
+            "album": lyrics_options.get("album"),
             "uploader": None,
             "duration": _probe_duration(source_path),
             "source_url": None,
@@ -190,8 +201,13 @@ def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     if source_path is None:
         details = download_result.stderr.strip() or download_result.stdout.strip() or "no filepath reported"
         raise RuntimeError(f"yt-dlp did not produce a usable audio file: {details}")
+    lyrics_options = config.get("lyrics", {})
     return source_path, {
-        "title": raw_metadata.get("title") or "karaoke",
+        "title": lyrics_options.get("title") or raw_metadata.get("title") or "karaoke",
+        "track": lyrics_options.get("title") or raw_metadata.get("track") or raw_metadata.get("title") or "karaoke",
+        "artist": lyrics_options.get("artist") or raw_metadata.get("artist") or raw_metadata.get("creator"),
+        "album": lyrics_options.get("album") or raw_metadata.get("album"),
+        "language": raw_metadata.get("language"),
         "uploader": raw_metadata.get("uploader"),
         "duration": raw_metadata.get("duration") or _probe_duration(source_path),
         "source_url": raw_metadata.get("webpage_url") or url,
@@ -274,6 +290,426 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
     return vocals_path, instrumental_path
 
 
+def _prepare_lyrics(
+    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    lyrics_module = _load_lyrics_module()
+    record = None if config.get("lyrics", {}).get("disable_lrclib") else _fetch_lrclib(metadata, config)
+    if record is not None:
+        try:
+            document = _lyrics_document_from_record(record, metadata, config)
+            if _has_complete_word_timings(document):
+                lyrics = lyrics_module.validate_lyrics_file(document, require_words=True)
+                return lyrics, {
+                    "engine": "lrclib",
+                    "lrclib_id": record.get("id"),
+                    "word_timing": "provided",
+                }
+            lyrics, words = _align_known_lyrics(vocals_path, document, config)
+            return lyrics, {
+                "engine": "ctc-forced-aligner",
+                "model": CTC_ALIGNER_MODEL,
+                "model_revision": CTC_ALIGNER_MODEL_REVISION,
+                "lrclib_id": record.get("id"),
+                "word_timing": "generated",
+                "words": words,
+            }
+        except (AssertionError, KeyError, RuntimeError, ValueError) as error:
+            LOGGER.warning(
+                "LRCLIB record %s (%s) could not be used; falling back to Faster Whisper: %s",
+                record.get("id"),
+                record.get("trackName"),
+                error,
+            )
+
+    transcript = _transcribe(vocals_path, metadata, config)
+    lyrics = _transcript_to_lyrics(transcript)
+    words = [word for segment in transcript["segments"] for word in segment["words"]]
+    return lyrics, {
+        "engine": "faster-whisper",
+        "model": config["whisper_model"],
+        "language": transcript["transcription"]["language"],
+        "word_timing": "generated",
+        "words": words,
+    }
+
+
+def _artist_variants(artist: str | None) -> list[str]:
+    if not artist:
+        return []
+    parts: list[str] = []
+    for separator in (",", ";"):
+        if separator in artist:
+            parts.extend(part.strip() for part in artist.split(separator) if part.strip())
+            break
+    if not parts:
+        parts = [artist.strip()]
+    expanded: list[str] = []
+    for part in parts:
+        lower = part.lower()
+        for pattern in ("feat.", "ft.", "featuring", "x", "with"):
+            idx = lower.find(pattern)
+            if idx != -1:
+                prefix = part[:idx].strip()
+                suffix = part[idx + len(pattern) :].strip()
+                if prefix:
+                    expanded.append(prefix)
+                if suffix:
+                    expanded.append(suffix)
+                break
+        else:
+            expanded.append(part)
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in [artist] + expanded:
+        key = _match_text(value)
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def _title_variants(track: str) -> list[str]:
+    candidates: list[str] = [track]
+    stripped = re.sub(r"\s*\([^)]*\)\s*", " ", track).strip()
+    stripped = re.sub(r"\s*\[[^\]]*\]\s*", " ", stripped).strip()
+    stripped = " ".join(stripped.split())
+    if stripped and _match_text(stripped) != _match_text(track):
+        candidates.append(stripped)
+    return candidates
+
+
+def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
+    forced_id = config.get("lyrics", {}).get("lrclib_id")
+    if forced_id is not None:
+        try:
+            value = _lrclib_request(f"/get/{int(forced_id)}")
+        except (OSError, ValueError) as error:
+            raise RuntimeError(f"Unable to load requested LRCLIB id {forced_id}: {error}") from error
+        if not isinstance(value, dict):
+            raise RuntimeError(f"LRCLIB id {forced_id} returned an invalid record")
+        return value
+
+    track = str(metadata.get("track") or metadata["title"])
+    artist = metadata.get("artist")
+    album = metadata.get("album")
+    duration = metadata.get("duration")
+    duration_str = str(round(float(duration))) if duration else ""
+    titles = _title_variants(track)
+    artists = _artist_variants(artist)
+
+    if artists:
+        for title in titles:
+            for artist_variant in artists:
+                for with_album in (bool(album), False):
+                    parameters: dict[str, str] = {
+                        "track_name": title,
+                        "artist_name": artist_variant,
+                        "duration": duration_str,
+                    }
+                    if with_album and album:
+                        parameters["album_name"] = str(album)
+                    try:
+                        value = _lrclib_request(f"/get?{urllib.parse.urlencode(parameters)}")
+                        if isinstance(value, dict) and _usable_lrclib_record(value):
+                            LOGGER.info("Using LRCLIB record %s: %s", value.get("id"), value.get("trackName"))
+                            return value
+                    except OSError:
+                        continue
+
+    seen_ids: set[int] = set()
+    candidates: list[dict[str, Any]] = []
+    queries = []
+    if artists:
+        queries.append(f"{artists[0]} {titles[0]}")
+    queries.append(titles[0])
+    if artists:
+        queries.append(f"{artist} {track}")
+    if len(titles) > 1:
+        if artists:
+            queries.append(f"{artists[0]} {titles[1]}")
+        queries.append(titles[1])
+    queries = list(dict.fromkeys(queries))
+
+    for query in queries:
+        try:
+            results = _lrclib_request(f"/search?{urllib.parse.urlencode({'q': query})}")
+        except OSError as error:
+            LOGGER.warning("LRCLIB search query %r failed: %s", query, error)
+            continue
+        if not isinstance(results, list):
+            continue
+        for record in results:
+            if not isinstance(record, dict):
+                continue
+            record_id = record.get("id")
+            if isinstance(record_id, int) and record_id in seen_ids:
+                continue
+            if isinstance(record_id, int):
+                seen_ids.add(record_id)
+            if _usable_lrclib_record(record) and _lrclib_match_score(record, metadata) >= 1.25:
+                candidates.append(record)
+    if not candidates:
+        LOGGER.info("LRCLIB did not return a safe lyrics match for %r by %r", track, artist)
+        return None
+    selected = max(candidates, key=lambda record: _lrclib_match_score(record, metadata))
+    LOGGER.info("Using LRCLIB record %s: %s", selected.get("id"), selected.get("trackName"))
+    return selected
+
+
+def _lrclib_request(path: str) -> Any:
+    request = urllib.request.Request(
+        f"{LRCLIB_API}{path}",
+        headers={"User-Agent": "yt-video-generator/0.1.0 (LyricsFile preparation)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (json.JSONDecodeError, TimeoutError, urllib.error.URLError) as error:
+        raise OSError(str(error)) from error
+
+
+def _usable_lrclib_record(record: dict[str, Any]) -> bool:
+    return not record.get("instrumental") and any(
+        isinstance(record.get(key), str) and record[key].strip()
+        for key in ("lyricsfile", "lyricsFile", "syncedLyrics", "plainLyrics")
+    )
+
+
+def _lrclib_match_score(record: dict[str, Any], metadata: dict[str, Any]) -> float:
+    expected_title = str(metadata.get("track") or metadata["title"])
+    title_score = SequenceMatcher(
+        None, _match_text(expected_title), _match_text(str(record.get("trackName") or ""))
+    ).ratio()
+    artist = metadata.get("artist")
+    artist_score = 0.5
+    if artist:
+        artist_score = SequenceMatcher(
+            None, _match_text(str(artist)), _match_text(str(record.get("artistName") or ""))
+        ).ratio()
+    duration_score = 0.0
+    if metadata.get("duration") and record.get("duration"):
+        difference = abs(float(metadata["duration"]) - float(record["duration"]))
+        duration_score = 1.0 if difference <= 2 else 0.5 if difference <= 5 else 0.0
+    return title_score + artist_score + duration_score
+
+
+def _match_text(value: str) -> str:
+    normalized = "".join(character if character.isalnum() else " " for character in value.casefold())
+    return " ".join(normalized.split())
+
+
+def _lyrics_document_from_record(
+    record: dict[str, Any], metadata: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
+    import yaml
+
+    raw_lyrics_file = record.get("lyricsfile") or record.get("lyricsFile")
+    if isinstance(raw_lyrics_file, str) and raw_lyrics_file.strip():
+        try:
+            document = yaml.safe_load(raw_lyrics_file)
+        except yaml.YAMLError as error:
+            raise ValueError(f"LRCLIB returned invalid LyricsFile YAML: {error}") from error
+        if isinstance(document, dict):
+            document.setdefault("version", "1.0")
+            if not isinstance(document.get("metadata"), dict):
+                document["metadata"] = {}
+            document["metadata"].setdefault("title", record.get("trackName") or metadata["title"])
+            document["metadata"].setdefault("duration_ms", round(float(metadata["duration"]) * 1000))
+            language = config["language"] if config["language"] != "auto" else metadata.get("language")
+            if language:
+                document["metadata"].setdefault("language", language)
+            raw_lines = document.get("lines")
+            has_text_lines = (
+                isinstance(raw_lines, list) and raw_lines and any(
+                    isinstance(line, dict) and str(line.get("text") or "").strip() for line in raw_lines
+                )
+            )
+            if has_text_lines:
+                return document
+            LOGGER.info("LRCLIB lyricsfile has no usable lines, trying syncedLyrics/plainLyrics")
+
+    source = record.get("syncedLyrics") or record.get("plainLyrics")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("LRCLIB record does not contain usable lyrics")
+    lines = []
+    for raw_line in source.splitlines():
+        text = re.sub(r"^\[\d{1,3}:\d{2}(?:\.\d{2,3})?\]\s*", "", raw_line).strip()
+        if text:
+            lines.append({"text": text})
+    if not lines:
+        raise ValueError("LRCLIB record does not contain non-empty lyric lines")
+    return {
+        "version": "1.0",
+        "metadata": {
+            "title": record.get("trackName") or metadata["title"],
+            "artist": record.get("artistName") or metadata.get("artist"),
+            "album": record.get("albumName") or metadata.get("album"),
+            "language": config["language"] if config["language"] != "auto" else metadata.get("language"),
+            "duration_ms": round(float(metadata["duration"]) * 1000),
+        },
+        "lines": lines,
+    }
+
+
+def _has_complete_word_timings(document: dict[str, Any]) -> bool:
+    lines = document.get("lines")
+    if not isinstance(lines, list):
+        return False
+    lyric_lines = [line for line in lines if isinstance(line, dict) and str(line.get("text") or "").strip()]
+    return bool(lyric_lines) and all(isinstance(line.get("words"), list) and line["words"] for line in lyric_lines)
+
+
+def _align_known_lyrics(
+    vocals_path: Path, document: dict[str, Any], config: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    import torch
+    from ctc_forced_aligner import (
+        generate_emissions,
+        get_alignments,
+        get_spans,
+        load_alignment_model,
+        load_audio,
+        postprocess_results,
+        preprocess_text,
+    )
+    from huggingface_hub import snapshot_download
+
+    raw_lines = document.get("lines")
+    if not isinstance(raw_lines, list):
+        raise ValueError("Known lyrics do not contain lines")
+    language = _alignment_language(config["language"], document.get("metadata"))
+    character_alignment = language in {"chi", "jpn"}
+    line_tokens = []
+    for line in raw_lines:
+        if not isinstance(line, dict) or not isinstance(line.get("text"), str):
+            continue
+        tokens = (
+            [character for character in line["text"] if not character.isspace()]
+            if character_alignment
+            else line["text"].split()
+        )
+        if tokens:
+            line_tokens.append(tokens)
+    flat_tokens = [token for tokens in line_tokens for token in tokens]
+    if not flat_tokens:
+        raise ValueError("Known lyrics do not contain words")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    model_path = snapshot_download(
+        repo_id=CTC_ALIGNER_MODEL,
+        revision=CTC_ALIGNER_MODEL_REVISION,
+        cache_dir=WORK_DIR / "models",
+    )
+    model, tokenizer = load_alignment_model(device, model_path=model_path, dtype=dtype)
+    waveform = load_audio(str(vocals_path), model.dtype, model.device)
+    emissions, stride = generate_emissions(model, waveform, batch_size=4)
+    alignment_text = "".join(flat_tokens) if character_alignment else " ".join(flat_tokens)
+    tokens_starred, text_starred = preprocess_text(
+        alignment_text,
+        romanize=True,
+        language=language,
+        split_size="char" if character_alignment else "word",
+        star_frequency="edges",
+    )
+    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
+    spans = get_spans(tokens_starred, segments, blank_token)
+    aligned = postprocess_results(text_starred, spans, stride, scores)
+    if len(aligned) != len(flat_tokens):
+        raise ValueError(f"CTC aligned {len(aligned)} words but expected {len(flat_tokens)}")
+
+    metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
+    output_lines = []
+    cursor = 0
+    for tokens in line_tokens:
+        aligned_line = aligned[cursor : cursor + len(tokens)]
+        words = []
+        for index, (token, timing) in enumerate(zip(tokens, aligned_line, strict=True)):
+            confidence = max(0.0, min(1.0, math.exp(float(timing["score"]))))
+            words.append(
+                {
+                    "text": token if character_alignment or index + 1 == len(tokens) else f"{token} ",
+                    "start_ms": round(float(timing["start"]) * 1000),
+                    "end_ms": round(float(timing["end"]) * 1000),
+                    "confidence": round(confidence, 4),
+                }
+            )
+        output_lines.append(
+            {
+                "text": "".join(tokens) if character_alignment else " ".join(tokens),
+                "words": words,
+                "start_ms": words[0]["start_ms"],
+                "end_ms": words[-1]["end_ms"],
+            }
+        )
+        cursor += len(tokens)
+    lyrics = {"version": "1.0", "metadata": metadata, "lines": output_lines}
+    return _load_lyrics_module().validate_lyrics_file(lyrics, require_words=True), aligned
+
+
+def _alignment_language(language: str, metadata: Any) -> str:
+    value = language
+    if value == "auto" and isinstance(metadata, dict):
+        value = str(metadata.get("language") or "")
+    primary = value.split("-", maxsplit=1)[0].lower()
+    codes = {
+        "ar": "ara",
+        "de": "deu",
+        "en": "eng",
+        "es": "spa",
+        "fr": "fra",
+        "it": "ita",
+        "ja": "jpn",
+        "ko": "kor",
+        "pt": "por",
+        "ru": "rus",
+        "zh": "chi",
+    }
+    if len(primary) == 3:
+        return primary
+    if primary not in codes:
+        raise ValueError(f"CTC alignment needs an ISO 639-3 language code, not {language!r}")
+    return codes[primary]
+
+
+def _transcript_to_lyrics(transcript: dict[str, Any]) -> dict[str, Any]:
+    lines = []
+    for segment in transcript["segments"]:
+        source_words = segment["words"]
+        words = []
+        for index, word in enumerate(source_words):
+            words.append(
+                {
+                    "text": f"{word['text']} " if index + 1 < len(source_words) else word["text"],
+                    "start_ms": round(float(word["start"]) * 1000),
+                    "end_ms": round(float(word["end"]) * 1000),
+                    "confidence": round(float(word.get("probability", 0)), 4),
+                }
+            )
+        lines.append(
+            {
+                "text": " ".join(word["text"] for word in source_words),
+                "words": words,
+                "start_ms": words[0]["start_ms"],
+                "end_ms": words[-1]["end_ms"],
+            }
+        )
+    song = transcript["song"]
+    metadata = {
+        "title": song["title"],
+        "duration_ms": round(float(song["duration"]) * 1000),
+        "language": transcript["transcription"]["language"],
+    }
+    if song.get("artist") or song.get("uploader"):
+        metadata["artist"] = song.get("artist") or song["uploader"]
+    if song.get("album"):
+        metadata["album"] = song["album"]
+    return _load_lyrics_module().validate_lyrics_file(
+        {"version": "1.0", "metadata": metadata, "lines": lines}, require_words=True
+    )
+
+
 def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     import torch
     from faster_whisper import WhisperModel
@@ -326,6 +762,8 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
         "schema_version": 1,
         "song": {
             "title": metadata["title"],
+            "artist": metadata.get("artist"),
+            "album": metadata.get("album"),
             "uploader": metadata["uploader"],
             "duration": metadata["duration"],
         },
@@ -389,9 +827,7 @@ def _group_page_lines(
             continue
         gap = segment["start"] - current[-1]["end"] if current else 0
         duration = segment["end"] - current[0]["start"] if current else 0
-        should_break = current and (
-            len(current) >= max_lines or gap >= break_silence or duration > max_duration
-        )
+        should_break = current and (len(current) >= max_lines or gap >= break_silence or duration > max_duration)
         if should_break:
             grouped_lines.append(current)
             current = []
@@ -405,9 +841,7 @@ def _page_words(page: dict[str, Any]) -> list[dict[str, Any]]:
     return [word for line in page["lines"] for word in line["words"]]
 
 
-def _normalize_karaoke_timeline(
-    words: list[dict[str, Any]], event_start_cs: int
-) -> tuple[list[int], list[int], int]:
+def _normalize_karaoke_timeline(words: list[dict[str, Any]], event_start_cs: int) -> tuple[list[int], list[int], int]:
     word_starts_cs: list[int] = []
     for word in words:
         earliest_start_cs = word_starts_cs[-1] + 1 if word_starts_cs else event_start_cs
@@ -416,9 +850,7 @@ def _normalize_karaoke_timeline(
     karaoke_end_cs = max(word_starts_cs[-1] + 1, _to_centiseconds(words[-1]["end"]))
     durations_cs = [
         following_start_cs - start_cs
-        for start_cs, following_start_cs in zip(
-            word_starts_cs, [*word_starts_cs[1:], karaoke_end_cs], strict=True
-        )
+        for start_cs, following_start_cs in zip(word_starts_cs, [*word_starts_cs[1:], karaoke_end_cs], strict=True)
     ]
     return word_starts_cs, durations_cs, karaoke_end_cs
 
@@ -447,13 +879,9 @@ def _build_lyric_pages(
         words = _page_words(page)
         source_start_cs = _to_centiseconds(words[0]["start"])
         desired_display_start_cs = max(0, source_start_cs - lead_centiseconds)
-        display_start_cs = (
-            desired_display_start_cs if next_display_start_cs is None else next_display_start_cs
-        )
+        display_start_cs = desired_display_start_cs if next_display_start_cs is None else next_display_start_cs
         word_starts_cs, durations_cs, karaoke_end_cs = _normalize_karaoke_timeline(words, display_start_cs)
-        desired_display_end_cs = max(
-            karaoke_end_cs, _to_centiseconds(words[-1]["end"]) + tail_centiseconds
-        )
+        desired_display_end_cs = max(karaoke_end_cs, _to_centiseconds(words[-1]["end"]) + tail_centiseconds)
 
         page.update(
             {
@@ -625,31 +1053,6 @@ def _nvenc_available() -> bool:
         return "h264_nvenc" in encoders.stdout
     except (ImportError, subprocess.CalledProcessError):
         return False
-
-
-def _build_manifest(config: dict[str, Any], metadata: dict[str, Any], output_dir: Path) -> dict[str, Any]:
-    files = []
-    for path in sorted(output_dir.iterdir()):
-        if path.is_file():
-            files.append({"name": path.name, "size_bytes": path.stat().st_size})
-    return {
-        "schema_version": 1,
-        "job_id": config["job_id"],
-        "status": "completed",
-        "source": {
-            "kind": config["source"]["kind"],
-            "name": metadata["title"],
-            "url": metadata["source_url"],
-        },
-        "configuration": {
-            "language": config["language"],
-            "whisper_model": config["whisper_model"],
-            "demucs_model": config["demucs_model"],
-            "background_kind": config["background"]["kind"],
-            "video": config["video"],
-        },
-        "files": files,
-    }
 
 
 def _create_archive(output_dir: Path, archive_path: Path) -> None:
