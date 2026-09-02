@@ -19,22 +19,28 @@ LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
 ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
+LYRICS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyrics_file.py"
 COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
 REMOTE_HF_TOKEN = Path("/content/.hf_token")
-REMOTE_ASS_MODULE = Path("/content/karaoke_ass.py")
+REMOTE_LYRICS_MODULE = Path("/content/karaoke_lyrics_file.py")
 REMOTE_RENDER_JOB = Path("/content/karaoke_render_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the preparation command parser."""
-    parser = argparse.ArgumentParser(description="Prepare a durable karaoke editing job on Google Colab.")
+    parser = argparse.ArgumentParser(description="Prepare a durable karaoke job on Google Colab.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
+    parser.add_argument("--title", help="Track title override used for LRCLIB matching")
+    parser.add_argument("--artist", help="Artist override used for LRCLIB matching")
+    parser.add_argument("--album", help="Album override used for LRCLIB matching")
+    parser.add_argument("--lrclib-id", type=int, help="Use a specific LRCLIB record")
+    parser.add_argument("--no-lrclib", action="store_true", help="Skip LRCLIB and transcribe with Faster Whisper")
     parser.add_argument("--whisper-model", default="large-v3", help="Faster Whisper model")
     parser.add_argument("--demucs-model", default="htdemucs_ft", help="Demucs separation model")
     parser.add_argument("--background-image", type=Path, help="Local image used as the video background")
@@ -46,27 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
     parser.add_argument("--timeout", type=int, default=14_400, help="Remote execution timeout in seconds")
-    parser.add_argument("--render-now", action="store_true", help="Also render both videos during preparation")
     return parser
 
 
-def build_edit_parser() -> argparse.ArgumentParser:
-    """Build the lightweight editor parser."""
-    parser = argparse.ArgumentParser(prog="karaoke edit", description="Open a prepared job in the local editor.")
-    parser.add_argument("job_dir", type=Path)
-    parser.add_argument("--port", type=int, default=0, help="Loopback API port; zero selects a free port")
-    parser.add_argument("--editor-port", type=int, default=5173, help="Vite editor port")
-    return parser
-
-
-def build_render_colab_parser() -> argparse.ArgumentParser:
+def build_render_parser() -> argparse.ArgumentParser:
     """Build the render-only Colab parser."""
     parser = argparse.ArgumentParser(
-        prog="karaoke render-colab",
-        description="Render a prepared job on Colab without running acquisition, Demucs, or Whisper.",
+        prog="karaoke render",
+        description="Render corrected lyrics from a prepared job folder without repeating preparation.",
     )
     parser.add_argument("job_dir", type=Path)
-    parser.add_argument("--mode", choices=("karaoke", "lyrics"), required=True)
+    parser.add_argument("--mode", choices=("both", "karaoke", "lyrics"), default="both")
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
     parser.add_argument("--timeout", type=int, default=14_400)
@@ -74,17 +70,12 @@ def build_render_colab_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Run preparation, local editing, or render-only Colab orchestration."""
+    """Run preparation or final render orchestration."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
-        if sys.argv[1:2] == ["edit"]:
-            from karaoke_app.editor_server import serve_editor
-
-            args = build_edit_parser().parse_args(sys.argv[2:])
-            serve_editor(args.job_dir, args.port, args.editor_port)
-        elif sys.argv[1:2] == ["render-colab"]:
-            args = build_render_colab_parser().parse_args(sys.argv[2:])
+        if sys.argv[1:2] == ["render"]:
+            args = build_render_parser().parse_args(sys.argv[2:])
             render_colab(args)
         else:
             args = build_parser().parse_args()
@@ -154,10 +145,16 @@ def run_job(args: argparse.Namespace) -> Path:
                 "value": remote_background or background_color,
             },
             "language": args.language,
+            "lyrics": {
+                "title": args.title,
+                "artist": args.artist,
+                "album": args.album,
+                "lrclib_id": args.lrclib_id,
+                "disable_lrclib": args.no_lrclib,
+            },
             "whisper_model": args.whisper_model,
             "demucs_model": args.demucs_model,
             "video": {"width": width, "height": height, "fps": 24},
-            "render_now": args.render_now,
             "archive_path": str(REMOTE_ARCHIVE),
         }
         job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
@@ -178,7 +175,7 @@ def run_job(args: argparse.Namespace) -> Path:
             if hf_token:
                 _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
             _upload(colab, session, job_path, REMOTE_JOB)
-            _upload(colab, session, ASS_MODULE, REMOTE_ASS_MODULE)
+            _upload(colab, session, LYRICS_MODULE, REMOTE_LYRICS_MODULE)
 
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
             _run(
@@ -208,16 +205,23 @@ def run_job(args: argparse.Namespace) -> Path:
                 _run([*colab, "stop", "--session", session], check=False)
 
     LOGGER.info("Artifacts saved to %s", output_dir)
+    LOGGER.info("Correct %s in LyricsEditor, replace it in this folder, then run:", "lyrics.lyricsfile.yaml")
+    LOGGER.info("uv run karaoke render %s", output_dir)
     return output_dir
 
 
 def render_colab(args: argparse.Namespace) -> Path:
-    """Upload canonical job state and run only ASS generation and FFmpeg on Colab."""
-    from karaoke_app.edit_document import load_edit_document
+    """Validate lyrics locally and run only FFmpeg rendering on Colab."""
+    from karaoke_app.ass import generate_ass
+    from karaoke_app.job_document import load_job_document, resolve_job_asset
+    from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
 
     _validate_installation()
     root = args.job_dir.expanduser().resolve()
-    document = load_edit_document(root)
+    document = load_job_document(root)
+    lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
+    lyrics = load_lyrics_file(lyrics_path, require_words=True)
+    ass_content = generate_ass(lyrics_to_transcript(lyrics), document["video"])
     render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
     output_dir = root / "renders" / render_id
     session = f"render-{uuid.uuid4().hex[:10]}"
@@ -229,7 +233,7 @@ def render_colab(args: argparse.Namespace) -> Path:
         config_path = temporary / "job.json"
         archive_path = temporary / "result.zip"
         status_path = temporary / "status.json"
-        _create_render_bundle(root, document, args.mode, bundle_path)
+        _create_render_bundle(root, document, args.mode, ass_content, bundle_path)
         config_path.write_text(
             json.dumps(
                 {
@@ -248,7 +252,6 @@ def render_colab(args: argparse.Namespace) -> Path:
             session_created = True
             _upload(colab, session, config_path, REMOTE_JOB)
             _upload(colab, session, bundle_path, REMOTE_RENDER_JOB)
-            _upload(colab, session, ASS_MODULE, REMOTE_ASS_MODULE)
             _run(
                 [
                     *colab,
@@ -277,20 +280,22 @@ def render_colab(args: argparse.Namespace) -> Path:
 
 
 def _create_render_bundle(
-    job_dir: Path, document: dict[str, object], mode: str, destination: Path
+    job_dir: Path, document: dict[str, object], mode: str, ass_content: str, destination: Path
 ) -> None:
-    from karaoke_app.edit_document import resolve_job_asset
+    from karaoke_app.job_document import resolve_job_asset
 
     media = document["media"]
     if not isinstance(media, dict):
-        raise ValueError("Invalid edit media configuration")
-    audio_key = "instrumental_audio" if mode == "karaoke" else "original_audio"
-    required = {str(media[audio_key])}
+        raise ValueError("Invalid job media configuration")
+    modes = ("karaoke", "lyrics") if mode == "both" else (mode,)
+    audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
+    required = {str(media[audio_keys[item]]) for item in modes}
     background = document["background"]
     if isinstance(background, dict) and background.get("kind") == "image":
         required.add(str(background["path"]))
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("edit.json", json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+        archive.writestr("job.json", json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+        archive.writestr("lyrics.ass", ass_content)
         for relative_path in sorted(required):
             path = resolve_job_asset(job_dir, relative_path, relative_path)
             archive.write(path, relative_path)
@@ -299,7 +304,7 @@ def _create_render_bundle(
 def _validate_installation() -> None:
     if not shutil.which("colab"):
         raise OSError("The 'colab' executable is not available. Run 'uv sync --dev' to install project dependencies.")
-    if not COLAB_SCRIPT.is_file() or not COLAB_REQUIREMENTS.is_file() or not ASS_MODULE.is_file():
+    if not all(path.is_file() for path in (COLAB_SCRIPT, COLAB_REQUIREMENTS, ASS_MODULE, LYRICS_MODULE)):
         raise OSError("Colab pipeline files are missing from the project")
 
 
@@ -308,11 +313,19 @@ def _resolve_source(value: str) -> tuple[str, str]:
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         hostname = (parsed.hostname or "").lower()
         if hostname in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}:
+            normalized_value = value.replace(r"\?", "?").replace(r"\=", "=").replace(r"\&", "&")
+            if "\\" in normalized_value:
+                raise ValueError(
+                    "Invalid YouTube URL: unexpected backslash. "
+                    "Use https://www.youtube.com/watch?v=VIDEO_ID"
+                )
+            parsed = urlparse(normalized_value)
             if parsed.path.rstrip("/") == "/watch" and not parse_qs(parsed.query).get("v"):
                 raise ValueError(
                     "Invalid YouTube watch URL: missing the 'v=' parameter. "
                     "Use https://www.youtube.com/watch?v=VIDEO_ID"
                 )
+            return "url", normalized_value
         return "url", value
     path = Path(value).expanduser().resolve()
     if not path.is_file():
