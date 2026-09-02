@@ -35,8 +35,7 @@ def generate_ass(transcript: dict[str, Any], video: dict[str, int]) -> str:
         text, scheduled_end = _render_page_text(page)
         end = max(page["display_end_cs"], scheduled_end)
         lines.append(
-            f"Dialogue: 0,{_ass_timestamp(page['display_start_cs'])},{_ass_timestamp(end)},"
-            f"Default,,0,0,0,,{text}"
+            f"Dialogue: 0,{_ass_timestamp(page['display_start_cs'])},{_ass_timestamp(end)},Default,,0,0,0,,{text}"
         )
     return "\n".join(lines) + "\n"
 
@@ -118,8 +117,9 @@ def _render_page_text(page: dict[str, Any]) -> tuple[str, int]:
     word_index = 0
     first_word = True
     for line_index, line in enumerate(page["lines"]):
+        preserve_spacing = "".join(str(word["text"]) for word in line["words"]).strip() == str(line["text"]).strip()
         for word in line["words"]:
-            if not first_word:
+            if not first_word and not preserve_spacing:
                 parts.append(" ")
             first_word = False
             start = word_starts[word_index]
@@ -134,6 +134,10 @@ def _render_page_text(page: dict[str, Any]) -> tuple[str, int]:
             parts.append(r"\N")
             first_word = True
     return "".join(parts), max(cursor, scheduled_end)
+
+
+def _page_words(page: dict[str, Any]) -> list[dict[str, Any]]:
+    return [word for line in page["lines"] for word in line["words"]]
 
 
 def _schedule_words(words: list[dict[str, Any]], event_start: int) -> tuple[list[int], list[int], int]:
