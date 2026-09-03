@@ -111,6 +111,7 @@ def _render_existing_job(config: dict[str, Any]) -> None:
     render_background = {
         "kind": background["kind"],
         "value": str(job_dir / background["path"]) if background["kind"] == "image" else background["color"],
+        "overlay_opacity": background.get("overlay_opacity", 0.38),
     }
     for mode in modes:
         source_ass = job_dir / f"{mode}.ass"
@@ -1489,11 +1490,13 @@ def _render_video(
         background_path = Path(background["value"])
         if not background_path.is_file():
             raise FileNotFoundError(f"Uploaded background not found: {background_path}")
+        overlay_opacity = background.get("overlay_opacity", 0.38)
         input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(background_path)]
         filters = [
             f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-            "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.38:t=fill",
         ]
+        if overlay_opacity > 0:
+            filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
         if ass_path is not None:
             filters.append(f"ass={_escape_filter_path(ass_path)}")
         video_filter = ",".join(filters)

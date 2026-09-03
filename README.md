@@ -9,7 +9,11 @@ acquisition, source separation, alignment, or transcription.
 ```bash
 uv sync --dev
 uv run karaoke SOURCE --language en
-# Correct outputs/JOB_ID/lyrics.lyricsfile.yaml in LyricsEditor.
+# (Opcional) Ajustar estilos, fuentes y previsualizar en vivo:
+uv run karaoke editor outputs/JOB_ID
+# Corregir letras si es necesario en LyricsEditor:
+# outputs/JOB_ID/lyrics.lyricsfile.yaml
+# Renderizar video final en Colab:
 uv run karaoke render outputs/JOB_ID
 ```
 
@@ -21,6 +25,20 @@ The preparation command finishes after downloading `outputs/JOB_ID`; no process 
 3. Review low-confidence words with `Alt+N` and `Alt+P`.
 4. Export **LyricsFile YAML**.
 5. Replace the job's `lyrics.lyricsfile.yaml` with the exported file.
+
+## Live Style Editor & Preview
+
+Customize typography, colors, outline, shadow, margins, and background overlay with instant zero-dependency live preview before rendering:
+
+```bash
+uv run karaoke editor outputs/JOB_ID
+```
+
+- **Live synchronized Canvas preview**: Plays local audio (`instrumental.flac` or `vocals.flac`) and animates the karaoke text wipe in real time at 60 FPS.
+- **Typography & Styling**: Choose from popular web fonts or system fonts, adjust font size, line spacing, primary color, karaoke highlight color, outline width/color, and shadow depth/opacity.
+- **Background Dimming**: Adjust overlay darkness slider for background images.
+- **Instant Persistence**: Updates `job.json` and regenerates `.ass` subtitle files immediately.
+- **Snapshot Export**: Download full-resolution PNG frames for visual QA.
 
 Run `uv run karaoke render PATH_TO_JOB` only after the corrected file is in that prepared job folder. It validates the
 folder and renders both the instrumental karaoke video and the original-audio lyrics video in one Colab session. Use

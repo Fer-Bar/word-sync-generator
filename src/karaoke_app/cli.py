@@ -69,14 +69,29 @@ def build_render_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_editor_parser() -> argparse.ArgumentParser:
+    """Build the local style editor parser."""
+    parser = argparse.ArgumentParser(
+        prog="karaoke editor",
+        description="Launch the local live style editor to customize fonts, colors, and layout before rendering.",
+    )
+    parser.add_argument("job_dir", type=Path, help="Path to prepared job directory")
+    parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open web browser automatically")
+    return parser
+
+
 def main() -> int:
-    """Run preparation or final render orchestration."""
+    """Run preparation, style editor, or final render orchestration."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
         if sys.argv[1:2] == ["render"]:
             args = build_render_parser().parse_args(sys.argv[2:])
             render_colab(args)
+        elif sys.argv[1:2] == ["editor"]:
+            args = build_editor_parser().parse_args(sys.argv[2:])
+            launch_editor(args)
         else:
             args = build_parser().parse_args()
             run_job(args)
@@ -87,6 +102,13 @@ def main() -> int:
         LOGGER.error("%s", error)
         return 1
     return 0
+
+
+def launch_editor(args: argparse.Namespace) -> None:
+    """Launch the local style editor."""
+    from karaoke_app.editor import run_editor_server
+
+    run_editor_server(args.job_dir, port=args.port, open_browser=not args.no_browser)
 
 
 def run_job(args: argparse.Namespace) -> Path:
@@ -205,7 +227,9 @@ def run_job(args: argparse.Namespace) -> Path:
                 _run([*colab, "stop", "--session", session], check=False)
 
     LOGGER.info("Artifacts saved to %s", output_dir)
-    LOGGER.info("Correct %s in LyricsEditor, replace it in this folder, then run:", "lyrics.lyricsfile.yaml")
+    LOGGER.info("To customize fonts, colors, and preview in real-time, run:")
+    LOGGER.info("uv run karaoke editor %s", output_dir)
+    LOGGER.info("To render final videos on Colab, run:")
     LOGGER.info("uv run karaoke render %s", output_dir)
     return output_dir
 
@@ -215,6 +239,7 @@ def render_colab(args: argparse.Namespace) -> Path:
     from karaoke_app.ass import generate_ass
     from karaoke_app.job_document import load_job_document, resolve_job_asset
     from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
+    from karaoke_app.style import StyleConfig
 
     _validate_installation()
     root = args.job_dir.expanduser().resolve()
@@ -223,8 +248,19 @@ def render_colab(args: argparse.Namespace) -> Path:
     lyrics = load_lyrics_file(lyrics_path, require_words=True)
     transcript = lyrics_to_transcript(lyrics)
     modes = ("karaoke", "lyrics") if args.mode == "both" else (args.mode,)
+    style_config = (
+        StyleConfig.from_dict(document.get("style"), height=document["video"]["height"])
+        if document.get("style")
+        else None
+    )
     ass_by_mode = {
-        mode: generate_ass(transcript, document["video"], scroll_long_lines=mode == "karaoke") for mode in modes
+        mode: generate_ass(
+            transcript,
+            document["video"],
+            style=style_config,
+            scroll_long_lines=mode == "karaoke",
+        )
+        for mode in modes
     }
     render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
     output_dir = root / "renders" / render_id

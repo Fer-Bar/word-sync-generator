@@ -47,11 +47,24 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     normalized_background: dict[str, Any] = {"kind": kind, "color": f"#{color.lstrip('#').upper()}"}
     if kind == "image":
         normalized_background["path"] = _relative_path(background.get("path"), "background.path")
+    if "overlay_opacity" in background:
+        try:
+            normalized_background["overlay_opacity"] = max(0.0, min(1.0, float(background["overlay_opacity"])))
+        except (ValueError, TypeError):
+            pass
 
     title = value.get("title")
     if not isinstance(title, str) or not title.strip():
         raise ValueError("job.json title is required")
-    return {
+    from karaoke_app.style import StyleConfig
+
+    style_data = value.get("style")
+    normalized_style = (
+        StyleConfig.from_dict(style_data, height=normalized_video["height"]).to_dict()
+        if isinstance(style_data, dict)
+        else None
+    )
+    result = {
         "schema_version": 1,
         "job_id": str(value.get("job_id") or ""),
         "title": title.strip(),
@@ -61,6 +74,9 @@ def validate_job_document(value: Any) -> dict[str, Any]:
         "video": normalized_video,
         "background": normalized_background,
     }
+    if normalized_style is not None:
+        result["style"] = normalized_style
+    return result
 
 
 def resolve_job_asset(job_dir: Path, relative_path: str, label: str) -> Path:

@@ -1,6 +1,8 @@
 import unicodedata
 from typing import Any
 
+from karaoke_app.style import StyleConfig
+
 MAX_LYRIC_LINES_PER_PAGE = 3
 PAGE_BREAK_SILENCE_SECONDS = 1.5
 MAX_PAGE_DURATION_SECONDS = 15.0
@@ -10,13 +12,18 @@ PAGE_FADE_MILLISECONDS = 150
 
 
 def generate_ass(
-    transcript: dict[str, Any], video: dict[str, int], *, scroll_long_lines: bool = False
+    transcript: dict[str, Any],
+    video: dict[str, int],
+    *,
+    style: StyleConfig | None = None,
+    scroll_long_lines: bool = False,
 ) -> str:
     """Generate ASS subtitles from the canonical transcript."""
     width = video["width"]
     height = video["height"]
-    font_size = 64 if height >= 1080 else 46
-    margin = 70 if height >= 1080 else 48
+    active_style = style if isinstance(style, StyleConfig) else StyleConfig.from_dict(None, height=height)
+    font_size = active_style.font_size
+    margin = active_style.margin_h
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -29,8 +36,7 @@ def generate_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
         "MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,DejaVu Sans,{font_size},&H0000D7FF,&H00FFFFFF,&H00000000,&H70000000,-1,0,0,0,"
-        f"100,100,0,0,1,4,1,5,{margin},{margin},{margin},1",
+        active_style.to_ass_style("Default"),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -53,6 +59,7 @@ def generate_ass(
                         height=height,
                         font_size=font_size,
                         margin=margin,
+                        line_gap_factor=active_style.line_gap_factor,
                     )
                 end = max(page["display_end_cs"], scheduled_end)
                 lines.append(
@@ -72,8 +79,9 @@ def _position_karaoke_line(
     height: int,
     font_size: int,
     margin: int,
+    line_gap_factor: float = 1.35,
 ) -> str:
-    line_gap = round(font_size * 1.35)
+    line_gap = round(font_size * line_gap_factor)
     y = round(height / 2 + (line_index - (line_count - 1) / 2) * line_gap)
     line_text = str(page["lines"][0]["text"])
     text_width = _estimated_text_width(line_text, font_size)
