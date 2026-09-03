@@ -25,7 +25,12 @@ The preparation command finishes after downloading `outputs/JOB_ID`; no process 
 Run `uv run karaoke render PATH_TO_JOB` only after the corrected file is in that prepared job folder. It validates the
 folder and renders both the instrumental karaoke video and the original-audio lyrics video in one Colab session. Use
 `--mode karaoke` or `--mode lyrics` only when one output is needed. Results are downloaded under
-`JOB_DIR/renders/<timestamp>-<mode>/` with their generated ASS files.
+`JOB_DIR/renders/<timestamp>-<mode>/`:
+- **Karaoke mode**: `{title}_karaoke.mp4` has clean background video without burned text, paired with
+  `{title}_karaoke.ass` in the same directory. Long lines scroll horizontally during their sung interval while short
+  lines remain centered.
+- **Lyrics mode**: `{title}_lyrics.mp4` has static, wrapped subtitles burned in, with the raw subtitle file saved under
+  `subtitles/{title}_lyrics.ass` to prevent media players from double-rendering subtitles.
 
 ## Lyrics strategy
 
@@ -35,12 +40,22 @@ Preparation selects the first usable source in this order:
 2. LRCLIB line-synced or plain lyrics aligned to the separated vocal stem with CTC forced alignment.
 3. Faster Whisper transcription with word timestamps when LRCLIB has no safe match or alignment fails.
 
-Automatic LRCLIB matches consider track title, artist, and duration. Use `--lrclib-id ID` to select a known record,
+Automatic LRCLIB matches evaluate track title, artist variants, duration, and song editions (such as Acoustic or Live)
+through progressive discovery tiers (exact metadata, without album, primary artist, and structured search) while
+strictly validating candidates to prevent mismatches. Use `--lrclib-id ID` to select a known record,
 or `--no-lrclib` to force Faster Whisper. Local files and noisy video metadata can be corrected with `--title`,
 `--artist`, and `--album`.
 
 The CTC path pins `ctc-forced-aligner` and `MahmoudAshraf/mms-300m-1130-forced-aligner`. The package metadata and
-model use **CC-BY-NC-4.0**, so this configuration is for non-commercial use only.
+model use **CC-BY-NC-4.0**, so this configuration is for non-commercial use only. Numeric tokens are aligned through
+their spoken form and mapped back to the original text, so values such as `9:30` remain one editable LyricsFile word.
+CTC leaves a free alignment segment between lyric units so pauses remain timing gaps instead of extending the previous
+word.
+
+Parenthesized spans are preserved as background vocals. Generated CTC lyrics use the neutral `v1` agent, add
+`isBackground: true` to words inside parentheses, and keep the parentheses in the line text. Existing `agent` and
+`isBackground` values from LRCLIB LyricsFile records are preserved; the pipeline does not attempt to identify singers
+from plain lyrics.
 
 ## Prepared job
 
@@ -55,8 +70,9 @@ model use **CC-BY-NC-4.0**, so this configuration is for non-commercial use only
 | `background.*` | Copied background image when one was supplied. |
 
 LyricsFile import accepts omitted `end_ms` values when the next word or line provides an unambiguous boundary.
-Rendering is stricter: non-empty lines require words, positive durations, ordered timings, no main-track overlaps,
-and confidence values between `0` and `1`.
+Rendering is stricter: non-empty lines require words, positive durations, ordered timings within each vocal channel,
+and confidence values between `0` and `1`. Timings may overlap across agents or between main and background vocals.
+Explicit gaps between `end_ms` and the next `start_ms` remain silent in the karaoke effect.
 
 ## Preparation options
 
@@ -123,8 +139,8 @@ pre-1.0 kernel client API.
 ## Limits
 
 - LyricsEditor is external and browser-sandboxed; exported YAML must be moved back into the prepared job manually.
-- The supported render contract is one sequential main lyric track. Duets, overlapping background vocals,
-  translations, and romanization are out of scope.
+- Agents and overlapping background vocals are supported, but automatic singer identification, translations, and
+  romanization are out of scope.
 - LRCLIB matching can fail for incomplete or noisy source metadata; use `--lrclib-id` when exact selection matters.
 - Music audio and lyrics may receive Content ID claims, regional blocks, or takedown requests.
 - Colab transfer size and concurrent runtime limits depend on the account.
