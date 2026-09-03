@@ -1,3 +1,4 @@
+import unicodedata
 from typing import Any
 
 MAX_LYRIC_LINES_PER_PAGE = 3
@@ -8,17 +9,20 @@ PAGE_TAIL_SECONDS = 0.35
 PAGE_FADE_MILLISECONDS = 150
 
 
-def generate_ass(transcript: dict[str, Any], video: dict[str, int]) -> str:
+def generate_ass(
+    transcript: dict[str, Any], video: dict[str, int], *, scroll_long_lines: bool = False
+) -> str:
     """Generate ASS subtitles from the canonical transcript."""
+    width = video["width"]
     height = video["height"]
     font_size = 64 if height >= 1080 else 46
     margin = 70 if height >= 1080 else 48
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
-        f"PlayResX: {video['width']}",
+        f"PlayResX: {width}",
         f"PlayResY: {height}",
-        "WrapStyle: 2",
+        "WrapStyle: 1",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -32,12 +36,80 @@ def generate_ass(transcript: dict[str, Any], video: dict[str, int]) -> str:
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     for page in _build_pages(transcript["segments"]):
-        text, scheduled_end = _render_page_text(page)
-        end = max(page["display_end_cs"], scheduled_end)
-        lines.append(
-            f"Dialogue: 0,{_ass_timestamp(page['display_start_cs'])},{_ass_timestamp(end)},Default,,0,0,0,,{text}"
-        )
+        for channel, lane_page in _page_lanes(page):
+            agent, is_background = channel
+            name = f"{agent}-bg" if is_background and agent else "background" if is_background else agent
+            lane_lines = lane_page["lines"] if scroll_long_lines else [None]
+            for line_index, line in enumerate(lane_lines):
+                event_page = {**lane_page, "lines": [line]} if line is not None else lane_page
+                text, scheduled_end = _render_page_text(event_page)
+                if line is not None:
+                    text = _position_karaoke_line(
+                        event_page,
+                        text,
+                        line_index=line_index,
+                        line_count=len(lane_lines),
+                        width=width,
+                        height=height,
+                        font_size=font_size,
+                        margin=margin,
+                    )
+                end = max(page["display_end_cs"], scheduled_end)
+                lines.append(
+                    f"Dialogue: 0,{_ass_timestamp(page['display_start_cs'])},{_ass_timestamp(end)},"
+                    f"Default,{_escape_ass_field(name)},0,0,0,,{text}"
+                )
     return "\n".join(lines) + "\n"
+
+
+def _position_karaoke_line(
+    page: dict[str, Any],
+    text: str,
+    *,
+    line_index: int,
+    line_count: int,
+    width: int,
+    height: int,
+    font_size: int,
+    margin: int,
+) -> str:
+    line_gap = round(font_size * 1.35)
+    y = round(height / 2 + (line_index - (line_count - 1) / 2) * line_gap)
+    line_text = str(page["lines"][0]["text"])
+    text_width = _estimated_text_width(line_text, font_size)
+    available_width = width - 2 * margin
+    if text_width <= available_width:
+        return f"{{\\an5\\pos({width // 2},{y})}}{text}"
+
+    words = _page_words(page)
+    starts, durations, _ = _schedule_words(words, page["display_start_cs"])
+    move_start_cs = max(0, starts[0] - page["display_start_cs"])
+    move_end_cs = max(move_start_cs + 1, starts[-1] + durations[-1] - page["display_start_cs"])
+    move_start_ms = move_start_cs * 10
+    move_end_ms = move_end_cs * 10
+    end_x = width - margin - text_width
+    return (
+        f"{{\\an4\\q2\\clip({margin},0,{width - margin},{height})"
+        f"\\move({margin},{y},{end_x},{y},{move_start_ms},{move_end_ms})}}{text}"
+    )
+
+
+def _estimated_text_width(value: str, font_size: int) -> int:
+    units = 0.0
+    for character in value:
+        if character.isspace():
+            units += 0.35
+        elif unicodedata.east_asian_width(character) in {"F", "W"}:
+            units += 1.0
+        elif character in "MW@#%&":
+            units += 0.9
+        elif character.isupper():
+            units += 0.7
+        elif character in "ilI.,'`:;!|":
+            units += 0.3
+        else:
+            units += 0.58
+    return round(units * font_size * 1.08)
 
 
 def _build_pages(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -105,8 +177,10 @@ def _build_pages(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _scheduled_end(words: list[dict[str, Any]], event_start: int) -> int:
-    _, _, end = _schedule_words(words, event_start)
-    return end
+    lanes: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+    for word in words:
+        lanes.setdefault(_word_channel(word), []).append(word)
+    return max(_schedule_words(lane_words, event_start)[2] for lane_words in lanes.values())
 
 
 def _render_page_text(page: dict[str, Any]) -> tuple[str, int]:
@@ -140,17 +214,40 @@ def _page_words(page: dict[str, Any]) -> list[dict[str, Any]]:
     return [word for line in page["lines"] for word in line["words"]]
 
 
+def _page_lanes(page: dict[str, Any]) -> list[tuple[tuple[str, bool], dict[str, Any]]]:
+    lane_lines: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+    for line in page["lines"]:
+        words_by_lane: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+        for word in line["words"]:
+            words_by_lane.setdefault(_word_channel(word), []).append(word)
+        for channel, source_words in words_by_lane.items():
+            words = [dict(word) for word in source_words]
+            if channel[1]:
+                if not str(words[0]["text"]).lstrip().startswith("("):
+                    words[0]["text"] = f"({words[0]['text']}"
+                if not str(words[-1]["text"]).rstrip().endswith(")"):
+                    words[-1]["text"] = f"{words[-1]['text'].rstrip()})"
+            lane_lines.setdefault(channel, []).append(
+                {**line, "text": "".join(word["text"] for word in words).strip(), "words": words}
+            )
+    return [(channel, {**page, "lines": lines}) for channel, lines in lane_lines.items()]
+
+
+def _word_channel(word: dict[str, Any]) -> tuple[str, bool]:
+    return str(word.get("agent") or ""), bool(word.get("isBackground", False))
+
+
 def _schedule_words(words: list[dict[str, Any]], event_start: int) -> tuple[list[int], list[int], int]:
     starts: list[int] = []
+    durations: list[int] = []
+    cursor = event_start
     for word in words:
-        previous_word = words[len(starts) - 1] if starts else None
-        minimum_start = starts[-1] + _minimum_word_duration(previous_word) if previous_word else event_start
-        starts.append(max(minimum_start, _to_centiseconds(word["start"])))
-
-    source_end = max(_to_centiseconds(word["end"]) for word in words)
-    end = max(starts[-1] + _minimum_word_duration(words[-1]), source_end)
-    durations = [next_start - start for start, next_start in zip(starts, [*starts[1:], end], strict=True)]
-    return starts, durations, end
+        start = max(cursor, _to_centiseconds(word["start"]))
+        end = max(start + _minimum_word_duration(word), _to_centiseconds(word["end"]))
+        starts.append(start)
+        durations.append(end - start)
+        cursor = end
+    return starts, durations, cursor
 
 
 def _minimum_word_duration(word: dict[str, Any]) -> int:
@@ -195,3 +292,7 @@ def _ass_timestamp(centiseconds: int) -> str:
 
 def _escape_ass_text(value: str) -> str:
     return value.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def _escape_ass_field(value: str) -> str:
+    return value.replace(",", " ").replace("\r", " ").replace("\n", " ")

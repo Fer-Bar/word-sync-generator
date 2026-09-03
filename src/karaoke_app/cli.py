@@ -221,7 +221,11 @@ def render_colab(args: argparse.Namespace) -> Path:
     document = load_job_document(root)
     lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
     lyrics = load_lyrics_file(lyrics_path, require_words=True)
-    ass_content = generate_ass(lyrics_to_transcript(lyrics), document["video"])
+    transcript = lyrics_to_transcript(lyrics)
+    modes = ("karaoke", "lyrics") if args.mode == "both" else (args.mode,)
+    ass_by_mode = {
+        mode: generate_ass(transcript, document["video"], scroll_long_lines=mode == "karaoke") for mode in modes
+    }
     render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
     output_dir = root / "renders" / render_id
     session = f"render-{uuid.uuid4().hex[:10]}"
@@ -233,7 +237,7 @@ def render_colab(args: argparse.Namespace) -> Path:
         config_path = temporary / "job.json"
         archive_path = temporary / "result.zip"
         status_path = temporary / "status.json"
-        _create_render_bundle(root, document, args.mode, ass_content, bundle_path)
+        _create_render_bundle(root, document, args.mode, ass_by_mode, bundle_path)
         config_path.write_text(
             json.dumps(
                 {
@@ -280,7 +284,11 @@ def render_colab(args: argparse.Namespace) -> Path:
 
 
 def _create_render_bundle(
-    job_dir: Path, document: dict[str, object], mode: str, ass_content: str, destination: Path
+    job_dir: Path,
+    document: dict[str, object],
+    mode: str,
+    ass_by_mode: dict[str, str],
+    destination: Path,
 ) -> None:
     from karaoke_app.job_document import resolve_job_asset
 
@@ -295,7 +303,8 @@ def _create_render_bundle(
         required.add(str(background["path"]))
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
         archive.writestr("job.json", json.dumps(document, ensure_ascii=False, indent=2) + "\n")
-        archive.writestr("lyrics.ass", ass_content)
+        for item in modes:
+            archive.writestr(f"{item}.ass", ass_by_mode[item])
         for relative_path in sorted(required):
             path = resolve_job_asset(job_dir, relative_path, relative_path)
             archive.write(path, relative_path)
