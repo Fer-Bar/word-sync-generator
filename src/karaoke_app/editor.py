@@ -6,14 +6,14 @@ import threading
 import urllib.parse
 import webbrowser
 from http import HTTPStatus
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 from karaoke_app.ass import generate_ass
 from karaoke_app.job_document import load_job_document, resolve_job_asset
 from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
-from karaoke_app.style import StyleConfig
+from karaoke_app.style import RECOMMENDED_PALETTES, StyleConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ CURATED_FONTS = [
 
 
 class KaraokeEditorHandler(SimpleHTTPRequestHandler):
-    """Zero-dependency HTTP handler for the local karaoke style editor."""
+    """Zero-dependency multithreaded HTTP handler for the local karaoke style editor."""
 
     job_dir: Path
     document: dict[str, Any]
@@ -68,34 +68,53 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
     def _serve_index(self) -> None:
-        content = HTML_PAGE.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(content)
+        try:
+            content = HTML_PAGE.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _serve_api_state(self) -> None:
-        # Reload document from disk to ensure fresh state
         try:
-            self.document = load_job_document(self.job_dir)
-        except Exception as error:
-            LOGGER.warning("Could not reload job.json: %s", error)
+            # Reload document from disk to ensure fresh state
+            try:
+                self.document = load_job_document(self.job_dir)
+            except Exception as error:
+                LOGGER.warning("Could not reload job.json: %s", error)
 
-        state = {
-            "title": self.document.get("title", ""),
-            "job": self.document,
-            "transcript": self.transcript,
-            "available_fonts": CURATED_FONTS,
-        }
-        content = json.dumps(state, ensure_ascii=False).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(content)
+            detected_agents: list[str] = []
+            for segment in self.transcript.get("segments", []):
+                for word in segment.get("words", []):
+                    agent = word.get("agent") or segment.get("agent")
+                    if agent and isinstance(agent, str) and agent.strip() and agent.strip() not in detected_agents:
+                        detected_agents.append(agent.strip())
+                if not segment.get("words"):
+                    agent = segment.get("agent")
+                    if agent and isinstance(agent, str) and agent.strip() and agent.strip() not in detected_agents:
+                        detected_agents.append(agent.strip())
+
+            state = {
+                "title": self.document.get("title", ""),
+                "job": self.document,
+                "transcript": self.transcript,
+                "available_fonts": CURATED_FONTS,
+                "detected_agents": detected_agents,
+                "recommended_palettes": RECOMMENDED_PALETTES,
+            }
+            content = json.dumps(state, ensure_ascii=False).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _serve_media_asset(self, raw_path: str) -> None:
         decoded = urllib.parse.unquote(raw_path)
@@ -112,8 +131,8 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
         file_size = asset_path.stat().st_size
         range_header = self.headers.get("Range")
 
-        if range_header and range_header.startswith("bytes="):
-            try:
+        try:
+            if range_header and range_header.startswith("bytes="):
                 byte_range = range_header.removeprefix("bytes=").split("-")
                 start = int(byte_range[0]) if byte_range[0] else 0
                 end = int(byte_range[1]) if byte_range[1] else file_size - 1
@@ -130,20 +149,27 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
 
                 with asset_path.open("rb") as f:
                     f.seek(start)
-                    self.wfile.write(f.read(length))
+                    remaining = length
+                    while remaining > 0:
+                        chunk_size = min(65536, remaining)
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
                 return
-            except Exception:
-                pass
 
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", mime_type)
-        self.send_header("Content-Length", str(file_size))
-        self.send_header("Accept-Ranges", "bytes")
-        self.end_headers()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
 
-        with asset_path.open("rb") as f:
-            while chunk := f.read(65536):
-                self.wfile.write(chunk)
+            with asset_path.open("rb") as f:
+                while chunk := f.read(65536):
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _handle_api_save(self) -> None:
         content_length = int(self.headers.get("Content-Length", 0))
@@ -177,7 +203,7 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
                     self.transcript,
                     self.document["video"],
                     style=style_config,
-                    scroll_long_lines=mode == "karaoke",
+                    mode=mode,
                 )
                 (self.job_dir / f"{mode}.ass").write_text(ass_content, encoding="utf-8")
 
@@ -227,7 +253,8 @@ def run_editor_server(job_dir: Path, port: int = 8765, open_browser: bool = True
     CustomHandler.document = document
     CustomHandler.transcript = transcript
 
-    server = HTTPServer(("127.0.0.1", port), CustomHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), CustomHandler)
+    server.daemon_threads = True
     url = f"http://localhost:{port}/"
 
     print("\n=======================================================")
@@ -386,9 +413,60 @@ HTML_PAGE = """<!DOCTYPE html>
     button.btn-primary:hover {
       background: var(--accent-hover);
     }
+    button.btn-swap {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+    button.btn-swap:hover {
+      background: var(--border);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .palette-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin: 4px 0 6px 0;
+    }
+    .palette-chip {
+      display: flex;
+      align-items: center;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2px 7px;
+      cursor: pointer;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      gap: 4px;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .palette-chip:hover {
+      border-color: var(--accent);
+      color: #fff;
+      background: var(--border);
+    }
+    .chip-swatch {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.25);
+      display: inline-block;
+    }
     /* Sidebar */
     .sidebar {
-      width: 380px;
+      width: 390px;
       background: var(--bg-panel);
       border-left: 1px solid var(--border);
       height: 100vh;
@@ -596,9 +674,14 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Paleta de Colores -->
+      <!-- Paleta de Colores Global -->
       <div class="control-group">
-        <div class="group-title">Colores de Letra</div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="group-title">Colores de Letra (Por Defecto)</div>
+          <button type="button" class="btn-swap" id="btn-swap-global"
+                  title="Intercambiar color de texto y resalte">⇄ Invertir</button>
+        </div>
+        <div class="palette-chips" id="global-palette-chips"></div>
         <div class="form-row">
           <label>Texto Normal</label>
           <div class="color-input-wrap">
@@ -613,6 +696,12 @@ HTML_PAGE = """<!DOCTYPE html>
             <input type="text" class="color-hex" id="hex-highlight" value="#FFFFFF" maxlength="7">
           </div>
         </div>
+      </div>
+
+      <!-- Colores por Cantante / Agente -->
+      <div class="control-group" id="agents-control-group" style="display: none;">
+        <div class="group-title">Cantantes & Voces</div>
+        <div id="agents-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
       </div>
 
       <!-- Contorno y Sombra -->
@@ -659,16 +748,24 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="control-group">
         <div class="group-title">Fondo y Márgenes</div>
         <div class="form-row">
+          <label for="alignment">Alineación / Posición</label>
+          <select id="alignment" style="width: 175px;">
+            <option value="2">Inferior (Karaoke Estándar)</option>
+            <option value="5" selected>Centro (Pantalla Completa)</option>
+            <option value="8">Superior (Arriba)</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label for="margin-h">Margen Lateral</label>
           <div class="range-wrap">
-            <input type="range" id="margin-h" min="20" max="250" value="70">
+            <input type="range" id="margin-h" min="20" max="300" value="70">
             <span class="val-badge" id="val-margin-h">70px</span>
           </div>
         </div>
         <div class="form-row">
           <label for="margin-v">Margen Vertical</label>
           <div class="range-wrap">
-            <input type="range" id="margin-v" min="20" max="250" value="70">
+            <input type="range" id="margin-v" min="20" max="300" value="70">
             <span class="val-badge" id="val-margin-v">70px</span>
           </div>
         </div>
@@ -706,6 +803,88 @@ HTML_PAGE = """<!DOCTYPE html>
     const btnPlay = document.getElementById('btn-play');
     const toast = document.getElementById('toast');
 
+    const DEFAULT_PALETTES = [
+      { name: 'Oro & Blanco', primary: '#FFD700', highlight: '#FFFFFF' },
+      { name: 'Cyber Cyan', primary: '#64748B', highlight: '#00E5FF' },
+      { name: 'Pop Magenta', primary: '#F1F5F9', highlight: '#FF2E93' },
+      { name: 'Emerald Glow', primary: '#CBD5E1', highlight: '#10B981' },
+      { name: 'Sunset Coral', primary: '#FDE047', highlight: '#FF5722' },
+      { name: 'Ultra Violet', primary: '#E0E7FF', highlight: '#A855F7' },
+      { name: 'Amarillo Neón', primary: '#94A3B8', highlight: '#FFE600' },
+      { name: 'Alto Contraste', primary: '#6B7280', highlight: '#FFFFFF' },
+    ];
+
+    function renderPaletteChips(containerId, onSelect) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.innerHTML = '';
+      const list = state?.recommended_palettes || DEFAULT_PALETTES;
+      list.forEach(p => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'palette-chip';
+        btn.title = `${p.name}: Normal ${p.primary} / Resalte ${p.highlight}`;
+        btn.innerHTML = `
+          <span class="chip-swatch" style="background:${p.primary}"></span>
+          <span class="chip-swatch" style="background:${p.highlight}"></span>
+          <span>${p.name}</span>
+        `;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          onSelect(p.primary, p.highlight);
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function swapGlobalColors() {
+      const pCol = document.getElementById('col-primary');
+      const pHex = document.getElementById('hex-primary');
+      const hCol = document.getElementById('col-highlight');
+      const hHex = document.getElementById('hex-highlight');
+      const temp = pCol.value;
+      pCol.value = hCol.value;
+      pHex.value = hCol.value.toUpperCase();
+      hCol.value = temp;
+      hHex.value = temp.toUpperCase();
+      renderFrame();
+    }
+
+    function swapAgentColors(agent) {
+      const pCol = document.getElementById(`col-agent-${agent}-primary`);
+      const pHex = document.getElementById(`hex-agent-${agent}-primary`);
+      const hCol = document.getElementById(`col-agent-${agent}-highlight`);
+      const hHex = document.getElementById(`hex-agent-${agent}-highlight`);
+      const dot = document.getElementById(`dot-agent-${agent}`);
+      if (pCol && hCol) {
+        const temp = pCol.value;
+        pCol.value = hCol.value;
+        pHex.value = hCol.value.toUpperCase();
+        hCol.value = temp;
+        hHex.value = temp.toUpperCase();
+        if (dot) dot.style.background = pCol.value;
+        renderFrame();
+      }
+    }
+
+    function syncAgentColor(agent, primary, highlight) {
+      const pCol = document.getElementById(`col-agent-${agent}-primary`);
+      const pHex = document.getElementById(`hex-agent-${agent}-primary`);
+      const hCol = document.getElementById(`col-agent-${agent}-highlight`);
+      const hHex = document.getElementById(`hex-agent-${agent}-highlight`);
+      const dot = document.getElementById(`dot-agent-${agent}`);
+      if (pCol && pHex) {
+        pCol.value = primary;
+        pHex.value = primary.toUpperCase();
+      }
+      if (hCol && hHex) {
+        hCol.value = highlight;
+        hHex.value = highlight.toUpperCase();
+      }
+      if (dot) dot.style.background = primary;
+      renderFrame();
+    }
+
     // Load initial state from server
     async function init() {
       const res = await fetch('/api/state');
@@ -734,6 +913,10 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('font-bold').checked = style.bold !== undefined ? style.bold : true;
       document.getElementById('font-italic').checked = !!style.italic;
       if (style.line_gap_factor) setInputVal('line-gap', style.line_gap_factor, 'x');
+      if (style.alignment !== undefined) {
+        const alignEl = document.getElementById('alignment');
+        if (alignEl) alignEl.value = String(style.alignment);
+      }
       
       syncColor('primary', style.primary_color || '#FFD700');
       syncColor('highlight', style.highlight_color || '#FFFFFF');
@@ -744,6 +927,108 @@ HTML_PAGE = """<!DOCTYPE html>
       if (style.shadow_opacity !== undefined) setInputVal('shadow-opacity', style.shadow_opacity, '%', true);
       if (style.margin_h !== undefined) setInputVal('margin-h', style.margin_h, 'px');
       if (style.margin_v !== undefined) setInputVal('margin-v', style.margin_v, 'px');
+
+      // Global palette chips & swap
+      renderPaletteChips('global-palette-chips', (p, h) => {
+        syncColor('primary', p);
+        syncColor('highlight', h);
+        renderFrame();
+      });
+      document.getElementById('btn-swap-global').addEventListener('click', swapGlobalColors);
+
+      // Populate agent color pickers
+      const detectedAgents = state.detected_agents || [];
+      const agentGroup = document.getElementById('agents-control-group');
+      const agentsList = document.getElementById('agents-list');
+      agentsList.innerHTML = '';
+      const currentAgentColors = (state.job.style && state.job.style.agent_colors) || {};
+      const paletteList = state.recommended_palettes || DEFAULT_PALETTES;
+
+      if (detectedAgents.length > 0) {
+        agentGroup.style.display = 'flex';
+        detectedAgents.forEach((agent, idx) => {
+          const fallback = paletteList[idx % paletteList.length];
+          const existing = currentAgentColors[agent] || {};
+          const primary = existing.primary_color || fallback.primary;
+          const highlight = existing.highlight_color || fallback.highlight;
+
+          const row = document.createElement('div');
+          row.className = 'agent-config-item';
+          row.style.background = 'var(--bg-dark)';
+          row.style.padding = '10px';
+          row.style.borderRadius = '6px';
+          row.style.border = '1px solid var(--border)';
+          row.style.display = 'flex';
+          row.style.flexDirection = 'column';
+          row.style.gap = '8px';
+          row.innerHTML = `
+            <div style="font-weight: 700; font-size: 0.85rem; color: #fff; `
+              + `display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="width: 12px; height: 12px; border-radius: 50%; background: ${primary}; `
+                  + `display: inline-block; border: 1px solid rgba(255,255,255,0.3);" id="dot-agent-${agent}"></span>
+                Cantante: <span style="color: var(--accent);">${agent}</span>
+              </div>
+              <button type="button" class="btn-swap" id="btn-swap-agent-${agent}" `
+                + `title="Invertir texto y resalte">⇄ Invertir</button>
+            </div>
+            <div class="palette-chips" id="agent-palette-chips-${agent}"></div>
+            <div class="form-row">
+              <label>Color Normal</label>
+              <div class="color-input-wrap">
+                <input type="color" id="col-agent-${agent}-primary" value="${primary}">
+                <input type="text" class="color-hex" id="hex-agent-${agent}-primary" value="${primary}" maxlength="7">
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Color Resalte</label>
+              <div class="color-input-wrap">
+                <input type="color" id="col-agent-${agent}-highlight" value="${highlight}">
+                <input type="text" class="color-hex" id="hex-agent-${agent}-highlight" `
+                  + `value="${highlight}" maxlength="7">
+              </div>
+            </div>
+          `;
+          agentsList.appendChild(row);
+
+          renderPaletteChips(`agent-palette-chips-${agent}`, (p, h) => {
+            syncAgentColor(agent, p, h);
+          });
+
+          document.getElementById(`btn-swap-agent-${agent}`).addEventListener('click', () => {
+            swapAgentColors(agent);
+          });
+
+          const pCol = document.getElementById(`col-agent-${agent}-primary`);
+          const pHex = document.getElementById(`hex-agent-${agent}-primary`);
+          const dot = document.getElementById(`dot-agent-${agent}`);
+          pCol.addEventListener('input', () => {
+            pHex.value = pCol.value.toUpperCase();
+            dot.style.background = pCol.value;
+            renderFrame();
+          });
+          pHex.addEventListener('input', () => {
+            if (/^#[0-9A-Fa-f]{6}$/.test(pHex.value)) {
+              pCol.value = pHex.value;
+              dot.style.background = pHex.value;
+              renderFrame();
+            }
+          });
+
+          const hCol = document.getElementById(`col-agent-${agent}-highlight`);
+          const hHex = document.getElementById(`hex-agent-${agent}-highlight`);
+          hCol.addEventListener('input', () => {
+            hHex.value = hCol.value.toUpperCase();
+            renderFrame();
+          });
+          hHex.addEventListener('input', () => {
+            if (/^#[0-9A-Fa-f]{6}$/.test(hHex.value)) {
+              hCol.value = hHex.value;
+              renderFrame();
+            }
+          });
+        });
+      }
 
       const bg = state.job.background || {};
       const overlayVal = bg.overlay_opacity !== undefined ? bg.overlay_opacity : (style.overlay_opacity || 0.38);
@@ -781,13 +1066,31 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function updateAudioSource() {
+      const previousTime = audio.currentTime || 0;
+      const wasPlaying = !audio.paused;
       const type = document.getElementById('audio-source-select').value;
-      const media = state.job.media || {};
+      const media = state?.job?.media || {};
       let filename = media.instrumental_audio;
       if (type === 'vocals') filename = media.vocals_audio;
       if (type === 'original') filename = media.original_audio;
       if (filename) {
-        audio.src = `/media/${encodeURIComponent(filename)}`;
+        const newSrc = `/media/${encodeURIComponent(filename)}`;
+        if (!audio.src.endsWith(encodeURIComponent(filename))) {
+          audio.src = newSrc;
+          const onMetadata = () => {
+            audio.removeEventListener('loadedmetadata', onMetadata);
+            if (previousTime > 0 && isFinite(audio.duration) && previousTime <= audio.duration) {
+              audio.currentTime = previousTime;
+              timeline.value = (audio.currentTime / audio.duration) * 100;
+              timeDisplay.textContent = `${fmtTime(audio.currentTime)} / ${fmtTime(audio.duration)}`;
+            }
+            if (wasPlaying) {
+              audio.play().catch(() => {});
+            }
+            renderFrame();
+          };
+          audio.addEventListener('loadedmetadata', onMetadata, { once: true });
+        }
       }
     }
 
@@ -833,8 +1136,9 @@ HTML_PAGE = """<!DOCTYPE html>
         });
       });
 
-      ['font-family', 'font-bold', 'font-italic'].forEach(id => {
-        document.getElementById(id).addEventListener('change', renderFrame);
+      ['font-family', 'font-bold', 'font-italic', 'alignment'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', renderFrame);
       });
 
       ['primary', 'highlight', 'outline', 'shadow', 'bg'].forEach(id => {
@@ -858,6 +1162,19 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function getActiveStyle() {
+      const agentColors = {};
+      const detectedAgents = state?.detected_agents || [];
+      detectedAgents.forEach(agent => {
+        const pEl = document.getElementById(`col-agent-${agent}-primary`);
+        const hEl = document.getElementById(`col-agent-${agent}-highlight`);
+        if (pEl && hEl) {
+          agentColors[agent] = {
+            primary_color: pEl.value,
+            highlight_color: hEl.value,
+          };
+        }
+      });
+
       return {
         font_family: document.getElementById('font-family').value,
         font_size: parseInt(document.getElementById('font-size').value, 10),
@@ -871,8 +1188,10 @@ HTML_PAGE = """<!DOCTYPE html>
         shadow_color: document.getElementById('col-shadow').value,
         shadow_depth: parseInt(document.getElementById('shadow-depth').value, 10),
         shadow_opacity: parseFloat(document.getElementById('shadow-opacity').value),
+        alignment: parseInt(document.getElementById('alignment').value, 10) || 5,
         margin_h: parseInt(document.getElementById('margin-h').value, 10),
         margin_v: parseInt(document.getElementById('margin-v').value, 10),
+        agent_colors: agentColors,
       };
     }
 
@@ -908,38 +1227,98 @@ HTML_PAGE = """<!DOCTYPE html>
         ctx.fillRect(0, 0, W, H);
       }
 
-      // 2. Find active page / lyric lines for currentTime
+      // 2. Teleprompter segments for currentTime
       const currentTime = audio.currentTime || 0;
       const segments = state?.transcript?.segments || [];
-      const activeSeg = segments.find(
+      const detectedAgents = state?.detected_agents || [];
+
+      if (segments.length === 0) return;
+
+      // Find primary active segment
+      let activeIdx = segments.findIndex(
         s => currentTime >= s.start - 0.35 && currentTime <= s.end + 0.35
-      ) || segments[0];
+      );
+      if (activeIdx === -1) {
+        activeIdx = segments.findIndex(s => s.start > currentTime);
+        if (activeIdx === -1) activeIdx = segments.length - 1;
+      }
 
-      if (!activeSeg) return;
+      const slotOffset = Math.max(Math.round(style.font_size * style.line_gap_factor * 1.5), Math.round(H * 0.14));
 
-      // Split lines if long or multiple
-      const lines = [activeSeg];
-      const fontPrefix = `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}`;
-      const fontStr = `${fontPrefix}${style.font_size}px "${style.font_family}", sans-serif`;
-      ctx.font = fontStr;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      // Determine items to draw: past (-1), active (0), upcoming (+1)
+      const renderSlots = [];
+      if (activeIdx > 0) renderSlots.push({ seg: segments[activeIdx - 1], slot: -1 });
+      renderSlots.push({ seg: segments[activeIdx], slot: 0 });
+      if (activeIdx + 1 < segments.length) renderSlots.push({ seg: segments[activeIdx + 1], slot: 1 });
 
-      const lineGap = Math.round(style.font_size * style.line_gap_factor);
-      const startY = Math.round(H / 2);
+      // Compute startY based on alignment and margin_v
+      let startY;
+      if (style.alignment === 2) {
+        // Bottom alignment (Karaoke Standard)
+        const bottomOffset = renderSlots.length > 1 && renderSlots[renderSlots.length - 1].slot === 1 ? slotOffset : 0;
+        startY = H - style.margin_v - bottomOffset - Math.round(style.font_size * 0.6);
+      } else if (style.alignment === 8) {
+        // Top alignment
+        const topOffset = renderSlots.length > 1 && renderSlots[0].slot === -1 ? slotOffset : 0;
+        startY = style.margin_v + topOffset + Math.round(style.font_size * 0.6);
+      } else {
+        // Center alignment
+        startY = Math.round(H / 2);
+      }
 
-      lines.forEach((seg, idx) => {
-        const y = startY + (idx - (lines.length - 1) / 2) * lineGap;
-        const fullText = seg.text || '';
-        const words = seg.words || [{ start: seg.start, end: seg.end, text: fullText }];
-        
-        // Measure word widths to compute exact karaoke progress
+      const maxAllowedWidth = Math.max(200, W - (style.margin_h * 2));
+      const paletteList = state?.recommended_palettes || DEFAULT_PALETTES;
+
+      renderSlots.forEach(({ seg, slot }) => {
+        const isBg = !!seg.isBackground;
+        const segAgent = seg.agent || '';
+        let pCol = style.primary_color;
+        let hCol = style.highlight_color;
+
+        if (segAgent && style.agent_colors && style.agent_colors[segAgent]) {
+          pCol = style.agent_colors[segAgent].primary_color || pCol;
+          hCol = style.agent_colors[segAgent].highlight_color || hCol;
+        } else if (segAgent) {
+          const aIdx = detectedAgents.indexOf(segAgent);
+          const fb = paletteList[(aIdx >= 0 ? aIdx : 0) % paletteList.length];
+          pCol = fb.primary;
+          hCol = fb.highlight;
+        }
+
+        let segFontSize = isBg ? Math.round(style.font_size * 0.85) : style.font_size;
+        const fontPrefix = `${(style.italic || isBg) ? 'italic ' : ''}${style.bold ? 'bold ' : ''}`;
+        let fontStr = `${fontPrefix}${segFontSize}px "${style.font_family}", sans-serif`;
+        ctx.font = fontStr;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        const y = startY + slot * slotOffset;
+        let fullText = seg.text || '';
+        if (isBg) {
+          if (!fullText.startsWith('(')) fullText = `(${fullText}`;
+          if (!fullText.endsWith(')')) fullText = `${fullText})`;
+        }
+
+        // Fit text width within horizontal margins
         let totalLineWidth = ctx.measureText(fullText).width;
+        if (totalLineWidth > maxAllowedWidth && totalLineWidth > 0) {
+          const scale = maxAllowedWidth / totalLineWidth;
+          segFontSize = Math.max(16, Math.round(segFontSize * scale));
+          fontStr = `${fontPrefix}${segFontSize}px "${style.font_family}", sans-serif`;
+          ctx.font = fontStr;
+          totalLineWidth = ctx.measureText(fullText).width;
+        }
+
+        const words = seg.words || [{ start: seg.start, end: seg.end, text: fullText }];
         let currentX = (W / 2) - (totalLineWidth / 2);
+
+        ctx.save();
+        if (slot !== 0) {
+          ctx.globalAlpha = 0.45;
+        }
 
         // Draw shadow
         if (style.shadow_depth > 0) {
-          ctx.save();
           ctx.shadowColor = `rgba(0, 0, 0, ${style.shadow_opacity})`;
           ctx.shadowOffsetX = style.shadow_depth * 2;
           ctx.shadowOffsetY = style.shadow_depth * 2;
@@ -952,6 +1331,13 @@ HTML_PAGE = """<!DOCTYPE html>
           const wordWidth = ctx.measureText(wordText).width;
           const wordCenterX = currentX + (wordWidth / 2);
 
+          let wordPCol = pCol;
+          let wordHCol = hCol;
+          if (word.agent && style.agent_colors && style.agent_colors[word.agent]) {
+            wordPCol = style.agent_colors[word.agent].primary_color || wordPCol;
+            wordHCol = style.agent_colors[word.agent].highlight_color || wordHCol;
+          }
+
           // Base outline
           if (style.outline_width > 0) {
             ctx.strokeStyle = style.outline_color;
@@ -961,30 +1347,28 @@ HTML_PAGE = """<!DOCTYPE html>
           }
 
           // Inactive base color
-          ctx.fillStyle = style.primary_color;
+          ctx.fillStyle = wordPCol;
           ctx.fillText(wordText, wordCenterX, y);
 
-          // Active karaoke highlight wipe
-          if (currentTime >= word.start) {
+          // Active karaoke highlight wipe (only for slot 0)
+          if (slot === 0 && currentTime >= word.start) {
             ctx.save();
             let progress = 1.0;
             if (currentTime < word.end && word.end > word.start) {
               progress = (currentTime - word.start) / (word.end - word.start);
             }
-            // Clip region for sung portion
             const clipWidth = wordWidth * progress;
             ctx.beginPath();
-            ctx.rect(currentX, y - (style.font_size), clipWidth, style.font_size * 2);
+            ctx.rect(currentX, y - segFontSize, clipWidth, segFontSize * 2);
             ctx.clip();
 
-            // Re-draw with highlight color inside clip
             if (style.outline_width > 0) {
               ctx.strokeStyle = style.outline_color;
               ctx.lineWidth = style.outline_width * 2;
               ctx.lineJoin = 'round';
               ctx.strokeText(wordText, wordCenterX, y);
             }
-            ctx.fillStyle = style.highlight_color;
+            ctx.fillStyle = wordHCol;
             ctx.fillText(wordText, wordCenterX, y);
             ctx.restore();
           }
@@ -992,9 +1376,7 @@ HTML_PAGE = """<!DOCTYPE html>
           currentX += wordWidth;
         });
 
-        if (style.shadow_depth > 0) {
-          ctx.restore();
-        }
+        ctx.restore();
       });
     }
 

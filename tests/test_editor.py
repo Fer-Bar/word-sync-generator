@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
@@ -17,7 +17,7 @@ class EditorServerTests(unittest.TestCase):
         self.job_dir = Path(self.temp_dir.name)
 
         # Create dummy assets
-        (self.job_dir / "instrumental.flac").write_bytes(b"dummy-audio")
+        (self.job_dir / "instrumental.flac").write_bytes(b"dummy-audio-content-for-range-testing")
         (self.job_dir / "background.jpg").write_bytes(b"dummy-image")
 
         lyrics_data = {
@@ -76,7 +76,8 @@ class EditorServerTests(unittest.TestCase):
         TestHandler.transcript = transcript
 
         self.port = find_free_port(8990)
-        self.server = HTTPServer(("127.0.0.1", self.port), TestHandler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), TestHandler)
+        self.server.daemon_threads = True
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -92,6 +93,8 @@ class EditorServerTests(unittest.TestCase):
             self.assertEqual(response.headers.get_content_type(), "text/html")
             body = response.read().decode("utf-8")
             self.assertIn("Karaoke Style Studio", body)
+            self.assertIn("btn-swap", body)
+            self.assertIn("alignment", body)
 
     def test_get_api_state(self) -> None:
         url = f"http://127.0.0.1:{self.port}/api/state"
@@ -102,12 +105,21 @@ class EditorServerTests(unittest.TestCase):
             self.assertIn("job", data)
             self.assertIn("transcript", data)
             self.assertIn("available_fonts", data)
+            self.assertIn("recommended_palettes", data)
+            self.assertTrue(len(data["recommended_palettes"]) >= 6)
 
     def test_serve_media_asset(self) -> None:
         url = f"http://127.0.0.1:{self.port}/media/instrumental.flac"
         with urllib.request.urlopen(url) as response:
             self.assertEqual(response.status, 200)
-            self.assertEqual(response.read(), b"dummy-audio")
+            self.assertEqual(response.read(), b"dummy-audio-content-for-range-testing")
+
+    def test_serve_media_asset_range_request(self) -> None:
+        url = f"http://127.0.0.1:{self.port}/media/instrumental.flac"
+        req = urllib.request.Request(url, headers={"Range": "bytes=0-4"})
+        with urllib.request.urlopen(req) as response:
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.read(), b"dummy")
 
     def test_prevent_media_path_traversal(self) -> None:
         url = f"http://127.0.0.1:{self.port}/media/../etc/passwd"
@@ -123,6 +135,9 @@ class EditorServerTests(unittest.TestCase):
                 "font_size": 75,
                 "primary_color": "#00FFCC",
                 "highlight_color": "#FF00AA",
+                "alignment": 2,
+                "margin_v": 85,
+                "margin_h": 90,
             },
             "background": {
                 "overlay_opacity": 0.55,
@@ -141,13 +156,21 @@ class EditorServerTests(unittest.TestCase):
         self.assertEqual(saved_job["style"]["font_family"], "Montserrat")
         self.assertEqual(saved_job["style"]["font_size"], 75)
         self.assertEqual(saved_job["style"]["primary_color"], "#00FFCC")
+        self.assertEqual(saved_job["style"]["alignment"], 2)
+        self.assertEqual(saved_job["style"]["margin_v"], 85)
+        self.assertEqual(saved_job["style"]["margin_h"], 90)
         self.assertEqual(saved_job["background"]["overlay_opacity"], 0.55)
 
-        # Verify .ass files regenerated
+        # Verify .ass files regenerated with alignment 2 and margins
         self.assertTrue((self.job_dir / "karaoke.ass").is_file())
         self.assertTrue((self.job_dir / "lyrics.ass").is_file())
-        ass_text = (self.job_dir / "karaoke.ass").read_text(encoding="utf-8")
-        self.assertIn("Style: Default,Montserrat,75,", ass_text)
+        karaoke_ass_text = (self.job_dir / "karaoke.ass").read_text(encoding="utf-8")
+        lyrics_ass_text = (self.job_dir / "lyrics.ass").read_text(encoding="utf-8")
+        self.assertIn("Style: Default,Montserrat,75,", karaoke_ass_text)
+        self.assertIn(",2,90,90,85,1", karaoke_ass_text)
+        self.assertIn(r"\move(", karaoke_ass_text)
+        self.assertNotIn(r"\move(", lyrics_ass_text)
+        self.assertIn(r"\fad(150,150)", lyrics_ass_text)
 
 
 if __name__ == "__main__":

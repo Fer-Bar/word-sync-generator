@@ -1,4 +1,3 @@
-import re
 import unittest
 
 from karaoke_app.ass import generate_ass
@@ -26,57 +25,175 @@ class AssLayoutTests(unittest.TestCase):
         content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24})
 
         self.assertIn("WrapStyle: 1", content)
-        self.assertIn("1,4,1,5,70,70,70,1", content)
-        self.assertNotIn(r"\move(", content)
+        self.assertIn(r"{\an5\pos(960,540)", content)
 
-    def test_karaoke_scrolls_long_line_during_its_word_timing(self) -> None:
+    def test_teleprompter_vertical_scrolling_across_lines(self) -> None:
         transcript = {
             "segments": [
                 {
                     "start": 1.0,
                     "end": 3.0,
-                    "text": "This lyric line keeps moving horizontally because it is much wider than the video",
-                    "words": [
-                        {
-                            "start": 1.0,
-                            "end": 3.0,
-                            "text": "This lyric line keeps moving horizontally because it is much wider than the video",
-                        }
-                    ],
-                }
+                    "text": "First line of the song",
+                    "words": [{"start": 1.0, "end": 3.0, "text": "First line of the song"}],
+                },
+                {
+                    "start": 3.2,
+                    "end": 5.0,
+                    "text": "Second line of the song",
+                    "words": [{"start": 3.2, "end": 5.0, "text": "Second line of the song"}],
+                },
             ]
         }
 
-        content = generate_ass(
-            transcript,
-            {"width": 1920, "height": 1080, "fps": 24},
-            scroll_long_lines=True,
-        )
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24})
 
-        self.assertIn(r"{\an4\q2\clip(70,0,1850,1080)", content)
-        self.assertRegex(content, re.compile(r"\\move\(70,540,-?\d+,540,350,2350\)"))
+        # Line 1 active at center
+        self.assertIn(r"{\an5\pos(960,540)\fad(150,0)}{\k35}{\kf200}First line of the song", content)
+        # Line 2 upcoming preview at bottom slot (Y=691)
+        self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\fad(150,0)}Second line of the song", content)
+        # Line 1 glides up to top slot (Y=389) when done
+        self.assertIn(r"\move(960,540,960,389,0,350)\t(0,350,\alpha&H80&)", content)
+        # Line 2 glides up to center slot (Y=540) when active
+        self.assertIn(r"\move(960,691,960,540,0,350)\t(0,350,\alpha&H00&)", content)
 
-    def test_karaoke_keeps_short_line_centered(self) -> None:
+    def test_consecutive_singers_receive_distinct_styles(self) -> None:
+        """Verify verse 1 (Singer 1) and verse 2 (Singer 2) receive separate ASS styles with respective colors."""
+        from karaoke_app.style import StyleConfig
+
         transcript = {
             "segments": [
                 {
-                    "start": 0.0,
-                    "end": 1.0,
-                    "text": "Short line",
-                    "words": [{"start": 0.0, "end": 1.0, "text": "Short line"}],
+                    "start": 10.0,
+                    "end": 30.0,
+                    "text": "First singer line from 10 to 30",
+                    "agent": "v1",
+                    "words": [
+                        {"start": 10.0, "end": 20.0, "text": "First singer ", "agent": "v1"},
+                        {"start": 20.0, "end": 30.0, "text": "line", "agent": "v1"},
+                    ],
+                },
+                {
+                    "start": 40.0,
+                    "end": 60.0,
+                    "text": "Second singer line from 40 to 60",
+                    "agent": "v2",
+                    "words": [
+                        {"start": 40.0, "end": 50.0, "text": "Second singer ", "agent": "v2"},
+                        {"start": 50.0, "end": 60.0, "text": "line", "agent": "v2"},
+                    ],
+                },
+            ]
+        }
+        style = StyleConfig.from_dict(
+            {
+                "agent_colors": {
+                    "v1": {"primary_color": "#FFD700", "highlight_color": "#FFFFFF"},
+                    "v2": {"primary_color": "#00D7FF", "highlight_color": "#FFFFFF"},
                 }
+            },
+            height=1080,
+        )
+
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style)
+
+        self.assertIn("Style: Agent_v1,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", content)
+        self.assertIn("Style: Agent_v2,DejaVu Sans,64,&H00FFD700,&H00FFFFFF,", content)
+        self.assertIn("Dialogue: 1,0:00:09.65,0:00:30.35,Agent_v1,v1,", content)
+        self.assertIn("Dialogue: 1,0:00:39.65,0:01:00.35,Agent_v2,v2,", content)
+
+    def test_simultaneous_main_and_background_vocals(self) -> None:
+        """Verify simultaneous main and background vocal lines produce distinct dialogue lanes and styling."""
+        transcript = {
+            "segments": [
+                {
+                    "start": 70.0,
+                    "end": 75.0,
+                    "text": "There is noooo",
+                    "agent": "v1",
+                    "words": [
+                        {"start": 70.0, "end": 75.0, "text": "There is noooo", "agent": "v1"},
+                    ],
+                },
+                {
+                    "start": 71.0,
+                    "end": 75.0,
+                    "text": "no no no",
+                    "agent": "v2",
+                    "isBackground": True,
+                    "words": [
+                        {"start": 71.0, "end": 73.0, "text": "no ", "agent": "v2", "isBackground": True},
+                        {"start": 73.0, "end": 75.0, "text": "no no", "agent": "v2", "isBackground": True},
+                    ],
+                },
             ]
         }
 
-        content = generate_ass(
-            transcript,
-            {"width": 1920, "height": 1080, "fps": 24},
-            scroll_long_lines=True,
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24})
+
+        self.assertIn("Style: Agent_v1,", content)
+        self.assertIn("Style: Agent_v2_bg,DejaVu Sans,54,", content)
+        self.assertIn("(no ", content)
+        self.assertIn("no no)", content)
+        self.assertIn("Agent_v2_bg", content)
+
+    def test_lyrics_mode_static_pages_with_coros_at_bottom(self) -> None:
+        """Verify lyrics mode creates static pages without move, with coros at the bottom and distinct color."""
+        from karaoke_app.style import StyleConfig
+
+        transcript = {
+            "segments": [
+                {
+                    "start": 10.0,
+                    "end": 14.0,
+                    "text": "Main lead vocal line",
+                    "agent": "v1",
+                    "words": [
+                        {"start": 10.0, "end": 14.0, "text": "Main lead vocal line", "agent": "v1"},
+                    ],
+                },
+                {
+                    "start": 10.5,
+                    "end": 14.0,
+                    "text": "Backing chorus vocal",
+                    "agent": "v2",
+                    "isBackground": True,
+                    "words": [
+                        {
+                            "start": 10.5,
+                            "end": 14.0,
+                            "text": "Backing chorus vocal",
+                            "agent": "v2",
+                            "isBackground": True,
+                        },
+                    ],
+                },
+            ]
+        }
+        style = StyleConfig.from_dict(
+            {
+                "primary_color": "#FFD700",
+                "coros_color": "#00E5FF",
+            },
+            height=1080,
         )
 
-        self.assertIn(r"{\an5\pos(960,540)}", content)
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="lyrics")
+
+        # No teleprompter \move tags in lyrics mode
         self.assertNotIn(r"\move(", content)
+        # Both lines have fade
+        self.assertIn(r"\fad(150,150)", content)
+        # Lead vocal is positioned higher (y=497) than coro vocal (y=583)
+        self.assertIn(r"{\an5\pos(960,497)\fad(150,150)}", content)
+        self.assertIn(r"{\an5\pos(960,583)\fad(150,150)}", content)
+        # Coro text is parenthesized
+        self.assertIn("(Backing chorus vocal)", content)
+        # Coro style has coros_color (&H00FFE500 in BGR)
+        self.assertIn("Style: Agent_v2_bg,DejaVu Sans,54,&H00FFE500,&H00FFFFFF,", content)
+        # Lead style has primary_color (&H0000D7FF in BGR)
+        self.assertIn("Style: Agent_v1,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", content)
 
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -258,7 +258,7 @@ def render_colab(args: argparse.Namespace) -> Path:
             transcript,
             document["video"],
             style=style_config,
-            scroll_long_lines=mode == "karaoke",
+            mode=mode,
         )
         for mode in modes
     }

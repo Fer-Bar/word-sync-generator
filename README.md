@@ -44,11 +44,8 @@ Run `uv run karaoke render PATH_TO_JOB` only after the corrected file is in that
 folder and renders both the instrumental karaoke video and the original-audio lyrics video in one Colab session. Use
 `--mode karaoke` or `--mode lyrics` only when one output is needed. Results are downloaded under
 `JOB_DIR/renders/<timestamp>-<mode>/`:
-- **Karaoke mode**: `{title}_karaoke.mp4` has clean background video without burned text, paired with
-  `{title}_karaoke.ass` in the same directory. Long lines scroll horizontally during their sung interval while short
-  lines remain centered.
-- **Lyrics mode**: `{title}_lyrics.mp4` has static, wrapped subtitles burned in, with the raw subtitle file saved under
-  `subtitles/{title}_lyrics.ass` to prevent media players from double-rendering subtitles.
+- **Karaoke mode**: `{title}_karaoke.mp4` rendered with instrumental audio and synchronized karaoke subtitles with word-by-word highlight wipes and automatic line wrapping.
+- **Lyrics mode**: `{title}_lyrics.mp4` rendered with original audio and synchronized subtitles.
 
 ## Lyrics strategy
 

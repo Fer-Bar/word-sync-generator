@@ -119,26 +119,16 @@ def _render_existing_job(config: dict[str, Any]) -> None:
             raise FileNotFoundError(f"Missing generated {mode} ASS file in render bundle")
         audio_path = job_dir / document["media"][audio_keys[mode]]
         video_path = output_dir / f"{title}_{mode}.mp4"
-        if mode == "lyrics":
-            subtitles_dir = output_dir / "subtitles"
-            subtitles_dir.mkdir(parents=True, exist_ok=True)
-            ass_path = subtitles_dir / f"{title}_{mode}.ass"
-            shutil.copy2(source_ass, ass_path)
-            _render_video(
-                audio_path,
-                video_path,
-                {"video": document["video"], "background": render_background},
-                ass_path=ass_path,
-            )
-        else:
-            ass_path = output_dir / f"{title}_{mode}.ass"
-            shutil.copy2(source_ass, ass_path)
-            _render_video(
-                audio_path,
-                video_path,
-                {"video": document["video"], "background": render_background},
-                ass_path=None,
-            )
+        subtitles_dir = output_dir / "subtitles"
+        subtitles_dir.mkdir(parents=True, exist_ok=True)
+        ass_path = subtitles_dir / f"{title}_{mode}.ass"
+        shutil.copy2(source_ass, ass_path)
+        _render_video(
+            audio_path,
+            video_path,
+            {"video": document["video"], "background": render_background},
+            ass_path=ass_path,
+        )
     _create_archive(output_dir, Path(config["archive_path"]))
 
 
@@ -1451,7 +1441,7 @@ def _write_ass(transcript: dict[str, Any], ass_path: Path, video: dict[str, int]
         "ScriptType: v4.00+",
         f"PlayResX: {width}",
         f"PlayResY: {height}",
-        "WrapStyle: 2",
+        "WrapStyle: 1",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",

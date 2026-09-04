@@ -716,10 +716,11 @@ class RenderVideoTests(unittest.TestCase):
             self.assertEqual(mock_render_video.call_count, 2)
             first_call_kwargs = mock_render_video.call_args_list[0].kwargs
             second_call_kwargs = mock_render_video.call_args_list[1].kwargs
-            self.assertIsNone(first_call_kwargs["ass_path"])
+            self.assertIsNotNone(first_call_kwargs["ass_path"])
+            self.assertIn("subtitles", str(first_call_kwargs["ass_path"]))
             self.assertIsNotNone(second_call_kwargs["ass_path"])
             self.assertIn("subtitles", str(second_call_kwargs["ass_path"]))
-            self.assertEqual((Path(temp_dir) / "render_result" / "My_Track_karaoke.ass").read_text(), "karaoke-scroll")
+            self.assertEqual(Path(first_call_kwargs["ass_path"]).read_text(), "karaoke-scroll")
             self.assertEqual(Path(second_call_kwargs["ass_path"]).read_text(), "lyrics-static")
 
 
