@@ -1,7 +1,7 @@
 import re
 from typing import Any
 
-from karaoke_app.style import StyleConfig
+from karaoke_app.style import StyleConfig, hex_to_ass_color
 
 MAX_LYRIC_LINES_PER_PAGE = 3
 PAGE_BREAK_SILENCE_SECONDS = 1.5
@@ -123,6 +123,8 @@ def generate_ass(
             height=height,
             font_size=font_size,
             line_gap_factor=active_style.line_gap_factor,
+            active_style=active_style,
+            unique_agents=unique_agents,
         )
     lines.extend(dialogue_lines)
     return "\n".join(lines) + "\n"
@@ -274,10 +276,15 @@ def _build_teleprompter_dialogues(
     height: int,
     font_size: int,
     line_gap_factor: float = 1.35,
+    active_style: StyleConfig | None = None,
+    unique_agents: list[str] | None = None,
 ) -> list[str]:
     valid_segments = [s for s in segments if s.get("words")]
     if not valid_segments:
         return []
+
+    style = active_style if isinstance(active_style, StyleConfig) else StyleConfig.from_dict(None, height=height)
+    known_unique_agents = unique_agents or []
 
     center_x = width // 2
     center_y = height // 2
@@ -357,7 +364,14 @@ def _build_teleprompter_dialogues(
             preview_start = max(0, prev_start_cs)
             preview_end = entry_start
             if preview_end > preview_start:
-                preview_tag = f"{{\\an5\\pos({center_x},{bottom_y})\\alpha&H80&\\fad(150,0)}}"
+                agent_idx = known_unique_agents.index(agent) if agent in known_unique_agents else 0
+                _, h_col = style.get_agent_colors(
+                    agent if agent else None,
+                    index=agent_idx,
+                    is_background=is_bg,
+                )
+                unsung_bgr = hex_to_ass_color(h_col)[4:]
+                preview_tag = f"{{\\an5\\pos({center_x},{bottom_y})\\alpha&H80&\\1c&H{unsung_bgr}&\\fad(150,0)}}"
                 dialogue_lines.append(
                     f"Dialogue: 0,{_ass_timestamp(preview_start)},{_ass_timestamp(preview_end)},"
                     f"{_escape_ass_field(style_name)},{_escape_ass_field(actor_name)},0,0,0,,{preview_tag}{plain_text}"

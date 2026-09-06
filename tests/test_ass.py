@@ -49,8 +49,8 @@ class AssLayoutTests(unittest.TestCase):
 
         # Line 1 active at center
         self.assertIn(r"{\an5\pos(960,540)\fad(150,0)}{\k35}{\kf200}First line of the song", content)
-        # Line 2 upcoming preview at bottom slot (Y=691)
-        self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\fad(150,0)}Second line of the song", content)
+        # Line 2 upcoming preview at bottom slot (Y=691) with unsung color override (\1c&HFFFFFF&)
+        self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\1c&HFFFFFF&\fad(150,0)}Second line of the song", content)
         # Synchronized transition during the 20cs (200ms) gap from 3.00 to 3.20:
         # Line 1 glides up to top slot (Y=389) over 200ms
         self.assertIn(r"\move(960,540,960,389,0,200)\t(0,200,\alpha&H80&)", content)
@@ -261,6 +261,44 @@ class AssLayoutTests(unittest.TestCase):
             r"{\an5\move(960,691,960,540,0,250)\t(0,250,\alpha&H00&)}{\k25}{\kf100}Fast line two",
             content,
         )
+
+    def test_teleprompter_preview_uses_agent_unsung_color(self) -> None:
+        """Verify that preview lines inherit the custom unsung (highlight) color of the upcoming agent."""
+        from karaoke_app.style import StyleConfig
+
+        transcript = {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "Singer one starts",
+                    "agent": "v1",
+                    "words": [{"start": 1.0, "end": 3.0, "text": "Singer one starts", "agent": "v1"}],
+                },
+                {
+                    "start": 3.2,
+                    "end": 5.0,
+                    "text": "Singer two upcoming",
+                    "agent": "v2",
+                    "words": [{"start": 3.2, "end": 5.0, "text": "Singer two upcoming", "agent": "v2"}],
+                },
+            ]
+        }
+        # v2 has custom unsung color (highlight_color) = #00E5FF (Cyan: R=00, G=E5, B=FF -> ASS BGR: FFE500)
+        style = StyleConfig.from_dict(
+            {
+                "agent_colors": {
+                    "v1": {"primary_color": "#FFD700", "highlight_color": "#FFFFFF"},
+                    "v2": {"primary_color": "#FF00AA", "highlight_color": "#00E5FF"},
+                }
+            },
+            height=1080,
+        )
+
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style)
+
+        # Singer 2 preview line should use \1c&HFFE500& (the unsung color of v2)
+        self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\1c&HFFE500&\fad(150,0)}Singer two upcoming", content)
 
 
 if __name__ == "__main__":
