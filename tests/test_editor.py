@@ -35,9 +35,7 @@ class EditorServerTests(unittest.TestCase):
                 }
             ],
         }
-        (self.job_dir / "lyrics.lyricsfile.yaml").write_text(
-            dump_lyrics_file(lyrics_data), encoding="utf-8"
-        )
+        (self.job_dir / "lyrics.lyricsfile.yaml").write_text(dump_lyrics_file(lyrics_data), encoding="utf-8")
 
         self.document = {
             "schema_version": 1,

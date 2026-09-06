@@ -70,8 +70,7 @@ def validate_lyrics_file(value: Any, *, require_words: bool = True) -> dict[str,
         channels = {_word_channel(word, line_agent, line_is_background is True) for word in words}
         is_multitrack = len(channels) > 1 or any(channel[1] for channel in channels)
         reconstructs_text = (
-            _multitrack_word_parts(words, unspaced_language)
-            == _multitrack_text_parts(text, unspaced_language)
+            _multitrack_word_parts(words, unspaced_language) == _multitrack_text_parts(text, unspaced_language)
             if is_multitrack
             else _comparable_text(joined_text, unspaced_language) == _comparable_text(text, unspaced_language)
         )
@@ -205,9 +204,7 @@ def sanitize_lyrics_lines(
                 else:
                     end_ms = start_ms + min_word_duration_ms
 
-                word_agent = (
-                    word.get("agent") if isinstance(word.get("agent"), str) and word["agent"].strip() else None
-                )
+                word_agent = word.get("agent") if isinstance(word.get("agent"), str) and word["agent"].strip() else None
                 word_is_background = word.get("isBackground") is True
                 channel = (word_agent or line_agent or "", word_is_background or line_is_background)
                 prev_word = previous_word_by_channel.get(channel)

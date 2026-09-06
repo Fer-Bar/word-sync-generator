@@ -208,9 +208,7 @@ class StyleConfig:
             else self.highlight_color
         )
         out_col = (
-            normalize_hex_color(outline_color, default=self.outline_color)
-            if outline_color
-            else self.outline_color
+            normalize_hex_color(outline_color, default=self.outline_color) if outline_color else self.outline_color
         )
         primary_ass = hex_to_ass_color(p_col, alpha=1.0)
         secondary_ass = hex_to_ass_color(h_col, alpha=1.0)

@@ -82,7 +82,6 @@ class StyleTests(unittest.TestCase):
         self.assertIn("Style: Agent_v1_bg,DejaVu Sans,54,&H0000D7FF,&H00FFFFFF,", style_bg)
         self.assertIn(",-1,-1,0,0,100,100,0,0,1,", style_bg)  # bold=-1, italic=-1
 
-
     def test_coros_color_configuration_and_agent_bg_fallback(self) -> None:
         data = {
             "primary_color": "#FFD700",

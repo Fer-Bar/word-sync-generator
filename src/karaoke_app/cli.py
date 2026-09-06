@@ -361,8 +361,7 @@ def _resolve_source(value: str) -> tuple[str, str]:
             normalized_value = value.replace(r"\?", "?").replace(r"\=", "=").replace(r"\&", "&")
             if "\\" in normalized_value:
                 raise ValueError(
-                    "Invalid YouTube URL: unexpected backslash. "
-                    "Use https://www.youtube.com/watch?v=VIDEO_ID"
+                    "Invalid YouTube URL: unexpected backslash. Use https://www.youtube.com/watch?v=VIDEO_ID"
                 )
             parsed = urlparse(normalized_value)
             if parsed.path.rstrip("/") == "/watch" and not parse_qs(parsed.query).get("v"):
