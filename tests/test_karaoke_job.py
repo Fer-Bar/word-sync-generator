@@ -6,13 +6,17 @@ from typing import Any
 from unittest.mock import patch
 
 from colab.karaoke_job import (
+    _align_known_lyrics,
     _artist_variants,
     _build_lyric_pages,
     _fetch_lrclib,
+    _group_lines_into_macro_sections,
     _group_words,
+    _is_alignment_healthy,
     _lrclib_candidate_is_safe,
     _lrclib_match_score,
     _lyrics_document_from_record,
+    _parse_synced_lyrics,
     _title_edition_tokens,
     _title_variants,
     _write_ass,
@@ -81,9 +85,7 @@ class LyricPageTests(unittest.TestCase):
 
     def test_pages_break_before_long_silence_and_maximum_duration(self) -> None:
         silence_pages = _build_lyric_pages([_line(0, 0.0, 1.0), _line(1, 2.5, 3.0)])
-        duration_pages = _build_lyric_pages(
-            [_line(0, 0.0, 6.0), _line(1, 6.1, 12.0), _line(2, 12.1, 15.1)]
-        )
+        duration_pages = _build_lyric_pages([_line(0, 0.0, 6.0), _line(1, 6.1, 12.0), _line(2, 12.1, 15.1)])
 
         self.assertEqual([len(page["lines"]) for page in silence_pages], [1, 1])
         self.assertEqual([len(page["lines"]) for page in duration_pages], [2, 1])
@@ -208,7 +210,6 @@ class AssRenderingTests(unittest.TestCase):
         self.assert_valid_dialogue_timing(mixed_dialogues)
 
 
-
 class ArtistVariantsTests(unittest.TestCase):
     def test_artist_variants_splits_comma_to_full_and_primary(self) -> None:
         self.assertEqual(_artist_variants("Swsh, Olivia Quillin"), ["Swsh, Olivia Quillin", "Swsh"])
@@ -289,9 +290,7 @@ class LrclibCandidateSafetyTests(unittest.TestCase):
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
-        self.assertFalse(
-            _lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296)
-        )
+        self.assertFalse(_lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296))
 
     def test_rejects_incompatible_explicit_editions(self) -> None:
         candidate = {
@@ -302,9 +301,7 @@ class LrclibCandidateSafetyTests(unittest.TestCase):
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertFalse(
-            _lrclib_candidate_is_safe(
-                candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296
-            )
+            _lrclib_candidate_is_safe(candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296)
         )
 
     def test_accepts_missing_edition_with_lower_score_than_matching_edition(self) -> None:
@@ -323,9 +320,7 @@ class LrclibCandidateSafetyTests(unittest.TestCase):
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertTrue(
-            _lrclib_candidate_is_safe(
-                generic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296
-            )
+            _lrclib_candidate_is_safe(generic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296)
         )
         self.assertTrue(
             _lrclib_candidate_is_safe(
@@ -348,9 +343,7 @@ class LrclibCandidateSafetyTests(unittest.TestCase):
             "duration": 315.0,
             "syncedLyrics": "[00:10.00] Line",
         }
-        self.assertFalse(
-            _lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296)
-        )
+        self.assertFalse(_lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296))
 
     def test_accepts_primary_artist_when_source_has_multiple_artists(self) -> None:
         candidate = {
@@ -576,6 +569,30 @@ class LrclibFetchTests(unittest.TestCase):
             self.assertIsNone(result)
 
 
+class ParseSyncedLyricsTests(unittest.TestCase):
+    def test_parse_synced_lyrics_extracts_timestamps_and_bounds(self) -> None:
+        lrc = "[00:01.00] Line one\n[00:05.50] Line two\n[00:10.00] \n[00:20.00] Line three\n[00:25.00] Last line"
+        lines = _parse_synced_lyrics(lrc, duration_ms=30000)
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(lines[0], {"text": "Line one", "start_ms": 1000, "end_ms": 5500})
+        self.assertEqual(lines[1], {"text": "Line two", "start_ms": 5500, "end_ms": 10000})
+        self.assertEqual(lines[2], {"text": "Line three", "start_ms": 20000, "end_ms": 25000})
+        self.assertEqual(lines[3], {"text": "Last line", "start_ms": 25000, "end_ms": 30000})
+
+    def test_parse_synced_lyrics_handles_millisecond_timestamps(self) -> None:
+        lrc = "[00:02.500] Precise line\n[00:08.125] Next precise line"
+        lines = _parse_synced_lyrics(lrc, duration_ms=20000)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], {"text": "Precise line", "start_ms": 2500, "end_ms": 8125})
+        self.assertEqual(lines[1], {"text": "Next precise line", "start_ms": 8125, "end_ms": 16125})
+
+    def test_parse_synced_lyrics_ignores_header_metadata(self) -> None:
+        lrc = "[ar:Artist]\n[ti:Title]\n[00:03.00] Actual lyrics"
+        lines = _parse_synced_lyrics(lrc, duration_ms=10000)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], {"text": "Actual lyrics", "start_ms": 3000, "end_ms": 10000})
+
+
 class LyricsDocumentFromRecordTests(unittest.TestCase):
     def test_lyricsfile_empty_lines_falls_back_to_synced_lyrics(self) -> None:
         record = {
@@ -589,6 +606,11 @@ class LyricsDocumentFromRecordTests(unittest.TestCase):
         document = _lyrics_document_from_record(record, metadata, config)
         self.assertEqual(len(document["lines"]), 2)
         self.assertEqual(document["lines"][0]["text"], "Synced line 1")
+        self.assertEqual(document["lines"][0]["start_ms"], 1000)
+        self.assertEqual(document["lines"][0]["end_ms"], 5000)
+        self.assertEqual(document["lines"][1]["text"], "Synced line 2")
+        self.assertEqual(document["lines"][1]["start_ms"], 5000)
+        self.assertEqual(document["lines"][1]["end_ms"], 13000)
 
     def test_lyricsfile_empty_lines_falls_back_to_plain_lyrics(self) -> None:
         record = {
@@ -628,6 +650,276 @@ class LyricsDocumentFromRecordTests(unittest.TestCase):
         document = _lyrics_document_from_record(record, metadata, config)
         self.assertEqual(len(document["lines"]), 1)
         self.assertEqual(document["lines"][0]["text"], "Valid line")
+
+
+class AlignKnownLyricsTests(unittest.TestCase):
+    def test_global_alignment_preserves_continuous_word_timestamps(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.float32 = "float32"
+        mock_torch.float16 = "float16"
+
+        mock_hf = MagicMock()
+        mock_hf.snapshot_download.return_value = "/tmp/model"
+
+        mock_aligner = MagicMock()
+        mock_model = MagicMock()
+        mock_model.dtype = "float32"
+        mock_model.device = "cpu"
+        mock_tokenizer = MagicMock()
+        mock_aligner.load_alignment_model.return_value = (mock_model, mock_tokenizer)
+
+        # Mock 1D waveform: 160,000 samples (10s at 16kHz)
+        mock_waveform = MagicMock()
+        mock_waveform.shape = (160000,)
+        mock_waveform.__getitem__.return_value = mock_waveform
+        mock_aligner.load_audio.return_value = mock_waveform
+
+        mock_aligner.generate_emissions.return_value = (MagicMock(), 0.02)
+        mock_aligner.preprocess_text.return_value = (MagicMock(), MagicMock())
+        mock_aligner.get_alignments.return_value = (MagicMock(), MagicMock(), MagicMock())
+        mock_aligner.get_spans.return_value = MagicMock()
+
+        # Global continuous alignment results: words at 0.5s and 1.0s
+        mock_aligner.postprocess_results.return_value = [
+            {"start": 0.5, "end": 0.9, "score": 0.0},
+            {"start": 1.0, "end": 1.4, "score": 0.0},
+        ]
+
+        document = {
+            "metadata": {"title": "Test", "duration_ms": 10000},
+            "lines": [
+                {
+                    "text": "Hello world",
+                    "start_ms": 500,
+                    "end_ms": 2000,
+                }
+            ],
+        }
+        config = {"language": "en"}
+
+        with patch.dict(
+            sys.modules,
+            {
+                "torch": mock_torch,
+                "huggingface_hub": mock_hf,
+                "ctc_forced_aligner": mock_aligner,
+            },
+        ):
+            lyrics, words = _align_known_lyrics(Path("/tmp/vocals.wav"), document, config)
+
+        self.assertEqual(len(lyrics["lines"]), 1)
+        line = lyrics["lines"][0]
+        self.assertEqual(len(line["words"]), 2)
+        self.assertEqual(line["words"][0]["text"], "Hello ")
+        self.assertEqual(line["words"][0]["start_ms"], 500)
+        self.assertEqual(line["words"][0]["end_ms"], 900)
+        self.assertEqual(line["words"][1]["text"], "world")
+        self.assertEqual(line["words"][1]["start_ms"], 1000)
+        self.assertEqual(line["words"][1]["end_ms"], 1400)
+
+    def test_macro_section_alignment_activates_on_global_anomaly(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.float32 = "float32"
+        mock_torch.float16 = "float16"
+
+        mock_hf = MagicMock()
+        mock_hf.snapshot_download.return_value = "/tmp/model"
+
+        mock_aligner = MagicMock()
+        mock_model = MagicMock()
+        mock_model.dtype = "float32"
+        mock_model.device = "cpu"
+        mock_tokenizer = MagicMock()
+        mock_aligner.load_alignment_model.return_value = (mock_model, mock_tokenizer)
+
+        mock_waveform = MagicMock()
+        mock_waveform.shape = (480000,)  # 30s audio
+        mock_waveform.__getitem__.return_value = mock_waveform
+        mock_aligner.load_audio.return_value = mock_waveform
+
+        mock_aligner.generate_emissions.return_value = (MagicMock(), 0.02)
+        mock_aligner.preprocess_text.return_value = (MagicMock(), MagicMock())
+        mock_aligner.get_alignments.return_value = (MagicMock(), MagicMock(), MagicMock())
+        mock_aligner.get_spans.return_value = MagicMock()
+
+        # Call 1 (Global): returns severely collapsed result (drift > 12s with near-zero confidence)
+        # Call 2 (Tier 2 Macro section 1): returns healthy result
+        # Call 3 (Tier 2 Macro section 2): returns healthy result
+        mock_aligner.postprocess_results.side_effect = [
+            # Call 1: Global fails because line 2 drifts by 17 seconds (placed at 35s instead of 18s) with score -10
+            [
+                {"start": 1.0, "end": 1.4, "score": 0.0},
+                {"start": 1.5, "end": 1.9, "score": 0.0},
+                {"start": 35.0, "end": 35.4, "score": -10.0},
+                {"start": 35.5, "end": 35.9, "score": -10.0},
+            ],
+            # Call 2: Macro section 1 (offset: max(0, 1.0 - 1.5) = 0.0s)
+            [
+                {"start": 1.0, "end": 1.4, "score": 0.0},
+                {"start": 1.5, "end": 1.9, "score": 0.0},
+            ],
+            # Call 3: Macro section 2 (offset: 18.0 - 1.5 = 16.5s)
+            [
+                {"start": 1.5, "end": 1.9, "score": 0.0},
+                {"start": 2.0, "end": 2.4, "score": 0.0},
+            ],
+        ]
+
+        document = {
+            "metadata": {"title": "Test", "duration_ms": 30000},
+            "lines": [
+                {"text": "Verse line", "start_ms": 1000, "end_ms": 3000},
+                # 15s instrumental gap between 3s and 18s
+                {"text": "Chorus line", "start_ms": 18000, "end_ms": 20000},
+            ],
+        }
+        config = {"language": "en"}
+
+        with patch.dict(
+            sys.modules,
+            {
+                "torch": mock_torch,
+                "huggingface_hub": mock_hf,
+                "ctc_forced_aligner": mock_aligner,
+            },
+        ):
+            lyrics, words = _align_known_lyrics(Path("/tmp/vocals.wav"), document, config)
+
+        self.assertEqual(len(lyrics["lines"]), 2)
+        # Macro section 1: offset is 0.0s -> word 0 at 1000ms
+        self.assertEqual(lyrics["lines"][0]["words"][0]["start_ms"], 1000)
+        # Macro section 2: offset is 16.5s -> word 0 at 1.5 + 16.5 = 18.0s = 18000ms
+        self.assertEqual(lyrics["lines"][1]["words"][0]["start_ms"], 18000)
+
+    def test_segmented_alignment_supports_2d_waveform(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.float32 = "float32"
+        mock_torch.float16 = "float16"
+
+        mock_hf = MagicMock()
+        mock_hf.snapshot_download.return_value = "/tmp/model"
+
+        mock_aligner = MagicMock()
+        mock_model = MagicMock()
+        mock_model.dtype = "float32"
+        mock_model.device = "cpu"
+        mock_tokenizer = MagicMock()
+        mock_aligner.load_alignment_model.return_value = (mock_model, mock_tokenizer)
+
+        # Mock 2D waveform: (1, 160000)
+        mock_waveform = MagicMock()
+        mock_waveform.shape = (1, 160000)
+        mock_waveform.__getitem__.return_value = mock_waveform
+        mock_aligner.load_audio.return_value = mock_waveform
+
+        mock_aligner.generate_emissions.return_value = (MagicMock(), 0.02)
+        mock_aligner.preprocess_text.return_value = (MagicMock(), MagicMock())
+        mock_aligner.get_alignments.return_value = (MagicMock(), MagicMock(), MagicMock())
+        mock_aligner.get_spans.return_value = MagicMock()
+        mock_aligner.postprocess_results.return_value = [
+            {"start": 0.5, "end": 0.9, "score": 0.0},
+        ]
+
+        document = {
+            "metadata": {"title": "Test", "duration_ms": 10000},
+            "lines": [{"text": "Hello", "start_ms": 500, "end_ms": 2000}],
+        }
+        config = {"language": "en"}
+
+        with patch.dict(
+            sys.modules,
+            {
+                "torch": mock_torch,
+                "huggingface_hub": mock_hf,
+                "ctc_forced_aligner": mock_aligner,
+            },
+        ):
+            lyrics, words = _align_known_lyrics(Path("/tmp/vocals.wav"), document, config)
+
+        self.assertEqual(len(lyrics["lines"]), 1)
+        self.assertEqual(lyrics["lines"][0]["words"][0]["text"], "Hello")
+
+    def test_is_alignment_healthy_validation(self) -> None:
+        # Empty lines
+        self.assertFalse(_is_alignment_healthy([]))
+
+        # Invalid line without words
+        self.assertFalse(_is_alignment_healthy([{"text": "hi", "start_ms": 100, "end_ms": 200, "words": []}]))
+
+        # Invalid timing: end <= start
+        bad_timing_line = {
+            "text": "hi",
+            "start_ms": 500,
+            "end_ms": 400,
+            "words": [{"text": "hi", "start_ms": 500, "end_ms": 400, "confidence": 0.9}],
+        }
+        self.assertFalse(_is_alignment_healthy([bad_timing_line]))
+
+        # Normal healthy line
+        healthy_line = {
+            "text": "Hello world",
+            "start_ms": 1000,
+            "end_ms": 2500,
+            "words": [
+                {"text": "Hello ", "start_ms": 1000, "end_ms": 1700, "confidence": 0.85},
+                {"text": "world", "start_ms": 1750, "end_ms": 2500, "confidence": 0.90},
+            ],
+        }
+        self.assertTrue(_is_alignment_healthy([healthy_line]))
+
+        # Squashed line anomaly: 3 words in 100ms with low confidence
+        squashed_line = {
+            "text": "one two three",
+            "start_ms": 1000,
+            "end_ms": 1100,
+            "words": [
+                {"text": "one ", "start_ms": 1000, "end_ms": 1030, "confidence": 0.01},
+                {"text": "two ", "start_ms": 1030, "end_ms": 1060, "confidence": 0.01},
+                {"text": "three", "start_ms": 1060, "end_ms": 1100, "confidence": 0.01},
+            ],
+        }
+        self.assertFalse(_is_alignment_healthy([squashed_line]))
+
+        # Reference drift anomaly: drifting by > 30s
+        raw_ref = [{"text": "Verse", "start_ms": 1000, "end_ms": 3000}]
+        drifting_line = {
+            "text": "Verse",
+            "start_ms": 35000,
+            "end_ms": 37000,
+            "words": [
+                {"text": "Verse", "start_ms": 35000, "end_ms": 37000, "confidence": 0.8},
+            ],
+        }
+        self.assertFalse(_is_alignment_healthy([drifting_line], raw_ref))
+
+    def test_group_lines_into_macro_sections(self) -> None:
+        self.assertEqual(_group_lines_into_macro_sections([]), [])
+
+        lines = [
+            ({"start_ms": 1000, "end_ms": 3000, "text": "Line 1"}, [{"text": "Line"}, {"text": "1"}]),
+            ({"start_ms": 3500, "end_ms": 5500, "text": "Line 2"}, [{"text": "Line"}, {"text": "2"}]),
+            # Gap of 14.5s (20000 - 5500)
+            ({"start_ms": 20000, "end_ms": 23000, "text": "Line 3"}, [{"text": "Line"}, {"text": "3"}]),
+        ]
+        sections = _group_lines_into_macro_sections(lines, gap_threshold_sec=6.0)
+        self.assertEqual(len(sections), 2)
+        self.assertEqual(len(sections[0]), 2)
+        self.assertEqual(sections[0][0][0]["text"], "Line 1")
+        self.assertEqual(sections[0][1][0]["text"], "Line 2")
+        self.assertEqual(len(sections[1]), 1)
+        self.assertEqual(sections[1][0][0]["text"], "Line 3")
 
 
 class RenderVideoTests(unittest.TestCase):

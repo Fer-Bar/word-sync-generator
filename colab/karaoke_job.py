@@ -504,9 +504,7 @@ def _lrclib_candidate_is_safe(
     norm_cand_track = _normalize_text(candidate_track)
 
     title_ratio_full = SequenceMatcher(None, norm_source_track, norm_cand_track).ratio()
-    title_ratio_base = (
-        SequenceMatcher(None, source_base, cand_base).ratio() if source_base and cand_base else 0.0
-    )
+    title_ratio_base = SequenceMatcher(None, source_base, cand_base).ratio() if source_base and cand_base else 0.0
 
     title_match = (
         (source_base and cand_base and source_base == cand_base)
@@ -589,9 +587,7 @@ def _lrclib_match_score(
             artist_score = 1.0
         else:
             ratio_full = SequenceMatcher(None, norm_artist, norm_cand_artist).ratio()
-            ratio_primary = (
-                SequenceMatcher(None, norm_primary, norm_cand_artist).ratio() if norm_primary else 0.0
-            )
+            ratio_primary = SequenceMatcher(None, norm_primary, norm_cand_artist).ratio() if norm_primary else 0.0
             artist_score = max(ratio_full, ratio_primary)
 
     duration_score = 0.0
@@ -674,9 +670,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             if isinstance(value, dict) and _lrclib_candidate_is_safe(
                 value, track=track, artist=artist, duration=duration
             ):
-                score = _lrclib_match_score(
-                    value, metadata, track=track, artist=artist, duration=duration
-                )
+                score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
                 LOGGER.info("LRCLIB selected id=%s score=%.2f via get-exact", value.get("id"), score)
                 return value
         except OSError as error:
@@ -701,12 +695,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             if isinstance(value, dict) and _lrclib_candidate_is_safe(
                 value, track=track, artist=artist, duration=duration
             ):
-                score = _lrclib_match_score(
-                    value, metadata, track=track, artist=artist, duration=duration
-                )
-                LOGGER.info(
-                    "LRCLIB selected id=%s score=%.2f via get-without-album", value.get("id"), score
-                )
+                score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
+                LOGGER.info("LRCLIB selected id=%s score=%.2f via get-without-album", value.get("id"), score)
                 return value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 2 failed: %s", error)
@@ -730,12 +720,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             if isinstance(value, dict) and _lrclib_candidate_is_safe(
                 value, track=track, artist=artist, duration=duration
             ):
-                score = _lrclib_match_score(
-                    value, metadata, track=track, artist=artist, duration=duration
-                )
-                LOGGER.info(
-                    "LRCLIB selected id=%s score=%.2f via get-primary-artist", value.get("id"), score
-                )
+                score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
+                LOGGER.info("LRCLIB selected id=%s score=%.2f via get-primary-artist", value.get("id"), score)
                 return value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 3 failed: %s", error)
@@ -775,16 +761,10 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         if safe_candidates:
             selected = max(
                 safe_candidates,
-                key=lambda c: _lrclib_match_score(
-                    c, metadata, track=track, artist=artist, duration=duration
-                ),
+                key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
             )
-            score = _lrclib_match_score(
-                selected, metadata, track=track, artist=artist, duration=duration
-            )
-            LOGGER.info(
-                "LRCLIB selected id=%s score=%.2f via structured-search", selected.get("id"), score
-            )
+            score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
+            LOGGER.info("LRCLIB selected id=%s score=%.2f via structured-search", selected.get("id"), score)
             return selected
 
     # --- Tier 5: Fallback q= search ---
@@ -819,13 +799,9 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         if safe_candidates:
             selected = max(
                 safe_candidates,
-                key=lambda c: _lrclib_match_score(
-                    c, metadata, track=track, artist=artist, duration=duration
-                ),
+                key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
             )
-            score = _lrclib_match_score(
-                selected, metadata, track=track, artist=artist, duration=duration
-            )
+            score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
             LOGGER.info("LRCLIB selected id=%s score=%.2f via q-search", selected.get("id"), score)
             return selected
 
@@ -866,6 +842,41 @@ def _lrclib_request(path: str, max_retries: int = 2) -> Any:
             raise OSError(str(error)) from error
 
 
+def _parse_synced_lyrics(synced_source: str, duration_ms: int | None = None) -> list[dict[str, Any]]:
+    pattern = re.compile(r"^\[(?P<min>\d{1,3}):(?P<sec>\d{2})(?:\.(?P<msec>\d{2,3}))?\]\s*(?P<text>.*)$")
+    raw_entries: list[tuple[int, str]] = []
+    for raw_line in synced_source.splitlines():
+        line_str = raw_line.strip()
+        if not line_str:
+            continue
+        m = pattern.match(line_str)
+        if not m:
+            continue
+        minutes = int(m.group("min"))
+        seconds = int(m.group("sec"))
+        sub = m.group("msec") or "0"
+        ms = int(sub) * 10 if len(sub) == 2 else int(sub)
+        time_ms = (minutes * 60 + seconds) * 1000 + ms
+        text = m.group("text").strip()
+        raw_entries.append((time_ms, text))
+
+    lines: list[dict[str, Any]] = []
+    for i, (t_ms, text) in enumerate(raw_entries):
+        if not text:
+            continue
+        end_ms = None
+        for next_t_ms, _ in raw_entries[i + 1 :]:
+            end_ms = next_t_ms
+            break
+        if end_ms is None or end_ms <= t_ms:
+            if duration_ms and duration_ms > t_ms:
+                end_ms = min(t_ms + 8000, duration_ms)
+            else:
+                end_ms = t_ms + 4000
+        lines.append({"text": text, "start_ms": t_ms, "end_ms": end_ms})
+    return lines
+
+
 def _lyrics_document_from_record(
     record: dict[str, Any], metadata: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -886,9 +897,7 @@ def _lyrics_document_from_record(
             has_text_lines = (
                 isinstance(raw_lines, list)
                 and raw_lines
-                and any(
-                    isinstance(line, dict) and str(line.get("text") or "").strip() for line in raw_lines
-                )
+                and any(isinstance(line, dict) and str(line.get("text") or "").strip() for line in raw_lines)
             )
             if has_text_lines:
                 document.setdefault("version", "1.0")
@@ -904,11 +913,12 @@ def _lyrics_document_from_record(
 
     synced_source = record.get("syncedLyrics")
     if isinstance(synced_source, str) and synced_source.strip():
-        lines = []
-        for raw_line in synced_source.splitlines():
-            text = re.sub(r"^\[\d{1,3}:\d{2}(?:\.\d{2,3})?\]\s*", "", raw_line).strip()
-            if text:
-                lines.append({"text": text})
+        duration_ms = (
+            round(float(metadata["duration"]) * 1000)
+            if isinstance(metadata.get("duration"), int | float) and metadata["duration"]
+            else None
+        )
+        lines = _parse_synced_lyrics(synced_source, duration_ms)
         if lines:
             return {
                 "version": "1.0",
@@ -917,7 +927,7 @@ def _lyrics_document_from_record(
                     "artist": record.get("artistName") or metadata.get("artist"),
                     "album": record.get("albumName") or metadata.get("album"),
                     "language": config["language"] if config["language"] != "auto" else metadata.get("language"),
-                    "duration_ms": round(float(metadata["duration"]) * 1000),
+                    "duration_ms": duration_ms or 0,
                 },
                 "lines": lines,
             }
@@ -1029,6 +1039,194 @@ def _alignment_units(text: str, language: str) -> list[str]:
     return normalized.split()
 
 
+def _is_alignment_healthy(
+    output_lines: list[dict[str, Any]],
+    raw_lines: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Validate forced alignment quality and detect acoustic trellis collapse or severe drift."""
+    if not output_lines:
+        return False
+
+    for line in output_lines:
+        words = line.get("words")
+        if not words or not isinstance(words, list):
+            return False
+        start_ms = line.get("start_ms")
+        end_ms = line.get("end_ms")
+        if start_ms is None or end_ms is None or end_ms <= start_ms:
+            return False
+
+    squashed_consecutive = 0
+    for line in output_lines:
+        words = line["words"]
+        line_duration_ms = line["end_ms"] - line["start_ms"]
+        word_count = len(words)
+        avg_word_dur_ms = line_duration_ms / max(1, word_count)
+        avg_conf = sum(w.get("confidence", 0.0) for w in words) / max(1, word_count)
+
+        if word_count >= 3 and avg_word_dur_ms < 50 and avg_conf < 0.05:
+            LOGGER.warning("Alignment anomaly: line squashed into <50ms/word with low confidence (%.3f)", avg_conf)
+            return False
+
+        if avg_word_dur_ms < 85 and avg_conf < 0.15:
+            squashed_consecutive += 1
+            if squashed_consecutive >= 2:
+                LOGGER.warning(
+                    "Alignment anomaly: consecutive squashed lines with low confidence (<85ms/word, %.3f)",
+                    avg_conf,
+                )
+                return False
+        else:
+            squashed_consecutive = 0
+
+    if raw_lines and len(raw_lines) == len(output_lines):
+        severe_drift_count = 0
+        for raw_line, out_line in zip(raw_lines, output_lines, strict=False):
+            raw_start_ms = raw_line.get("start_ms")
+            if not isinstance(raw_start_ms, int | float) or raw_start_ms <= 0:
+                continue
+            aligned_start_ms = out_line["start_ms"]
+            drift_sec = abs(aligned_start_ms - raw_start_ms) / 1000.0
+            words = out_line.get("words", [])
+            avg_conf = sum(w.get("confidence", 0.0) for w in words) / max(1, len(words)) if words else 0.0
+
+            if drift_sec > 30.0:
+                LOGGER.warning(
+                    "Alignment anomaly: catastrophic drift (%.1fs) on line %r",
+                    drift_sec,
+                    out_line.get("text"),
+                )
+                return False
+
+            if drift_sec > 12.0 and avg_conf < 0.20:
+                LOGGER.warning(
+                    "Alignment anomaly: drift (%.1fs) with low confidence (%.3f) on line %r",
+                    drift_sec,
+                    avg_conf,
+                    out_line.get("text"),
+                )
+                return False
+
+            if drift_sec > 15.0:
+                severe_drift_count += 1
+                if severe_drift_count >= 2:
+                    LOGGER.warning("Alignment anomaly: multiple lines (>2) drifting >15s from reference")
+                    return False
+
+    return True
+
+
+def _group_lines_into_macro_sections(
+    tokenized_lines: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    gap_threshold_sec: float = 6.0,
+) -> list[list[tuple[dict[str, Any], list[dict[str, Any]]]]]:
+    """Partition lyric lines into macro-sections bounded by long musical gaps/solos."""
+    if not tokenized_lines:
+        return []
+
+    sections: list[list[tuple[dict[str, Any], list[dict[str, Any]]]]] = []
+    current_section: list[tuple[dict[str, Any], list[dict[str, Any]]]] = [tokenized_lines[0]]
+
+    for i in range(len(tokenized_lines) - 1):
+        curr_raw, curr_tokens = tokenized_lines[i]
+        next_raw, _ = tokenized_lines[i + 1]
+
+        curr_start_sec = float(curr_raw.get("start_ms", 0)) / 1000.0
+        next_start_sec = float(next_raw.get("start_ms", 0)) / 1000.0
+
+        curr_raw_end = (
+            float(curr_raw["end_ms"]) / 1000.0
+            if curr_raw.get("end_ms") is not None and curr_raw["end_ms"] > curr_raw.get("start_ms", 0)
+            else curr_start_sec + 4.0
+        )
+        est_singing_duration = max(2.5, min(8.0, len(curr_tokens) * 0.6 + 1.0))
+        est_curr_end = min(curr_raw_end, curr_start_sec + est_singing_duration)
+
+        gap = next_start_sec - est_curr_end
+        if gap >= gap_threshold_sec and next_start_sec > curr_start_sec:
+            sections.append(current_section)
+            current_section = [tokenized_lines[i + 1]]
+        else:
+            current_section.append(tokenized_lines[i + 1])
+
+    if current_section:
+        sections.append(current_section)
+
+    return sections
+
+
+def _align_tokenized_lines(
+    *,
+    model: Any,
+    tokenizer: Any,
+    waveform: Any,
+    tokenized_lines: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    language: str,
+    character_alignment: bool,
+    generate_emissions: Any,
+    preprocess_text: Any,
+    get_alignments: Any,
+    get_spans: Any,
+    postprocess_results: Any,
+    time_offset_sec: float = 0.0,
+    batch_size: int = 4,
+) -> list[dict[str, Any]]:
+    """Execute CTC forced alignment across tokenized lines against a waveform."""
+    flat_tokens = [token for _, tokens in tokenized_lines for token in tokens]
+    alignment_units = [unit for token in flat_tokens for unit in token["alignment_units"]]
+    if not alignment_units:
+        return []
+
+    emissions, stride = generate_emissions(model, waveform, batch_size=batch_size)
+    alignment_text = "".join(alignment_units) if character_alignment else " ".join(alignment_units)
+    tokens_starred, text_starred = preprocess_text(
+        alignment_text,
+        romanize=True,
+        language=language,
+        split_size="char" if character_alignment else "word",
+        star_frequency="segment",
+    )
+    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
+    spans = get_spans(tokens_starred, segments, blank_token)
+    aligned = postprocess_results(text_starred, spans, stride, scores)
+    if len(aligned) != len(alignment_units):
+        raise ValueError(f"CTC aligned {len(aligned)} units but expected {len(alignment_units)}")
+
+    offset_ms = round(time_offset_sec * 1000)
+    output_lines: list[dict[str, Any]] = []
+    alignment_cursor = 0
+    for raw_line, tokens in tokenized_lines:
+        words = []
+        for index, token in enumerate(tokens):
+            unit_count = len(token["alignment_units"])
+            token_timings = aligned[alignment_cursor : alignment_cursor + unit_count]
+            alignment_cursor += unit_count
+            confidences = [max(0.0, min(1.0, math.exp(float(timing["score"])))) for timing in token_timings]
+            word_start = round(float(token_timings[0]["start"]) * 1000) + offset_ms
+            word_end = round(float(token_timings[-1]["end"]) * 1000) + offset_ms
+            word = {
+                "text": token["text"] if character_alignment or index + 1 == len(tokens) else f"{token['text']} ",
+                "start_ms": word_start,
+                "end_ms": max(word_start + 20, word_end),
+                "confidence": round(sum(confidences) / len(confidences), 4),
+                "agent": token["agent"],
+            }
+            if token.get("isBackground"):
+                word["isBackground"] = True
+            words.append(word)
+        output_line = {
+            "text": raw_line["text"],
+            "words": words,
+            "start_ms": min(word["start_ms"] for word in words),
+            "end_ms": max(word["end_ms"] for word in words),
+            "agent": raw_line.get("agent") or "v1",
+        }
+        if raw_line.get("isBackground") is True:
+            output_line["isBackground"] = True
+        output_lines.append(output_line)
+    return output_lines
+
+
 def _align_known_lyrics(
     vocals_path: Path, document: dict[str, Any], config: dict[str, Any]
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1072,51 +1270,103 @@ def _align_known_lyrics(
     )
     model, tokenizer = load_alignment_model(device, model_path=model_path, dtype=dtype)
     waveform = load_audio(str(vocals_path), model.dtype, model.device)
-    emissions, stride = generate_emissions(model, waveform, batch_size=4)
-    alignment_text = "".join(alignment_units) if character_alignment else " ".join(alignment_units)
-    tokens_starred, text_starred = preprocess_text(
-        alignment_text,
-        romanize=True,
-        language=language,
-        split_size="char" if character_alignment else "word",
-        star_frequency="segment",
+
+    has_line_timestamps = any(
+        isinstance(raw_line.get("start_ms"), int | float) and raw_line["start_ms"] > 0
+        for raw_line, _ in tokenized_lines
     )
-    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
-    spans = get_spans(tokens_starred, segments, blank_token)
-    aligned = postprocess_results(text_starred, spans, stride, scores)
-    if len(aligned) != len(alignment_units):
-        raise ValueError(f"CTC aligned {len(aligned)} units but expected {len(alignment_units)}")
 
     metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
-    output_lines = []
-    alignment_cursor = 0
-    for raw_line, tokens in tokenized_lines:
-        words = []
-        for index, token in enumerate(tokens):
-            unit_count = len(token["alignment_units"])
-            token_timings = aligned[alignment_cursor : alignment_cursor + unit_count]
-            alignment_cursor += unit_count
-            confidences = [max(0.0, min(1.0, math.exp(float(timing["score"])))) for timing in token_timings]
-            word = {
-                "text": token["text"] if character_alignment or index + 1 == len(tokens) else f"{token['text']} ",
-                "start_ms": round(float(token_timings[0]["start"]) * 1000),
-                "end_ms": round(float(token_timings[-1]["end"]) * 1000),
-                "confidence": round(sum(confidences) / len(confidences), 4),
-                "agent": token["agent"],
-            }
-            if token.get("isBackground"):
-                word["isBackground"] = True
-            words.append(word)
-        output_line = {
-            "text": raw_line["text"],
-            "words": words,
-            "start_ms": min(word["start_ms"] for word in words),
-            "end_ms": max(word["end_ms"] for word in words),
-            "agent": raw_line.get("agent") or "v1",
-        }
-        if raw_line.get("isBackground") is True:
-            output_line["isBackground"] = True
-        output_lines.append(output_line)
+    raw_lines_for_check = [line for line, _ in tokenized_lines]
+    output_lines: list[dict[str, Any]] = []
+
+    # --- Tier 1: Global Continuous MMS CTC Alignment (Quality-First) ---
+    global_succeeded = False
+    try:
+        candidate_lines = _align_tokenized_lines(
+            model=model,
+            tokenizer=tokenizer,
+            waveform=waveform,
+            tokenized_lines=tokenized_lines,
+            language=language,
+            character_alignment=character_alignment,
+            generate_emissions=generate_emissions,
+            preprocess_text=preprocess_text,
+            get_alignments=get_alignments,
+            get_spans=get_spans,
+            postprocess_results=postprocess_results,
+            time_offset_sec=0.0,
+            batch_size=4,
+        )
+        if _is_alignment_healthy(candidate_lines, raw_lines_for_check):
+            output_lines = candidate_lines
+            global_succeeded = True
+            LOGGER.info("Global continuous CTC alignment succeeded with healthy metrics")
+        else:
+            LOGGER.warning("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
+    except Exception as error:
+        LOGGER.warning("Global continuous CTC alignment failed: %s", error)
+
+    # --- Tier 2: Anchor-Guided Macro-Section Alignment (Recovery for long instrumental solos) ---
+    if not global_succeeded:
+        if has_line_timestamps:
+            LOGGER.info("Attempting Tier 2 anchor-guided macro-section alignment")
+            sections = _group_lines_into_macro_sections(tokenized_lines, gap_threshold_sec=6.0)
+            sample_rate = 16000
+            total_samples = waveform.shape[-1]
+            audio_duration_sec = total_samples / sample_rate
+            macro_output_lines = []
+            try:
+                for section in sections:
+                    first_raw, _ = section[0]
+                    last_raw, last_tokens = section[-1]
+                    sec_start_ref = float(first_raw.get("start_ms", 0)) / 1000.0
+                    sec_end_ref = (
+                        float(last_raw.get("end_ms", 0)) / 1000.0
+                        if last_raw.get("end_ms") is not None
+                        else float(last_raw.get("start_ms", 0)) / 1000.0 + 4.0
+                    )
+                    last_singing_est = max(3.0, min(10.0, len(last_tokens) * 0.7 + 1.5))
+                    effective_sec_end = min(sec_end_ref, float(last_raw.get("start_ms", 0)) / 1000.0 + last_singing_est)
+
+                    clip_start_sec = max(0.0, sec_start_ref - 1.5)
+                    clip_end_sec = min(audio_duration_sec, effective_sec_end + 2.0)
+                    if clip_end_sec <= clip_start_sec:
+                        clip_end_sec = min(audio_duration_sec, clip_start_sec + 5.0)
+
+                    start_sample = int(clip_start_sec * sample_rate)
+                    end_sample = min(total_samples, int(clip_end_sec * sample_rate))
+                    if end_sample <= start_sample:
+                        end_sample = min(total_samples, start_sample + sample_rate)
+
+                    section_waveform = waveform[..., start_sample:end_sample]
+                    aligned_section = _align_tokenized_lines(
+                        model=model,
+                        tokenizer=tokenizer,
+                        waveform=section_waveform,
+                        tokenized_lines=section,
+                        language=language,
+                        character_alignment=character_alignment,
+                        generate_emissions=generate_emissions,
+                        preprocess_text=preprocess_text,
+                        get_alignments=get_alignments,
+                        get_spans=get_spans,
+                        postprocess_results=postprocess_results,
+                        time_offset_sec=clip_start_sec,
+                        batch_size=1,
+                    )
+                    macro_output_lines.extend(aligned_section)
+
+                if _is_alignment_healthy(macro_output_lines, raw_lines_for_check):
+                    output_lines = macro_output_lines
+                    LOGGER.info("Tier 2 macro-section alignment succeeded with healthy metrics")
+                else:
+                    raise RuntimeError("Tier 2 macro-section alignment failed health checks")
+            except Exception as error:
+                LOGGER.warning("Tier 2 macro-section alignment failed: %s", error)
+                raise RuntimeError(f"Forced alignment failed health verification: {error}") from error
+        else:
+            raise RuntimeError("Global alignment unhealthy and no reference timestamps available for macro-sections")
     lyrics_module = _load_lyrics_module()
     sanitized_lines = lyrics_module.sanitize_lyrics_lines(output_lines)
     lyrics = {"version": "1.0", "metadata": metadata, "lines": sanitized_lines}
