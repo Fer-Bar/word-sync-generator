@@ -1234,33 +1234,71 @@ HTML_PAGE = """<!DOCTYPE html>
 
       if (segments.length === 0) return;
 
-      // Find primary active segment
-      let activeIdx = segments.findIndex(
-        s => currentTime >= s.start - 0.35 && currentTime <= s.end + 0.35
-      );
-      if (activeIdx === -1) {
-        activeIdx = segments.findIndex(s => s.start > currentTime);
-        if (activeIdx === -1) activeIdx = segments.length - 1;
+      const slotOffset = Math.max(Math.round(style.font_size * style.line_gap_factor * 1.5), Math.round(H * 0.14));
+      const nominalSlideSec = 0.35;
+      const maxGapSec = 2.0;
+
+      // Build synchronized transition windows matching ASS generation
+      const transitions = [];
+      for (let i = 0; i < segments.length - 1; i++) {
+        const currEnd = segments[i].end;
+        const nextStart = segments[i + 1].start;
+        const gap = nextStart - currEnd;
+        if (gap >= maxGapSec) {
+          transitions.push({ connected: false, start: 0, end: 0, dur: nominalSlideSec });
+        } else if (gap >= nominalSlideSec) {
+          transitions.push({
+            connected: true,
+            start: nextStart - nominalSlideSec,
+            end: nextStart,
+            dur: nominalSlideSec,
+          });
+        } else if (gap >= 0.15) {
+          transitions.push({ connected: true, start: currEnd, end: nextStart, dur: nextStart - currEnd });
+        } else {
+          const dur = Math.max(0.15, Math.min(nominalSlideSec, 0.25));
+          transitions.push({ connected: true, start: Math.max(0, nextStart - dur), end: nextStart, dur: dur });
+        }
       }
 
-      const slotOffset = Math.max(Math.round(style.font_size * style.line_gap_factor * 1.5), Math.round(H * 0.14));
+      // Find anchor segment and continuous scroll offset [0..1]
+      let anchorIdx = 0;
+      let scrollOffset = 0;
 
-      // Determine items to draw: past (-1), active (0), upcoming (+1)
+      for (let i = 0; i < segments.length; i++) {
+        if (i < segments.length - 1 && transitions[i].connected) {
+          const trans = transitions[i];
+          if (currentTime >= trans.start && currentTime < trans.end) {
+            anchorIdx = i;
+            scrollOffset = (currentTime - trans.start) / Math.max(0.001, trans.end - trans.start);
+            break;
+          }
+        }
+        if (currentTime < segments[i].end + (i < segments.length - 1 ? 0 : nominalSlideSec)) {
+          anchorIdx = i;
+          scrollOffset = 0;
+          break;
+        }
+        anchorIdx = i;
+      }
+
+      // Collect slots to render with smooth offsets
       const renderSlots = [];
-      if (activeIdx > 0) renderSlots.push({ seg: segments[activeIdx - 1], slot: -1 });
-      renderSlots.push({ seg: segments[activeIdx], slot: 0 });
-      if (activeIdx + 1 < segments.length) renderSlots.push({ seg: segments[activeIdx + 1], slot: 1 });
+      if (anchorIdx > 0) renderSlots.push({ seg: segments[anchorIdx - 1], baseSlot: -1 });
+      renderSlots.push({ seg: segments[anchorIdx], baseSlot: 0 });
+      if (anchorIdx + 1 < segments.length) renderSlots.push({ seg: segments[anchorIdx + 1], baseSlot: 1 });
+      if (scrollOffset > 0 && anchorIdx + 2 < segments.length) {
+        renderSlots.push({ seg: segments[anchorIdx + 2], baseSlot: 2 });
+      }
 
       // Compute startY based on alignment and margin_v
       let startY;
       if (style.alignment === 2) {
         // Bottom alignment (Karaoke Standard)
-        const bottomOffset = renderSlots.length > 1 && renderSlots[renderSlots.length - 1].slot === 1 ? slotOffset : 0;
-        startY = H - style.margin_v - bottomOffset - Math.round(style.font_size * 0.6);
+        startY = H - style.margin_v - slotOffset - Math.round(style.font_size * 0.6);
       } else if (style.alignment === 8) {
         // Top alignment
-        const topOffset = renderSlots.length > 1 && renderSlots[0].slot === -1 ? slotOffset : 0;
-        startY = style.margin_v + topOffset + Math.round(style.font_size * 0.6);
+        startY = style.margin_v + slotOffset + Math.round(style.font_size * 0.6);
       } else {
         // Center alignment
         startY = Math.round(H / 2);
@@ -1269,7 +1307,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const maxAllowedWidth = Math.max(200, W - (style.margin_h * 2));
       const paletteList = state?.recommended_palettes || DEFAULT_PALETTES;
 
-      renderSlots.forEach(({ seg, slot }) => {
+      renderSlots.forEach(({ seg, baseSlot }) => {
         const isBg = !!seg.isBackground;
         const segAgent = seg.agent || '';
         let pCol = style.primary_color;
@@ -1292,7 +1330,10 @@ HTML_PAGE = """<!DOCTYPE html>
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        const y = startY + slot * slotOffset;
+        // Continuous smooth vertical position
+        const y = startY + (baseSlot - scrollOffset) * slotOffset;
+        if (y < -segFontSize * 2 || y > H + segFontSize * 2) return;
+
         let fullText = seg.text || '';
         if (isBg) {
           if (!fullText.startsWith('(')) fullText = `(${fullText}`;
@@ -1312,10 +1353,12 @@ HTML_PAGE = """<!DOCTYPE html>
         const words = seg.words || [{ start: seg.start, end: seg.end, text: fullText }];
         let currentX = (W / 2) - (totalLineWidth / 2);
 
+        // Continuous alpha interpolation
+        const distFromCenter = Math.abs(baseSlot - scrollOffset);
+        const lineAlpha = Math.max(0.1, Math.min(1.0, 1.0 - (distFromCenter * 0.55)));
+
         ctx.save();
-        if (slot !== 0) {
-          ctx.globalAlpha = 0.45;
-        }
+        ctx.globalAlpha = lineAlpha;
 
         // Draw shadow
         if (style.shadow_depth > 0) {
@@ -1350,8 +1393,8 @@ HTML_PAGE = """<!DOCTYPE html>
           ctx.fillStyle = wordPCol;
           ctx.fillText(wordText, wordCenterX, y);
 
-          // Active karaoke highlight wipe (only for slot 0)
-          if (slot === 0 && currentTime >= word.start) {
+          // Active karaoke highlight wipe
+          if (currentTime >= word.start) {
             ctx.save();
             let progress = 1.0;
             if (currentTime < word.end && word.end > word.start) {
