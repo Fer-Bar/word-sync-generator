@@ -51,10 +51,44 @@ class AssLayoutTests(unittest.TestCase):
         self.assertIn(r"{\an5\pos(960,540)\fad(150,0)}{\k35}{\kf200}First line of the song", content)
         # Line 2 upcoming preview at bottom slot (Y=691)
         self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\fad(150,0)}Second line of the song", content)
-        # Line 1 glides up to top slot (Y=389) when done
-        self.assertIn(r"\move(960,540,960,389,0,350)\t(0,350,\alpha&H80&)", content)
-        # Line 2 glides up to center slot (Y=540) when active
-        self.assertIn(r"\move(960,691,960,540,0,350)\t(0,350,\alpha&H00&)", content)
+        # Synchronized transition during the 20cs (200ms) gap from 3.00 to 3.20:
+        # Line 1 glides up to top slot (Y=389) over 200ms
+        self.assertIn(r"\move(960,540,960,389,0,200)\t(0,200,\alpha&H80&)", content)
+        # Line 2 glides up to center slot (Y=540) over the exact same 200ms
+        self.assertIn(r"\move(960,691,960,540,0,200)\t(0,200,\alpha&H00&)", content)
+
+    def test_teleprompter_large_gap_glide_synchrony(self) -> None:
+        """Verify lines with ample gap (>0.35s) glide smoothly over nominal slide duration (350ms)."""
+        transcript = {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "First line",
+                    "words": [{"start": 1.0, "end": 3.0, "text": "First line"}],
+                },
+                {
+                    "start": 4.0,
+                    "end": 6.0,
+                    "text": "Second line",
+                    "words": [{"start": 4.0, "end": 6.0, "text": "Second line"}],
+                },
+            ]
+        }
+
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24})
+
+        # Gap is 1.0s (> 0.35s nominal slide). Transition happens at [3.65, 4.00] (duration 350ms):
+        self.assertIn(
+            r"Dialogue: 0,0:00:03.65,0:00:04.85,Default,,0,0,0,,"
+            r"{\an5\move(960,540,960,389,0,350)\t(0,350,\alpha&H80&)\fad(0,150)}First line",
+            content,
+        )
+        self.assertIn(
+            r"Dialogue: 1,0:00:03.65,0:00:06.00,Default,,0,0,0,,"
+            r"{\an5\move(960,691,960,540,0,350)\t(0,350,\alpha&H00&)}{\k35}{\kf200}Second line",
+            content,
+        )
 
     def test_consecutive_singers_receive_distinct_styles(self) -> None:
         """Verify verse 1 (Singer 1) and verse 2 (Singer 2) receive separate ASS styles with respective colors."""
@@ -98,8 +132,8 @@ class AssLayoutTests(unittest.TestCase):
 
         self.assertIn("Style: Agent_v1,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", content)
         self.assertIn("Style: Agent_v2,DejaVu Sans,64,&H00FFD700,&H00FFFFFF,", content)
-        self.assertIn("Dialogue: 1,0:00:09.65,0:00:30.35,Agent_v1,v1,", content)
-        self.assertIn("Dialogue: 1,0:00:39.65,0:01:00.35,Agent_v2,v2,", content)
+        self.assertIn("Dialogue: 1,0:00:09.65,0:00:30.00,Agent_v1,v1,", content)
+        self.assertIn("Dialogue: 1,0:00:39.65,0:01:00.00,Agent_v2,v2,", content)
 
     def test_simultaneous_main_and_background_vocals(self) -> None:
         """Verify simultaneous main and background vocal lines produce distinct dialogue lanes and styling."""
@@ -193,7 +227,41 @@ class AssLayoutTests(unittest.TestCase):
         # Lead style has primary_color (&H0000D7FF in BGR)
         self.assertIn("Style: Agent_v1,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", content)
 
+    def test_teleprompter_zero_gap_collision_avoidance(self) -> None:
+        """Verify back-to-back lines with 0s gap execute synchronized moves without overlapping."""
+        transcript = {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "Fast line one",
+                    "words": [{"start": 1.0, "end": 2.0, "text": "Fast line one"}],
+                },
+                {
+                    "start": 2.0,
+                    "end": 3.0,
+                    "text": "Fast line two",
+                    "words": [{"start": 2.0, "end": 3.0, "text": "Fast line two"}],
+                },
+            ]
+        }
+
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24})
+
+        # Transition happens at 2.00 - 0.25 = 1.75 with 250ms duration (dur=25):
+        # Line 1 moves Center->Top from 1.75 to 2.00
+        self.assertIn(
+            r"Dialogue: 0,0:00:01.75,0:00:02.95,Default,,0,0,0,,"
+            r"{\an5\move(960,540,960,389,0,250)\t(0,250,\alpha&H80&)\fad(0,150)}Fast line one",
+            content,
+        )
+        # Line 2 moves Bottom->Center from 1.75 to 2.00
+        self.assertIn(
+            r"Dialogue: 1,0:00:01.75,0:00:03.00,Default,,0,0,0,,"
+            r"{\an5\move(960,691,960,540,0,250)\t(0,250,\alpha&H00&)}{\k25}{\kf100}Fast line two",
+            content,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

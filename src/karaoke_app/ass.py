@@ -284,38 +284,78 @@ def _build_teleprompter_dialogues(
     slot_offset = max(round(font_size * line_gap_factor * 1.5), round(height * 0.14))
     top_y = center_y - slot_offset
     bottom_y = center_y + slot_offset
-    slide_cs = 35
-    slide_ms = slide_cs * 10
+    nominal_slide_cs = 35
     max_gap_cs = 200
 
-    dialogue_lines: list[str] = []
     num_segments = len(valid_segments)
-
-    for i, seg in enumerate(valid_segments):
+    seg_timings: list[tuple[int, int]] = []
+    for seg in valid_segments:
         words = seg["words"]
         start_cs = min(_to_centiseconds(w["start"]) for w in words)
         end_cs = max(_to_centiseconds(w["end"]) for w in words)
+        seg_timings.append((start_cs, end_cs))
 
-        prev_seg = valid_segments[i - 1] if i > 0 else None
-        prev_end_cs = max(_to_centiseconds(w["end"]) for w in prev_seg["words"]) if prev_seg else None
-        has_prev = prev_seg is not None and prev_end_cs is not None and (start_cs - prev_end_cs) < max_gap_cs
+    # Precalculate synchronized transition windows between segment i and i+1
+    # trans_info[i] = (has_conn, trans_start_cs, trans_end_cs, duration_cs)
+    trans_info: list[tuple[bool, int, int, int]] = []
+    for i in range(num_segments - 1):
+        curr_start, curr_end = seg_timings[i]
+        next_start, next_end = seg_timings[i + 1]
+        gap_cs = next_start - curr_end
 
-        next_seg = valid_segments[i + 1] if i + 1 < num_segments else None
-        next_start_cs = min(_to_centiseconds(w["start"]) for w in next_seg["words"]) if next_seg else None
-        has_next = next_seg is not None and next_start_cs is not None and (next_start_cs - end_cs) < max_gap_cs
+        if gap_cs >= max_gap_cs:
+            # Long pause / silence: disconnected transition
+            trans_info.append((False, 0, 0, nominal_slide_cs))
+        else:
+            if gap_cs >= nominal_slide_cs:
+                t_end = next_start
+                t_start = max(0, next_start - nominal_slide_cs)
+                dur = nominal_slide_cs
+            elif gap_cs >= 15:
+                t_start = max(0, curr_end)
+                t_end = next_start
+                dur = t_end - t_start
+            else:
+                dur = max(15, min(nominal_slide_cs, 25))
+                t_end = next_start
+                t_start = max(0, next_start - dur)
+                dur = max(1, t_end - t_start)
+            trans_info.append((True, t_start, t_end, dur))
+
+    dialogue_lines: list[str] = []
+
+    for i, seg in enumerate(valid_segments):
+        start_cs, end_cs = seg_timings[i]
+
+        # Check incoming connection (from i-1 to i)
+        if i > 0 and trans_info[i - 1][0]:
+            has_prev_conn = True
+            _, entry_start, _, entry_dur = trans_info[i - 1]
+        else:
+            has_prev_conn = False
+            entry_dur = nominal_slide_cs
+            entry_start = max(0, start_cs - nominal_slide_cs)
+
+        # Check outgoing connection (from i to i+1)
+        if i < num_segments - 1 and trans_info[i][0]:
+            has_next_conn = True
+            _, exit_start, _, exit_dur = trans_info[i]
+        else:
+            has_next_conn = False
+            exit_dur = nominal_slide_cs
+            exit_start = end_cs
 
         agent = str(seg.get("agent") or "")
         is_bg = bool(seg.get("isBackground", False))
         style_name = _ass_style_name(agent, is_bg)
         actor_name = f"{agent}-bg" if is_bg and agent else "background" if is_bg else agent
-
         plain_text = _render_line_plain_text(seg)
 
         # 1. Upcoming preview (Bottom Slot)
-        if has_prev and prev_seg is not None:
-            prev_start_cs = min(_to_centiseconds(w["start"]) for w in prev_seg["words"])
+        if i > 0 and has_prev_conn:
+            prev_start_cs, _ = seg_timings[i - 1]
             preview_start = max(0, prev_start_cs)
-            preview_end = max(preview_start, start_cs - slide_cs)
+            preview_end = entry_start
             if preview_end > preview_start:
                 preview_tag = f"{{\\an5\\pos({center_x},{bottom_y})\\alpha&H80&\\fad(150,0)}}"
                 dialogue_lines.append(
@@ -324,22 +364,17 @@ def _build_teleprompter_dialogues(
                 )
 
         # 2. Active singing event (Transition from Bottom to Center + Karaoke highlight)
-        entry_start = max(0, start_cs - slide_cs) if has_prev else max(0, start_cs - 35)
-        if has_prev:
+        entry_ms = entry_dur * 10
+        if has_prev_conn:
             move_tag = (
-                f"{{\\an5\\move({center_x},{bottom_y},{center_x},{center_y},0,{slide_ms})"
-                f"\\t(0,{slide_ms},\\alpha&H00&)}}"
+                f"{{\\an5\\move({center_x},{bottom_y},{center_x},{center_y},0,{entry_ms})"
+                f"\\t(0,{entry_ms},\\alpha&H00&)}}"
             )
         else:
             move_tag = f"{{\\an5\\pos({center_x},{center_y})\\fad(150,0)}}"
 
-        if has_next and next_start_cs is not None:
-            active_end = max(end_cs, next_start_cs - slide_cs)
-        else:
-            active_end = end_cs + slide_cs
-
         karaoke_text, scheduled_end = _render_line_karaoke_text(seg, entry_start)
-        active_end = max(active_end, scheduled_end)
+        active_end = exit_start if has_next_conn else max(exit_start, scheduled_end)
 
         dialogue_lines.append(
             f"Dialogue: 1,{_ass_timestamp(entry_start)},{_ass_timestamp(active_end)},"
@@ -348,16 +383,17 @@ def _build_teleprompter_dialogues(
 
         # 3. Past history event (Transition from Center to Top Slot + Fade Out)
         past_start = active_end
-        if has_next and next_start_cs is not None:
-            next_end_cs = max(_to_centiseconds(w["end"]) for w in next_seg["words"])
-            past_end = min(past_start + 150, next_end_cs)
+        exit_ms = exit_dur * 10
+        if has_next_conn:
+            next_end_cs = seg_timings[i + 1][1]
+            past_end = min(past_start + 120, max(past_start + exit_dur + 20, next_end_cs))
         else:
-            past_end = past_start + 80
+            past_end = past_start + exit_dur + 40
 
         if past_end > past_start:
             past_tag = (
-                f"{{\\an5\\move({center_x},{center_y},{center_x},{top_y},0,{slide_ms})"
-                f"\\t(0,{slide_ms},\\alpha&H80&)\\fad(0,200)}}"
+                f"{{\\an5\\move({center_x},{center_y},{center_x},{top_y},0,{exit_ms})"
+                f"\\t(0,{exit_ms},\\alpha&H80&)\\fad(0,150)}}"
             )
             dialogue_lines.append(
                 f"Dialogue: 0,{_ass_timestamp(past_start)},{_ass_timestamp(past_end)},"
