@@ -300,6 +300,128 @@ class AssLayoutTests(unittest.TestCase):
         # Singer 2 preview line should use \1c&HFFE500& (the unsung color of v2)
         self.assertIn(r"{\an5\pos(960,691)\alpha&H80&\1c&HFFE500&\fad(150,0)}Singer two upcoming", content)
 
+    def test_lyrics_mode_uses_custom_lyrics_colors_with_progressive_fill(self) -> None:
+        """Verify mode=lyrics applies lyrics_colors without abrupt completed transitions."""
+        from karaoke_app.style import StyleConfig
+
+        transcript = {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "Hello world",
+                    "words": [
+                        {"start": 1.0, "end": 2.0, "text": "Hello"},
+                        {"start": 2.0, "end": 3.0, "text": "world"},
+                    ],
+                }
+            ]
+        }
+        style = StyleConfig.from_dict(
+            {
+                "primary_color": "#FFD700",
+                "highlight_color": "#FFFFFF",
+                "lyrics_colors": {
+                    "inactive": "#9A8F8B",
+                    "active": "#F4EEE6",
+                },
+            },
+            height=1080,
+        )
+
+        lyrics_ass = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="lyrics")
+        # In lyrics mode: Default style uses active (#F4EEE6 -> &H00E6EEF4) as PrimaryColour
+        # and inactive (#9A8F8B -> &H008B8F9A) as SecondaryColour
+        self.assertIn("Style: Default,DejaVu Sans,64,&H00E6EEF4,&H008B8F9A,", lyrics_ass)
+        # Words smoothly wipe using \kf without abrupt \t override jumps
+        self.assertIn(r"{\kf100}Hello", lyrics_ass)
+        self.assertIn(r"{\kf100}world", lyrics_ass)
+        self.assertNotIn(r"\1c&H", lyrics_ass)
+        self.assertNotIn(r"\t(", lyrics_ass)
+
+        # In karaoke mode: standard primary (#FFD700 -> &H0000D7FF) and highlight (#FFFFFF -> &H00FFFFFF) are preserved
+        karaoke_ass = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="karaoke")
+        self.assertIn("Style: Default,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", karaoke_ass)
+        self.assertNotIn(r"&H00E6EEF4", karaoke_ass)
+        self.assertNotIn(r"&H008B8F9A", karaoke_ass)
+
+    def test_long_lyrics_lines_uniform_font_and_dynamic_y_clearance(self) -> None:
+        """Verify long lyric lines maintain uniform font size (no fs overrides) and have non-overlapping Y clearance."""
+        import re
+
+        from karaoke_app.style import StyleConfig
+
+        long_line_1 = "Just tell me what you need, baby girl, I'll sail your seas, just meet me at the shore"
+        long_line_2 = "So move to Atlanta, fill up your planner, go and get your life on track"
+
+        transcript = {
+            "segments": [
+                {
+                    "start": 10.0,
+                    "end": 15.0,
+                    "text": "Short intro line",
+                    "words": [{"start": 10.0, "end": 15.0, "text": "Short intro line"}],
+                },
+                {
+                    "start": 15.0,
+                    "end": 20.0,
+                    "text": long_line_1,
+                    "words": [{"start": 15.0, "end": 20.0, "text": long_line_1}],
+                },
+                {
+                    "start": 20.0,
+                    "end": 25.0,
+                    "text": long_line_2,
+                    "words": [{"start": 20.0, "end": 25.0, "text": long_line_2}],
+                },
+            ]
+        }
+        style = StyleConfig.from_dict({"font_family": "Bebas Neue", "font_size": 96}, height=1080)
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="lyrics")
+
+        # Lines must NEVER have mismatched font sizes on the same page
+        self.assertNotIn(r"\fs", content)
+
+        # Parse Y coordinates from generated dialogues
+        dialogues = [line for line in content.splitlines() if line.startswith("Dialogue:")]
+        self.assertEqual(len(dialogues), 3)
+
+        y_coords = []
+        for d in dialogues:
+            pos_match = re.search(r"\\pos\((\d+),(\d+)\)", d)
+            self.assertIsNotNone(pos_match)
+            y = int(pos_match.group(2))
+            y_coords.append(y)
+
+        # Line 0 (1 visual line, ~104px), Line 1 (2 visual lines, ~208px), Line 2 (2 visual lines, ~208px)
+        # Verify distance between Line 0 and Line 1 centers provides positive clearance for 1-line and 2-line blocks
+        dist_0_1 = y_coords[1] - y_coords[0]
+        self.assertGreater(dist_0_1, (104 + 208) / 2)
+
+        # Verify distance between Line 1 and Line 2 centers provides positive clearance for two 2-line blocks
+        dist_1_2 = y_coords[2] - y_coords[1]
+        self.assertGreater(dist_1_2, (208 + 208) / 2)
+
+    def test_teleprompter_uniform_font_size(self) -> None:
+        """Verify teleprompter preserves uniform font size without adding fs overrides."""
+        from karaoke_app.style import StyleConfig
+
+        long_line = "Just tell me what you need, baby girl, I'll sail your seas, just meet me at the shore"
+        transcript = {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 5.0,
+                    "text": long_line,
+                    "words": [{"start": 1.0, "end": 5.0, "text": long_line}],
+                }
+            ]
+        }
+        style = StyleConfig.from_dict({"font_family": "Bebas Neue", "font_size": 96}, height=1080)
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="karaoke")
+
+        self.assertNotIn(r"\fs", content)
+
 
 if __name__ == "__main__":
     unittest.main()

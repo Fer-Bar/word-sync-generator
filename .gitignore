@@ -25,3 +25,4 @@ outputs/
 .uv-cache/
 frontend/node_modules/
 frontend/.astro/
+*:Zone.Identifier

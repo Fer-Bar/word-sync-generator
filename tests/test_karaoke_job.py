@@ -1015,6 +1015,146 @@ class RenderVideoTests(unittest.TestCase):
             self.assertEqual(Path(first_call_kwargs["ass_path"]).read_text(), "karaoke-scroll")
             self.assertEqual(Path(second_call_kwargs["ass_path"]).read_text(), "lyrics-static")
 
+    def test_run_installer_success(self) -> None:
+        import subprocess
+
+        from colab.karaoke_job import _run_installer
+
+        completed = subprocess.CompletedProcess(args=["dummy"], returncode=0, stdout="ok", stderr="")
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            res = _run_installer(["dummy", "arg"], label="Test tool")
+            self.assertEqual(res.returncode, 0)
+            mock_run.assert_called_once_with(["dummy", "arg"], check=True, capture_output=True, text=True)
+
+    def test_run_installer_failure_preserves_error_details(self) -> None:
+        import subprocess
+
+        from colab.karaoke_job import _run_installer
+
+        failed = subprocess.CalledProcessError(1, ["dummy"], output="out msg", stderr="err msg")
+        with patch("subprocess.run", side_effect=failed):
+            with self.assertRaises(RuntimeError) as ctx:
+                _run_installer(["dummy"], label="Playwright")
+            self.assertIn("Playwright installation failed", str(ctx.exception))
+            self.assertIn("err msg", str(ctx.exception))
+
+    def test_ensure_playwright_uses_uv_when_available(self) -> None:
+        import sys
+
+        from colab.karaoke_job import PLAYWRIGHT_PACKAGE, _ensure_playwright
+
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch("shutil.which", side_effect=lambda cmd: "/usr/bin/uv" if cmd == "uv" else None),
+            patch("colab.karaoke_job._run_installer") as mock_installer,
+        ):
+            _ensure_playwright()
+            self.assertEqual(mock_installer.call_count, 2)
+            self.assertEqual(
+                mock_installer.call_args_list[0].args[0],
+                ["uv", "pip", "install", "--system", PLAYWRIGHT_PACKAGE],
+            )
+            self.assertEqual(
+                mock_installer.call_args_list[1].args[0],
+                [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            )
+
+    def test_ensure_playwright_falls_back_to_pip_when_no_uv(self) -> None:
+        import sys
+
+        from colab.karaoke_job import PLAYWRIGHT_PACKAGE, _ensure_playwright
+
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch("shutil.which", return_value=None),
+            patch("colab.karaoke_job._run_installer") as mock_installer,
+        ):
+            _ensure_playwright()
+            self.assertEqual(mock_installer.call_count, 2)
+            self.assertEqual(
+                mock_installer.call_args_list[0].args[0],
+                [sys.executable, "-m", "pip", "install", PLAYWRIGHT_PACKAGE],
+            )
+            self.assertEqual(
+                mock_installer.call_args_list[1].args[0],
+                [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            )
+
+    def test_ensure_playwright_skips_package_install_when_already_present(self) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        from colab.karaoke_job import _ensure_playwright
+
+        with (
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+            patch("colab.karaoke_job._run_installer") as mock_installer,
+        ):
+            _ensure_playwright()
+            self.assertEqual(mock_installer.call_count, 1)
+            self.assertEqual(
+                mock_installer.call_args_list[0].args[0],
+                [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+            )
+
+    @patch("colab.karaoke_job._create_archive")
+    @patch("colab.karaoke_job._render_video")
+    @patch("colab.karaoke_job._extract_archive")
+    @patch("colab.karaoke_job._ensure_playwright")
+    @patch("colab.karaoke_job._probe_duration", return_value=60.0)
+    def test_render_existing_job_ensures_playwright_when_word_synced(
+        self,
+        mock_probe: Any,
+        mock_ensure_playwright: Any,
+        mock_extract: Any,
+        mock_render_video: Any,
+        mock_archive: Any,
+    ) -> None:
+        import json
+        from unittest.mock import MagicMock
+
+        from colab.karaoke_job import _render_existing_job
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir) / "render_job"
+            job_dir.mkdir(parents=True)
+            job_doc = {
+                "title": "My Track",
+                "media": {
+                    "instrumental_audio": "instrumental.flac",
+                    "original_audio": "original.flac",
+                },
+                "video": {"width": 1920, "height": 1080, "fps": 24},
+                "background": {"kind": "solid", "color": "#0B1020"},
+                "style": {"lyrics_effect": "word-synced"},
+            }
+            (job_dir / "job.json").write_text(json.dumps(job_doc))
+            (job_dir / "karaoke.ass").write_text("karaoke-scroll")
+            (job_dir / "instrumental.flac").write_text("")
+            (job_dir / "browser_lyrics.py").write_text("def render_bundled_overlay(*args, **kwargs): pass\n")
+
+            mock_module = MagicMock()
+            mock_module.render_bundled_overlay.return_value = None
+
+            with (
+                patch("colab.karaoke_job.WORK_DIR", Path(temp_dir)),
+                patch("colab.karaoke_job.RENDER_JOB_PATH", Path(temp_dir) / "job.zip"),
+                patch("importlib.util.spec_from_file_location") as mock_spec_from_file,
+                patch("importlib.util.module_from_spec", return_value=mock_module),
+            ):
+                mock_spec = MagicMock()
+                mock_spec.loader = MagicMock()
+                mock_spec_from_file.return_value = mock_spec
+
+                Path(temp_dir, "job.zip").write_text("")
+                config = {
+                    "mode": "karaoke",
+                    "archive_path": str(Path(temp_dir) / "result.zip"),
+                }
+                _render_existing_job(config)
+
+            mock_ensure_playwright.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/braccato/styles/variables.css">
+<link rel="stylesheet" href="/braccato/styles/lyrics.css">
+<style>
+@font-face {font-family: Switzer; src:url('/font.otf');font-weight:600}
+html,body {margin:0;padding:0;background:transparent;overflow:hidden}
+#mount {position:absolute;inset:0;overflow:hidden}
+.blyrics-container {position:absolute!important;inset:0;padding:0!important;transform:none!important}
+.blyrics-container > div {position:absolute!important;margin:0!important;padding:0!important;transform-origin:center top;text-align:center}
+.blyrics-container > div[data-state="past"] .blyrics--word:not(.blyrics-word-highlight) {color:white}
+.blyrics-container > div[data-state="past"] .blyrics-word-highlight {visibility:hidden}
+</style></head><body><div id="mount"></div><script type="module" src="/browser_lyrics/player.js"></script></body></html>

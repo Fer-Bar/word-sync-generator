@@ -170,6 +170,31 @@ class EditorServerTests(unittest.TestCase):
         self.assertNotIn(r"\move(", lyrics_ass_text)
         self.assertIn(r"\fad(150,150)", lyrics_ass_text)
 
+    def test_editor_html_javascript_syntax_is_valid(self) -> None:
+        """Verify the embedded JavaScript in editor.py contains valid syntax."""
+        import re
+        import shutil
+        import subprocess
+
+        editor_source = Path("src/karaoke_app/editor.py").read_text(encoding="utf-8")
+        match = re.search(r"<script>(.*?)</script>", editor_source, re.DOTALL)
+        self.assertIsNotNone(match, "No <script> tag found in editor.py")
+        js_code = match.group(1)
+
+        node_path = shutil.which("node")
+        if node_path:
+            result = subprocess.run(
+                [node_path, "--check"],
+                input=js_code,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"JavaScript syntax check failed: {result.stderr}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

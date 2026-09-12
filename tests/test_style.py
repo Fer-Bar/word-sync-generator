@@ -1,5 +1,7 @@
 import unittest
 
+import pytest
+
 from karaoke_app.style import (
     StyleConfig,
     ass_to_hex_color,
@@ -101,6 +103,50 @@ class StyleTests(unittest.TestCase):
         self.assertEqual(config.get_agent_colors("v2", is_background=True), ("#00E5FF", "#FFFFFF"))
         # Unconfigured agent background falls back to global coros_color
         self.assertEqual(config.get_agent_colors("v3", is_background=True), ("#00E5FF", "#FFFFFF"))
+
+    def test_lyrics_colors_configuration_and_defaults(self) -> None:
+        data = {
+            "lyrics_colors": {
+                "inactive": "#9A8F8B",
+                "active": "#F4EEE6",
+            }
+        }
+        config = StyleConfig.from_dict(data, height=1080)
+        self.assertIsNotNone(config.lyrics_colors)
+        self.assertEqual(config.lyrics_colors["inactive"], "#9A8F8B")
+        self.assertEqual(config.lyrics_colors["active"], "#F4EEE6")
+        self.assertEqual(config.get_lyrics_colors(), data["lyrics_colors"])
+        self.assertIn("lyrics_colors", config.to_dict())
+
+        # When omitted, lyrics_colors is None on config, but get_lyrics_colors() provides defaults
+        default_config = StyleConfig.from_dict(None, height=1080)
+        self.assertIsNone(default_config.lyrics_colors)
+        self.assertNotIn("lyrics_colors", default_config.to_dict())
+        self.assertEqual(default_config.get_lyrics_colors()["active"], "#F4EEE6")
+
+
+@pytest.mark.parametrize("data", [
+    [], False, "style", {"font_szie": 64}, {"bold": "false"}, {"italic": 0},
+    {"font_family": 12}, {"font_family": " "}, {"font_size": 0}, {"font_size": 3.5},
+    {"font_size": True}, {"alignment": 10}, {"margin_h": -1}, {"outline_width": "4"},
+    {"shadow_depth": -1}, {"shadow_opacity": float("nan")}, {"shadow_opacity": float("inf")},
+    {"shadow_opacity": 1.1}, {"line_gap_factor": 0.9}, {"primary_color": "invalid"},
+    {"agent_colors": []}, {"agent_colors": {"": {}}}, {"agent_colors": {"v1": "red"}},
+    {"agent_colors": {"v1": {"highlight_colour": "#FFFFFF"}}},
+    {"agent_colors": {"v1": {"primary_color": False}}},
+    {"lyrics_colors": None}, {"lyrics_colors": {"actve": "#FFFFFF"}},
+    {"lyrics_colors": {"active": "bad"}},
+])
+def test_invalid_style_values_fail_without_coercion(data):
+    with pytest.raises(ValueError):
+        StyleConfig.from_dict(data)
+
+
+def test_legacy_editor_opacity_input_is_accepted_but_not_stored():
+    config = StyleConfig.from_dict({"overlay_opacity": 0.6})
+    assert not hasattr(config, "overlay_opacity")
+    assert "overlay_opacity" not in config.to_dict()
+    assert StyleConfig.from_dict(config.to_dict()) == config
 
 
 if __name__ == "__main__":

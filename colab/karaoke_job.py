@@ -39,16 +39,27 @@ def main() -> None:
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     _require_commands("ffmpeg", "ffprobe")
+    _ensure_system_fonts()
+    _ensure_bebas_font()
     if config.get("operation") == "render":
         _render_existing_job(config)
         return
 
     _configure_huggingface()
 
+    lyrics_config = config.get("lyrics", {})
+    record = None
+    if not lyrics_config.get("disable_lrclib") and lyrics_config.get("lrclib_id") is not None:
+        record = _fetch_lrclib({}, config)
     source_path, metadata = _acquire_source(config)
+    if not lyrics_config.get("disable_lrclib") and lyrics_config.get("lrclib_id") is None:
+        record = _fetch_lrclib(metadata, config)
+    if record is not None and lyrics_config.get("lrclib_id") is not None:
+        document = _lyrics_document_from_record(record, metadata, config)
+        if _has_complete_word_timings(document):
+            _load_lyrics_module().validate_lyrics_file(document, require_words=True)
     mixture_path = _prepare_mixture(source_path)
     vocals_path, instrumental_path = _separate_vocals(mixture_path, config["demucs_model"])
-    lyrics, alignment = _prepare_lyrics(vocals_path, metadata, config)
 
     safe_title = _safe_filename(metadata["title"])
     output_dir = WORK_DIR / safe_title
@@ -61,23 +72,52 @@ def main() -> None:
     shutil.copy2(source_path, original_audio)
     _run(["ffmpeg", "-y", "-i", str(vocals_path), "-c:a", "flac", str(vocals_flac)])
     _run(["ffmpeg", "-y", "-i", str(instrumental_path), "-c:a", "flac", str(instrumental_flac)])
+    preparation = {
+        "demucs_model": config["demucs_model"],
+        "whisper_model": config["whisper_model"],
+        "requested_language": config["language"],
+        "lrclib_id": record.get("id") if record else None,
+        "disable_lrclib": bool(lyrics_config.get("disable_lrclib")),
+    }
+    try:
+        lyrics, alignment = _prepare_lyrics(vocals_path, metadata, config, selected_record=record)
+    except Exception as error:
+        checkpoint = {
+            "status": "lyrics_failed",
+            "error": str(error),
+            "source": metadata,
+            "preparation": preparation,
+            "media": {
+                "original_audio": original_audio.name,
+                "vocals_audio": vocals_flac.name,
+                "instrumental_audio": instrumental_flac.name,
+            },
+        }
+        (output_dir / "checkpoint.json").write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+        recovery_path = Path(config["archive_path"]).with_suffix(".checkpoint.zip")
+        _create_archive(output_dir, recovery_path)
+        raise LyricsPreparationError(str(error), recovery_path) from error
     lyrics_module = _load_lyrics_module()
     lyrics_path.write_text(lyrics_module.dump_lyrics_file(lyrics), encoding="utf-8")
     alignment_path.write_text(json.dumps(alignment, ensure_ascii=False, indent=2), encoding="utf-8")
+    if hasattr(lyrics_module, "generate_srt"):
+        (output_dir / "lyrics.srt").write_text(lyrics_module.generate_srt(lyrics), encoding="utf-8")
 
-    background = {"kind": config["background"]["kind"], "color": "#0B1020"}
+    background = {"kind": config["background"]["kind"]}
     if config["background"]["kind"] == "image":
         source_background = Path(config["background"]["value"])
         background_path = output_dir / f"background{source_background.suffix.lower()}"
         shutil.copy2(source_background, background_path)
         background["path"] = background_path.name
+        background["overlay_opacity"] = 0
     else:
         background["color"] = config["background"]["value"]
     job_document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "job_id": config["job_id"],
         "title": metadata["title"],
         "source": metadata,
+        "preparation": preparation,
         "alignment": {key: value for key, value in alignment.items() if key != "words"},
         "media": {
             "original_audio": original_audio.name,
@@ -86,12 +126,33 @@ def main() -> None:
             "lyrics": lyrics_path.name,
         },
         "video": config["video"],
-        "background": background,
+        "background": config.get("render_background", background),
+        "style": config.get("render_style", {}),
     }
+    watermark_config = config.get("watermark")
+    if watermark_config and watermark_config.get("enabled") is False:
+        job_document["watermark"] = {"enabled": False}
+    elif watermark_config and watermark_config.get("path"):
+        job_document["watermark"] = {
+            "enabled": True,
+            "path": watermark_config["path"],
+            "position": watermark_config.get("position", "top_left"),
+            "scale": float(watermark_config.get("scale", 0.18)),
+            "margin": float(watermark_config.get("margin", 0.05)),
+            "opacity": float(watermark_config.get("opacity", 0.85)),
+        }
     (output_dir / "job.json").write_text(json.dumps(job_document, ensure_ascii=False, indent=2), encoding="utf-8")
 
     _create_archive(output_dir, Path(config["archive_path"]))
     LOGGER.info("Pipeline completed: %s", config["archive_path"])
+
+
+class LyricsPreparationError(RuntimeError):
+    """Expose the stems checkpoint when lyric preparation fails."""
+
+    def __init__(self, message: str, recovery_archive_path: Path) -> None:
+        super().__init__(message)
+        self.recovery_archive_path = recovery_archive_path
 
 
 def _render_existing_job(config: dict[str, Any]) -> None:
@@ -106,13 +167,58 @@ def _render_existing_job(config: dict[str, Any]) -> None:
     audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
     output_dir = WORK_DIR / "render_result"
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "render-settings.json").write_text(json.dumps({
+        "theme": config.get("theme", "job"), "mode": requested_mode,
+        "renderer": "braccato-1.6.2" if (document.get("style") or {}).get("lyrics_effect") == "word-synced" else "ass",
+        "background": document["background"], "video": document["video"], "style": document.get("style", {}),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     title = _safe_filename(document["title"])
     background = document["background"]
     render_background = {
         "kind": background["kind"],
-        "value": str(job_dir / background["path"]) if background["kind"] == "image" else background["color"],
-        "overlay_opacity": background.get("overlay_opacity", 0.38),
+        "value": str(job_dir / background["path"]) if background["kind"] == "image" else background.get("color"),
+        "overlay_opacity": background.get("overlay_opacity", 0),
     }
+    if background["kind"] == "cosmic":
+        cosmic_module_path = job_dir / "cosmic_background.py"
+        if not cosmic_module_path.is_file():
+            raise FileNotFoundError(f"Missing cosmic background generator in render bundle: {cosmic_module_path}")
+        spec = importlib.util.spec_from_file_location("cosmic_background", cosmic_module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Missing cosmic background generator in render bundle")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        loop_path = module.render_cosmic_video(
+            background,
+            document["video"],
+            output_dir / "background.mp4",
+        )
+        render_background = {"kind": "video", "value": str(loop_path)}
+    watermark = document.get("watermark")
+    render_watermark = None
+    if watermark and watermark.get("enabled", True) and watermark.get("path"):
+        watermark_file = job_dir / watermark["path"]
+        if watermark_file.is_file():
+            render_watermark = {
+                "path": str(watermark_file),
+                "position": watermark.get("position", "top_left"),
+                "scale": float(watermark.get("scale", 0.18)),
+                "margin": float(watermark.get("margin", 0.05)),
+                "opacity": float(watermark.get("opacity", 0.85)),
+            }
+    graphics = job_dir / "graphics"
+    if graphics.is_dir():
+        shutil.copytree(graphics, output_dir, dirs_exist_ok=True)
+    intro_config = document.get("intro") or {}
+    browser_renderer = None
+    if (document.get("style") or {}).get("lyrics_effect") == "word-synced":
+        module_path = job_dir / "browser_lyrics.py"
+        if not module_path.is_file():
+            raise FileNotFoundError("Missing Braccato renderer in render bundle")
+        _ensure_playwright()
+        spec = importlib.util.spec_from_file_location("browser_lyrics", module_path)
+        browser_renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(browser_renderer)
     for mode in modes:
         source_ass = job_dir / f"{mode}.ass"
         if not source_ass.is_file():
@@ -123,12 +229,39 @@ def _render_existing_job(config: dict[str, Any]) -> None:
         subtitles_dir.mkdir(parents=True, exist_ok=True)
         ass_path = subtitles_dir / f"{title}_{mode}.ass"
         shutil.copy2(source_ass, ass_path)
+        source_srt = job_dir / "lyrics.srt"
+        if source_srt.is_file():
+            shutil.copy2(source_srt, subtitles_dir / f"{title}.srt")
+            shutil.copy2(source_srt, subtitles_dir / f"{title}_{mode}.srt")
+        render_config = {
+            "video": document["video"],
+            "background": render_background,
+        }
+        if (job_dir / "fonts").is_dir():
+            render_config["fonts_dir"] = str(job_dir / "fonts")
+        if render_watermark is not None:
+            render_config["watermark"] = render_watermark
+        intro_card_file = graphics / "intro" / f"intro_{mode}.png"
+        if intro_config.get("enabled", True) and intro_card_file.is_file():
+            render_config["intro_card"] = {
+                "path": str(intro_card_file),
+                "start": float(intro_config.get("start", 0)),
+                "end": float(intro_config.get("end", intro_config.get("duration", 5))),
+            }
+        overlay = None
+        if browser_renderer is not None:
+            overlay = browser_renderer.render_bundled_overlay(
+                job_dir, mode, job_dir / f"{mode}-overlay.mov", _probe_duration(audio_path),
+            )
+            render_config["lyrics_overlay"] = str(overlay)
         _render_video(
             audio_path,
             video_path,
-            {"video": document["video"], "background": render_background},
-            ass_path=ass_path,
+            render_config,
+            ass_path=None if overlay else ass_path,
         )
+        if overlay:
+            overlay.unlink()
     _create_archive(output_dir, Path(config["archive_path"]))
 
 
@@ -307,10 +440,12 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
 
 
 def _prepare_lyrics(
-    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]
+    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any],
+    *, selected_record: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     lyrics_module = _load_lyrics_module()
-    record = None if config.get("lyrics", {}).get("disable_lrclib") else _fetch_lrclib(metadata, config)
+    record = selected_record
+    fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_lrclib_match"
     if record is not None:
         try:
             document = _lyrics_document_from_record(record, metadata, config)
@@ -320,8 +455,11 @@ def _prepare_lyrics(
                     "engine": "lrclib",
                     "lrclib_id": record.get("id"),
                     "word_timing": "provided",
+                    "language": lyrics["metadata"].get("language"),
+                    "strategy": "provided_word_timings",
                 }
-            lyrics, words = _align_known_lyrics(vocals_path, document, config)
+            provenance: dict[str, Any] = {}
+            lyrics, words = _align_known_lyrics(vocals_path, document, config, provenance=provenance)
             return lyrics, {
                 "engine": "ctc-forced-aligner",
                 "model": CTC_ALIGNER_MODEL,
@@ -329,8 +467,10 @@ def _prepare_lyrics(
                 "lrclib_id": record.get("id"),
                 "word_timing": "generated",
                 "words": words,
+                **provenance,
             }
         except (AssertionError, KeyError, RuntimeError, ValueError) as error:
+            fallback_reason = str(error)
             LOGGER.warning(
                 "LRCLIB record %s (%s) could not be used; falling back to Faster Whisper: %s",
                 record.get("id"),
@@ -357,6 +497,9 @@ def _prepare_lyrics(
         "model": config["whisper_model"],
         "language": transcript["transcription"]["language"],
         "word_timing": "generated",
+        "strategy": "transcription",
+        "fallback_reason": fallback_reason,
+        "lrclib_id": record.get("id") if record else None,
         "words": words,
     }
 
@@ -524,7 +667,7 @@ def _lrclib_candidate_is_safe(
     # 3. Edition conflict check: incompatible explicit editions must be rejected
     source_editions = _title_edition_tokens(track)
     candidate_editions = _title_edition_tokens(candidate_track)
-    if source_editions and candidate_editions and not (source_editions & candidate_editions):
+    if source_editions and candidate_editions and source_editions != candidate_editions:
         LOGGER.debug(
             "candidate=%s rejected: edition mismatch (%s != %s)",
             candidate.get("id"),
@@ -638,6 +781,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             raise RuntimeError(f"Unable to load requested LRCLIB id {forced_id}: {error}") from error
         if not isinstance(value, dict):
             raise RuntimeError(f"LRCLIB id {forced_id} returned an invalid record")
+        if not _usable_lrclib_record(value):
+            raise RuntimeError(f"LRCLIB id {forced_id} does not contain usable lyrics")
         LOGGER.info("Using requested LRCLIB id %s: %s", value.get("id"), value.get("trackName"))
         return value
 
@@ -1128,7 +1273,7 @@ def _group_lines_into_macro_sections(
     current_section: list[tuple[dict[str, Any], list[dict[str, Any]]]] = [tokenized_lines[0]]
 
     for i in range(len(tokenized_lines) - 1):
-        curr_raw, curr_tokens = tokenized_lines[i]
+        curr_raw, _ = tokenized_lines[i]
         next_raw, _ = tokenized_lines[i + 1]
 
         curr_start_sec = float(curr_raw.get("start_ms", 0)) / 1000.0
@@ -1139,10 +1284,7 @@ def _group_lines_into_macro_sections(
             if curr_raw.get("end_ms") is not None and curr_raw["end_ms"] > curr_raw.get("start_ms", 0)
             else curr_start_sec + 4.0
         )
-        est_singing_duration = max(2.5, min(8.0, len(curr_tokens) * 0.6 + 1.0))
-        est_curr_end = min(curr_raw_end, curr_start_sec + est_singing_duration)
-
-        gap = next_start_sec - est_curr_end
+        gap = next_start_sec - curr_raw_end
         if gap >= gap_threshold_sec and next_start_sec > curr_start_sec:
             sections.append(current_section)
             current_section = [tokenized_lines[i + 1]]
@@ -1215,7 +1357,7 @@ def _align_tokenized_lines(
                 word["isBackground"] = True
             words.append(word)
         output_line = {
-            "text": raw_line["text"],
+            "text": raw_line["text"] if character_alignment else " ".join(raw_line["text"].split()),
             "words": words,
             "start_ms": min(word["start_ms"] for word in words),
             "end_ms": max(word["end_ms"] for word in words),
@@ -1228,7 +1370,8 @@ def _align_tokenized_lines(
 
 
 def _align_known_lyrics(
-    vocals_path: Path, document: dict[str, Any], config: dict[str, Any]
+    vocals_path: Path, document: dict[str, Any], config: dict[str, Any],
+    *, provenance: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     import torch
     from ctc_forced_aligner import (
@@ -1246,6 +1389,8 @@ def _align_known_lyrics(
     if not isinstance(raw_lines, list):
         raise ValueError("Known lyrics do not contain lines")
     language = _alignment_language(config["language"], document.get("metadata"))
+    if provenance is not None:
+        provenance.update(language=language, strategy="global_ctc")
     character_alignment = language in {"chi", "jpn"}
     tokenized_lines: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     for line in raw_lines:
@@ -1304,7 +1449,11 @@ def _align_known_lyrics(
             LOGGER.info("Global continuous CTC alignment succeeded with healthy metrics")
         else:
             LOGGER.warning("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
+            if provenance is not None:
+                provenance["fallback_reason"] = "global_alignment_failed_health_checks"
     except Exception as error:
+        if provenance is not None:
+            provenance["fallback_reason"] = str(error)
         LOGGER.warning("Global continuous CTC alignment failed: %s", error)
 
     # --- Tier 2: Anchor-Guided Macro-Section Alignment (Recovery for long instrumental solos) ---
@@ -1319,18 +1468,15 @@ def _align_known_lyrics(
             try:
                 for section in sections:
                     first_raw, _ = section[0]
-                    last_raw, last_tokens = section[-1]
+                    last_raw, _ = section[-1]
                     sec_start_ref = float(first_raw.get("start_ms", 0)) / 1000.0
                     sec_end_ref = (
                         float(last_raw.get("end_ms", 0)) / 1000.0
                         if last_raw.get("end_ms") is not None
                         else float(last_raw.get("start_ms", 0)) / 1000.0 + 4.0
                     )
-                    last_singing_est = max(3.0, min(10.0, len(last_tokens) * 0.7 + 1.5))
-                    effective_sec_end = min(sec_end_ref, float(last_raw.get("start_ms", 0)) / 1000.0 + last_singing_est)
-
                     clip_start_sec = max(0.0, sec_start_ref - 1.5)
-                    clip_end_sec = min(audio_duration_sec, effective_sec_end + 2.0)
+                    clip_end_sec = min(audio_duration_sec, sec_end_ref + 2.0)
                     if clip_end_sec <= clip_start_sec:
                         clip_end_sec = min(audio_duration_sec, clip_start_sec + 5.0)
 
@@ -1359,6 +1505,8 @@ def _align_known_lyrics(
 
                 if _is_alignment_healthy(macro_output_lines, raw_lines_for_check):
                     output_lines = macro_output_lines
+                    if provenance is not None:
+                        provenance["strategy"] = "macro_section_ctc"
                     LOGGER.info("Tier 2 macro-section alignment succeeded with healthy metrics")
                 else:
                     raise RuntimeError("Tier 2 macro-section alignment failed health checks")
@@ -1725,27 +1873,125 @@ def _render_video(
     fps = video["fps"]
     duration = _probe_duration(audio_path)
     background = config["background"]
+    watermark = config.get("watermark")
+    intro_card = config.get("intro_card")
+    subtitle_filter = f"ass={_escape_filter_path(ass_path)}" if ass_path is not None else None
+    if subtitle_filter and config.get("fonts_dir"):
+        subtitle_filter += f":fontsdir={_escape_filter_path(Path(config['fonts_dir']))}"
 
-    if background["kind"] == "image":
+    if background["kind"] == "video":
+        input_args = ["-stream_loop", "-1", "-i", str(background["value"])]
+        bg_chain = "[0:v]setpts=PTS-STARTPTS[bg]"
+    elif background["kind"] == "image":
         background_path = Path(background["value"])
         if not background_path.is_file():
             raise FileNotFoundError(f"Uploaded background not found: {background_path}")
-        overlay_opacity = background.get("overlay_opacity", 0.38)
+        overlay_opacity = background.get("overlay_opacity", 0)
         input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(background_path)]
-        filters = [
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-        ]
+        bg_filters = [f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"]
         if overlay_opacity > 0:
-            filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
-        if ass_path is not None:
-            filters.append(f"ass={_escape_filter_path(ass_path)}")
-        video_filter = ",".join(filters)
+            bg_filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
+        bg_chain = f"[0:v]{','.join(bg_filters)}[bg]"
     else:
         color = background["value"].lstrip("#")
         input_args = ["-f", "lavfi", "-i", f"color=c=0x{color}:s={width}x{height}:r={fps}"]
-        video_filter = f"ass={_escape_filter_path(ass_path)}" if ass_path is not None else None
+        bg_chain = "[0:v]null[bg]"
 
-    filter_args = ["-vf", video_filter] if video_filter else []
+    has_watermark = bool(watermark and watermark.get("path"))
+    has_intro = bool(intro_card and intro_card.get("path"))
+
+    lyrics_overlay = config.get("lyrics_overlay")
+    if has_watermark or has_intro or lyrics_overlay:
+        extra_inputs = []
+        filter_chains = [bg_chain]
+        current_stream = "bg"
+        next_input_idx = 2
+
+        if has_watermark:
+            watermark_path = Path(watermark["path"])
+            if not watermark_path.is_file():
+                raise FileNotFoundError(f"Watermark not found: {watermark_path}")
+            scale = float(watermark.get("scale", 0.18))
+            margin = float(watermark.get("margin", 0.05))
+            opacity = float(watermark.get("opacity", 0.85))
+            position = watermark.get("position", "top_left")
+
+            extra_inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", str(watermark_path)])
+            target_w = int(width * scale)
+            wm_chain = f"[{next_input_idx}:v]scale=w={target_w}:h=-1,format=rgba,colorchannelmixer=aa={opacity:.2f}[wm]"
+            filter_chains.append(wm_chain)
+
+            pos_expressions = {
+                "top_left": f"x=main_w*{margin:.2f}:y=main_h*{margin:.2f}",
+                "top_right": f"x=main_w-overlay_w-(main_w*{margin:.2f}):y=main_h*{margin:.2f}",
+                "bottom_left": f"x=main_w*{margin:.2f}:y=main_h-overlay_h-(main_h*{margin:.2f})",
+                "bottom_right": f"x=main_w-overlay_w-(main_w*{margin:.2f}):y=main_h-overlay_h-(main_h*{margin:.2f})",
+            }
+            overlay_coords = pos_expressions.get(position, pos_expressions["top_left"])
+            filter_chains.append(f"[{current_stream}][wm]overlay={overlay_coords}[v_wm]")
+            current_stream = "v_wm"
+            next_input_idx += 1
+
+        if has_intro:
+            intro_card_path = Path(intro_card["path"])
+            if not intro_card_path.is_file():
+                raise FileNotFoundError(f"Intro card not found: {intro_card_path}")
+            intro_start = float(intro_card.get("start", 0.0))
+            intro_end = float(intro_card.get("end", 5.0))
+            fade_dur = min(0.6, (intro_end - intro_start) / 4)
+            fade_out_st = max(intro_start, intro_end - fade_dur)
+
+            extra_inputs.extend(["-loop", "1", "-framerate", str(fps), "-i", str(intro_card_path)])
+            if intro_start > 0:
+                intro_fade_chain = (
+                    f"[{next_input_idx}:v]format=rgba,"
+                    f"fade=t=in:st={intro_start:.2f}:d={fade_dur:.2f}:alpha=1,"
+                    f"fade=t=out:st={fade_out_st:.2f}:d={fade_dur:.2f}:alpha=1[intro_faded]"
+                )
+            else:
+                intro_fade_chain = (
+                    f"[{next_input_idx}:v]format=rgba,"
+                    f"fade=t=out:st={fade_out_st:.2f}:d={fade_dur:.2f}:alpha=1[intro_faded]"
+                )
+            filter_chains.append(intro_fade_chain)
+            filter_chains.append(
+                f"[{current_stream}][intro_faded]overlay=0:0:enable='between(t,{intro_start:.2f},{intro_end:.2f})'[v_intro]"
+            )
+            current_stream = "v_intro"
+            next_input_idx += 1
+
+        if lyrics_overlay:
+            if not Path(lyrics_overlay).is_file():
+                raise FileNotFoundError(f"Lyrics overlay not found: {lyrics_overlay}")
+            extra_inputs.extend(["-i", str(lyrics_overlay)])
+            filter_chains.append(f"[{current_stream}][{next_input_idx}:v]overlay=0:0:shortest=1[v_lyrics]")
+            current_stream = "v_lyrics"
+        if ass_path is not None:
+            filter_chains.append(f"[{current_stream}]{subtitle_filter}[v_out]")
+        else:
+            filter_chains.append(f"[{current_stream}]null[v_out]")
+
+        filter_complex = ";".join(filter_chains)
+        filter_args = ["-filter_complex", filter_complex]
+        video_map = "[v_out]"
+    else:
+        extra_inputs = []
+        video_map = "0:v:0"
+        if background["kind"] == "video":
+            video_filter = subtitle_filter
+        elif background["kind"] == "image":
+            filters = [
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+            ]
+            if overlay_opacity > 0:
+                filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
+            if ass_path is not None:
+                filters.append(subtitle_filter)
+            video_filter = ",".join(filters)
+        else:
+            video_filter = subtitle_filter
+
+        filter_args = ["-vf", video_filter] if video_filter else []
 
     base_command = [
         "ffmpeg",
@@ -1753,8 +1999,9 @@ def _render_video(
         *input_args,
         "-i",
         str(audio_path),
+        *extra_inputs,
         "-map",
-        "0:v:0",
+        video_map,
         "-map",
         "1:a:0",
         *filter_args,
@@ -1859,15 +2106,116 @@ def _to_centiseconds(seconds: float) -> int:
     return max(0, round(seconds * 100))
 
 
-def _require_commands(*commands: str) -> None:
-    missing = [command for command in commands if not shutil.which(command)]
-    if missing:
-        raise RuntimeError(f"Missing required commands: {', '.join(missing)}")
+def _ensure_system_fonts() -> None:
+    """Ensure typography packages such as Inter font are available in the runtime."""
+    if not shutil.which("apt-get"):
+        return
+    if shutil.which("fc-match"):
+        result = subprocess.run(["fc-match", "Inter:bold"], capture_output=True, text=True, check=False)
+        if "inter" in result.stdout.lower():
+            return
+    try:
+        LOGGER.info("Installing system fonts (fonts-inter)...")
+        install_res = subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-inter"], check=False)
+        if install_res.returncode != 0:
+            subprocess.run(["apt-get", "update", "-qq"], check=False)
+            subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-inter"], check=False)
+        if shutil.which("fc-cache"):
+            subprocess.run(["fc-cache", "-f"], check=False)
+    except Exception as exc:
+        LOGGER.warning("Failed to ensure system fonts: %s", exc)
+
+
+BEBAS_NEUE_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf"
+
+
+def _ensure_bebas_font() -> None:
+    """Ensure Bebas Neue font is available in fontconfig for subtitle rendering."""
+    if shutil.which("fc-match"):
+        result = subprocess.run(["fc-match", "Bebas Neue"], capture_output=True, text=True, check=False)
+        if "bebas" in result.stdout.lower():
+            return
+
+    installed = False
+    if shutil.which("apt-get"):
+        try:
+            LOGGER.info("Installing system fonts (fonts-bebas-neue)...")
+            install_res = subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-bebas-neue"], check=False)
+            if install_res.returncode == 0:
+                installed = True
+        except Exception as exc:
+            LOGGER.warning("apt-get install fonts-bebas-neue failed: %s", exc)
+
+    if not installed:
+        try:
+            font_dir = Path("/usr/local/share/fonts/truetype/bebasneue")
+            try:
+                font_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                font_dir = Path.home() / ".local/share/fonts"
+                font_dir.mkdir(parents=True, exist_ok=True)
+
+            font_path = font_dir / "BebasNeue-Regular.ttf"
+            if not font_path.is_file():
+                LOGGER.info("Downloading Bebas Neue font from Google Fonts...")
+                req = urllib.request.Request(BEBAS_NEUE_URL, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    font_path.write_bytes(response.read())
+                installed = True
+        except Exception as exc:
+            LOGGER.warning("Failed to download Bebas Neue font: %s", exc)
+
+    if installed and shutil.which("fc-cache"):
+        subprocess.run(["fc-cache", "-f"], check=False)
+
+
+PLAYWRIGHT_PACKAGE = "playwright==1.62.0"
 
 
 def _run(command: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
     LOGGER.info("Running %s", " ".join(command))
-    return subprocess.run(command, check=True, capture_output=capture_output, text=True)
+    try:
+        return subprocess.run(command, check=True, capture_output=capture_output, text=True)
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or error.stdout or "").strip()
+        if details:
+            raise RuntimeError(f"Command {' '.join(command)} failed ({error.returncode}):\n{details}") from error
+        raise
+
+
+def _run_installer(command: list[str], *, label: str = "Package") -> subprocess.CompletedProcess[str]:
+    """Execute an installation command, capturing and reporting full output if it fails."""
+    LOGGER.info("Running installation: %s", " ".join(command))
+    try:
+        return _run(command, capture_output=True)
+    except Exception as error:
+        error_msg = f"{label} installation failed: {error}"
+        LOGGER.error("%s", error_msg)
+        raise RuntimeError(error_msg) from error
+
+
+def _ensure_playwright() -> None:
+    """Ensure the Playwright Python package and Chromium browser are installed."""
+    if importlib.util.find_spec("playwright") is None:
+        LOGGER.info("Installing Playwright Python package...")
+        installer = (
+            ["uv", "pip", "install", "--system", PLAYWRIGHT_PACKAGE]
+            if shutil.which("uv")
+            else [sys.executable, "-m", "pip", "install", PLAYWRIGHT_PACKAGE]
+        )
+        _run_installer(installer, label="Playwright Python package")
+
+    LOGGER.info("Installing Chromium and dependencies via Playwright...")
+    _run_installer(
+        [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+        label="Playwright Chromium and system dependencies",
+    )
+
+
+def _require_commands(*commands: str) -> None:
+    missing = [command for command in commands if not shutil.which(command)]
+    if missing:
+        raise RuntimeError(f"Missing required commands: {', '.join(missing)}")
 
 
 def _run_with_status() -> None:
@@ -1875,8 +2223,12 @@ def _run_with_status() -> None:
     try:
         main()
     except Exception as error:
+        status = {"status": "failed", "error": str(error)}
+        if isinstance(error, LyricsPreparationError):
+            status["recovery_archive_path"] = str(error.recovery_archive_path)
+            status["stage"] = "lyrics"
         STATUS_PATH.write_text(
-            json.dumps({"status": "failed", "error": str(error)}, ensure_ascii=False), encoding="utf-8"
+            json.dumps(status, ensure_ascii=False), encoding="utf-8"
         )
         raise
     STATUS_PATH.write_text(json.dumps({"status": "completed"}), encoding="utf-8")

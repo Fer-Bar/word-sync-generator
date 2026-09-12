@@ -1,4 +1,6 @@
+import math
 import re
+from pathlib import Path
 from typing import Any
 
 from karaoke_app.style import StyleConfig, hex_to_ass_color
@@ -57,7 +59,17 @@ def generate_ass(
     if not known_channels:
         known_channels = [("", False)]
 
-    style_lines = [active_style.to_ass_style("Default")]
+    l_colors = active_style.lyrics_colors if mode == "lyrics" else None
+    if l_colors:
+        style_lines = [
+            active_style.to_ass_style(
+                "Default",
+                primary_color=l_colors["active"],
+                highlight_color=l_colors["inactive"],
+            )
+        ]
+    else:
+        style_lines = [active_style.to_ass_style("Default")]
     seen_styles = {"Default"}
 
     for agent, is_background in known_channels:
@@ -71,25 +83,46 @@ def generate_ass(
             index=agent_idx,
             is_background=is_background,
         )
-        if is_background:
-            bg_font_size = max(12, round(font_size * 0.85))
-            style_lines.append(
-                active_style.to_ass_style(
-                    style_name,
-                    primary_color=p_col,
-                    highlight_color=h_col,
-                    italic=True,
-                    font_size=bg_font_size,
+        if l_colors:
+            if is_background:
+                bg_font_size = max(12, round(font_size * 0.85))
+                style_lines.append(
+                    active_style.to_ass_style(
+                        style_name,
+                        primary_color=l_colors["active"],
+                        highlight_color=l_colors["inactive"],
+                        italic=True,
+                        font_size=bg_font_size,
+                    )
                 )
-            )
+            else:
+                style_lines.append(
+                    active_style.to_ass_style(
+                        style_name,
+                        primary_color=l_colors["active"],
+                        highlight_color=l_colors["inactive"],
+                    )
+                )
         else:
-            style_lines.append(
-                active_style.to_ass_style(
-                    style_name,
-                    primary_color=p_col,
-                    highlight_color=h_col,
+            if is_background:
+                bg_font_size = max(12, round(font_size * 0.85))
+                style_lines.append(
+                    active_style.to_ass_style(
+                        style_name,
+                        primary_color=p_col,
+                        highlight_color=h_col,
+                        italic=True,
+                        font_size=bg_font_size,
+                    )
                 )
-            )
+            else:
+                style_lines.append(
+                    active_style.to_ass_style(
+                        style_name,
+                        primary_color=p_col,
+                        highlight_color=h_col,
+                    )
+                )
 
     lines = [
         "[Script Info]",
@@ -108,13 +141,20 @@ def generate_ass(
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    if mode == "lyrics":
+    if active_style.lyrics_effect == "word-synced":
+        from karaoke_app.word_synced import build_word_synced_dialogues
+
+        dialogue_lines = build_word_synced_dialogues(
+            transcript.get("segments", []), width, height, active_style, scroll=mode == "karaoke",
+        )
+    elif mode == "lyrics":
         dialogue_lines = _build_page_dialogues(
             transcript.get("segments", []),
             width=width,
             height=height,
             font_size=font_size,
             active_style=active_style,
+            lyrics_colors=l_colors,
         )
     else:
         dialogue_lines = _build_teleprompter_dialogues(
@@ -130,6 +170,70 @@ def generate_ass(
     return "\n".join(lines) + "\n"
 
 
+def _estimate_line_width(
+    text: str,
+    font_family: str,
+    font_size: int,
+    *,
+    bold: bool = True,
+) -> float:
+    """Estimate or measure rendered text width in pixels."""
+    if not text:
+        return 0.0
+
+    clean_family = font_family.lower().replace(" ", "").replace("-", "")
+
+    try:
+        from PIL import ImageFont
+
+        font = None
+        candidates: list[str] = []
+        if "bebas" in clean_family:
+            candidates = [
+                "/usr/local/share/fonts/truetype/bebasneue/BebasNeue-Regular.ttf",
+                str(Path.home() / ".local/share/fonts/BebasNeue-Regular.ttf"),
+                "/tmp/BebasNeue-Regular.ttf",
+            ]
+        elif "dejavu" in clean_family:
+            candidates = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+                if bold
+                else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+            ]
+
+        for cand in candidates:
+            if Path(cand).is_file():
+                try:
+                    font = ImageFont.truetype(cand, font_size)
+                    break
+                except Exception:
+                    continue
+
+        if font is None:
+            try:
+                font = ImageFont.truetype(font_family, font_size)
+            except Exception:
+                pass
+
+        if font is not None:
+            bbox = font.getbbox(text)
+            return float(bbox[2] - bbox[0])
+    except Exception:
+        pass
+
+    if "bebas" in clean_family:
+        char_ratio = 0.33
+    elif "oswald" in clean_family:
+        char_ratio = 0.38
+    elif any(k in clean_family for k in ("montserrat", "inter", "roboto")):
+        char_ratio = 0.52 if bold else 0.49
+    else:
+        char_ratio = 0.55 if bold else 0.52
+
+    return float(len(text) * font_size * char_ratio)
+
+
 def _build_page_dialogues(
     segments: list[dict[str, Any]],
     *,
@@ -137,11 +241,14 @@ def _build_page_dialogues(
     height: int,
     font_size: int,
     active_style: StyleConfig,
+    lyrics_colors: dict[str, str] | None = None,
 ) -> list[str]:
     pages = _build_pages(segments)
     dialogue_lines: list[str] = []
     center_x = width // 2
+    max_line_width = max(200, width - (active_style.margin_h * 2) - 40)
     line_gap = round(font_size * active_style.line_gap_factor)
+    inter_line_gap = max(10, line_gap - font_size)
 
     for page in pages:
         lanes = _page_lanes(page)
@@ -153,16 +260,59 @@ def _build_page_dialogues(
                 all_lane_lines.append((channel, line))
 
         line_count = len(all_lane_lines)
+        if line_count == 0:
+            continue
 
-        for line_index, (channel, line) in enumerate(all_lane_lines):
+        line_specs: list[dict[str, Any]] = []
+        for channel, line in all_lane_lines:
+            agent, is_bg = channel
+            base_fs = max(12, round(font_size * 0.85)) if is_bg else font_size
+            plain_text = _render_line_plain_text(line)
+            raw_w = _estimate_line_width(
+                plain_text,
+                active_style.font_family,
+                base_fs,
+                bold=active_style.bold,
+            )
+            visual_lines = max(1, math.ceil(raw_w / max_line_width))
+            visual_h = visual_lines * round(base_fs * 1.08)
+            line_specs.append(
+                {
+                    "channel": channel,
+                    "line": line,
+                    "base_font_size": base_fs,
+                    "visual_lines": visual_lines,
+                    "visual_height": visual_h,
+                }
+            )
+
+        all_single_standard = all(spec["visual_lines"] == 1 for spec in line_specs)
+        if all_single_standard:
+            y_coords = [round(height / 2 + (idx - (line_count - 1) / 2) * line_gap) for idx in range(line_count)]
+        else:
+            total_visual_h = sum(s["visual_height"] for s in line_specs) + (line_count - 1) * inter_line_gap
+            cur_top = (height - total_visual_h) / 2
+            y_coords = []
+            for spec in line_specs:
+                y_center = round(cur_top + spec["visual_height"] / 2)
+                y_coords.append(y_center)
+                cur_top += spec["visual_height"] + inter_line_gap
+
+        for spec, y in zip(line_specs, y_coords, strict=True):
+            channel = spec["channel"]
+            line = spec["line"]
+
             agent, is_bg = channel
             style_name = _ass_style_name(agent, is_bg)
             actor_name = f"{agent}-bg" if is_bg and agent else "background" if is_bg else agent
 
-            y = round(height / 2 + (line_index - (line_count - 1) / 2) * line_gap)
             pos_tag = f"{{\\an5\\pos({center_x},{y})\\fad({PAGE_FADE_MILLISECONDS},{PAGE_FADE_MILLISECONDS})}}"
 
-            karaoke_text, scheduled_end = _render_line_karaoke_text(line, page["display_start_cs"])
+            karaoke_text, scheduled_end = _render_line_karaoke_text(
+                line,
+                page["display_start_cs"],
+                lyrics_colors=lyrics_colors,
+            )
             end = max(page["display_end_cs"], scheduled_end)
 
             dialogue_lines.append(
@@ -417,7 +567,12 @@ def _build_teleprompter_dialogues(
     return dialogue_lines
 
 
-def _render_line_karaoke_text(line: dict[str, Any], event_start_cs: int) -> tuple[str, int]:
+def _render_line_karaoke_text(
+    line: dict[str, Any],
+    event_start_cs: int,
+    *,
+    lyrics_colors: dict[str, str] | None = None,
+) -> tuple[str, int]:
     words = line["words"]
     is_bg = bool(line.get("isBackground", False))
     starts, durations, scheduled_end = _schedule_words(words, event_start_cs)

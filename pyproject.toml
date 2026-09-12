@@ -8,6 +8,10 @@ dependencies = [
     "jupyter-kernel-client==0.15.0",
     "pyyaml>=6.0.2",
     "python-dotenv>=1.2.3",
+    "pillow>=12.3.0",
+    "numpy>=2.5.3",
+    "imageio-ffmpeg>=0.6.0",
+    "playwright>=1.55,<2",
 ]
 
 [project.scripts]

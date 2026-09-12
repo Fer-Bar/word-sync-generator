@@ -1,3 +1,4 @@
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -64,10 +65,47 @@ def ass_to_hex_color(ass_color: str) -> tuple[str, float]:
     return (f"#{r:02X}{g:02X}{b:02X}", max(0.0, min(1.0, round(alpha, 2))))
 
 
+DEFAULT_LYRICS_COLORS: dict[str, str] = {
+    "inactive": "#9A8F8B",
+    "active": "#F4EEE6",
+}
+
+
+def validate_config_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    """Reject malformed configuration objects and unknown keys."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    unknown = value.keys() - keys
+    if unknown:
+        raise ValueError(f"{label} has unknown keys: {', '.join(sorted(map(str, unknown)))}")
+    return value
+
+
+def validate_number(value: Any, label: str, minimum: float, maximum: float = math.inf) -> float:
+    """Validate a finite JSON number without coercing strings or booleans."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not minimum <= value <= maximum
+        or (isinstance(value, float) and not math.isfinite(value))
+    ):
+        raise ValueError(f"{label} must be a finite number between {minimum} and {maximum}")
+    return value
+
+
+def validate_color(value: Any, label: str) -> str:
+    """Validate and normalize a configured RGB color."""
+    color = normalize_hex_color(value, default="")
+    if not color:
+        raise ValueError(f"{label} must use #RRGGBB")
+    return color
+
+
 @dataclass(frozen=True)
 class StyleConfig:
     """Typography and visual styling for ASS subtitles and video canvas."""
 
+    lyrics_effect: str = "classic"
     font_family: str = "DejaVu Sans"
     font_size: int = 64
     bold: bool = True
@@ -83,9 +121,9 @@ class StyleConfig:
     alignment: int = 5
     margin_v: int = 70
     margin_h: int = 70
-    overlay_opacity: float = 0.38
     line_gap_factor: float = 1.35
     agent_colors: dict[str, dict[str, str]] = field(default_factory=dict)
+    lyrics_colors: dict[str, str] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None, height: int = 1080) -> "StyleConfig":
@@ -93,6 +131,50 @@ class StyleConfig:
         is_hd = height >= 1080
         default_font_size = 64 if is_hd else 46
         default_margin = 70 if is_hd else 48
+
+        if data is not None:
+            validate_config_object(
+                data, set(cls.__dataclass_fields__) | {"background_color", "overlay_opacity"}, "style"
+            )
+            if data.get("lyrics_effect", "classic") not in ("classic", "word-synced"):
+                raise ValueError("style.lyrics_effect must be classic or word-synced")
+            for key in ("bold", "italic"):
+                if key in data and not isinstance(data[key], bool):
+                    raise ValueError(f"style.{key} must be a boolean")
+            if "font_family" in data and (
+                not isinstance(data["font_family"], str) or not data["font_family"].strip()
+            ):
+                raise ValueError("style.font_family must be a nonempty string")
+            for key in ("font_size", "outline_width", "shadow_depth", "alignment", "margin_v", "margin_h"):
+                if key in data:
+                    minimum = 1 if key in {"font_size", "alignment"} else 0
+                    validate_number(data[key], f"style.{key}", minimum, 9 if key == "alignment" else math.inf)
+                    if not isinstance(data[key], int):
+                        raise ValueError(f"style.{key} must be an integer")
+            for key, bounds in {
+                "shadow_opacity": (0, 1), "overlay_opacity": (0, 1), "line_gap_factor": (1, 2.5)
+            }.items():
+                if key in data:
+                    validate_number(data[key], f"style.{key}", *bounds)
+            for key in (
+                "primary_color", "highlight_color", "coros_color", "background_color", "outline_color", "shadow_color"
+            ):
+                if key in data:
+                    validate_color(data[key], f"style.{key}")
+            if "agent_colors" in data:
+                agents = data["agent_colors"]
+                if not isinstance(agents, dict):
+                    raise ValueError("style.agent_colors must be an object")
+                for name, colors in agents.items():
+                    if not isinstance(name, str) or not name.strip():
+                        raise ValueError("style.agent_colors names must be nonempty strings")
+                    validate_config_object(colors, {"primary_color", "highlight_color", "coros_color"}, "agent_colors")
+                    for key, color in colors.items():
+                        validate_color(color, f"style.agent_colors.{name}.{key}")
+            if "lyrics_colors" in data:
+                colors = validate_config_object(data["lyrics_colors"], {"inactive", "active"}, "style.lyrics_colors")
+                for key, color in colors.items():
+                    validate_color(color, f"style.lyrics_colors.{key}")
 
         if not data or not isinstance(data, dict):
             return cls(
@@ -121,7 +203,6 @@ class StyleConfig:
             alignment = 5
         margin_v = max(0, int(data.get("margin_v", default_margin)))
         margin_h = max(0, int(data.get("margin_h", default_margin)))
-        overlay_opacity = max(0.0, min(1.0, float(data.get("overlay_opacity", 0.38))))
         line_gap_factor = max(1.0, min(2.5, float(data.get("line_gap_factor", 1.35))))
 
         raw_agent_colors = data.get("agent_colors")
@@ -142,7 +223,22 @@ class StyleConfig:
                         entry["coros_color"] = c
                     normalized_agent_colors[agent_name.strip()] = entry
 
+        raw_lyrics_colors = data.get("lyrics_colors")
+        normalized_lyrics_colors: dict[str, str] | None = None
+        if isinstance(raw_lyrics_colors, dict):
+            normalized_lyrics_colors = {
+                "inactive": normalize_hex_color(
+                    str(raw_lyrics_colors.get("inactive") or DEFAULT_LYRICS_COLORS["inactive"]),
+                    default=DEFAULT_LYRICS_COLORS["inactive"],
+                ),
+                "active": normalize_hex_color(
+                    str(raw_lyrics_colors.get("active") or DEFAULT_LYRICS_COLORS["active"]),
+                    default=DEFAULT_LYRICS_COLORS["active"],
+                ),
+            }
+
         return cls(
+            lyrics_effect=data.get("lyrics_effect", "classic"),
             font_family=font_family,
             font_size=font_size,
             bold=bold,
@@ -158,14 +254,21 @@ class StyleConfig:
             alignment=alignment,
             margin_v=margin_v,
             margin_h=margin_h,
-            overlay_opacity=overlay_opacity,
             line_gap_factor=line_gap_factor,
             agent_colors=normalized_agent_colors,
+            lyrics_colors=normalized_lyrics_colors,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert style config to a JSON-serializable dictionary."""
-        return asdict(self)
+        result = asdict(self)
+        if self.lyrics_colors is None:
+            result.pop("lyrics_colors", None)
+        return result
+
+    def get_lyrics_colors(self) -> dict[str, str]:
+        """Return resolved lyrics colors dictionary."""
+        return dict(self.lyrics_colors) if self.lyrics_colors else dict(DEFAULT_LYRICS_COLORS)
 
     def get_agent_colors(
         self,

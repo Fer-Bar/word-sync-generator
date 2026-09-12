@@ -434,3 +434,63 @@ def _sanitized_line_without_words(line: dict[str, Any], text: Any, start_ms: int
     if "isBackground" in line and isinstance(line["isBackground"], bool):
         sanitized_line["isBackground"] = line["isBackground"]
     return sanitized_line
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds into SRT timestamp string (HH:MM:SS,mmm)."""
+    total_ms = max(0, round(float(seconds) * 1000))
+    ms = total_ms % 1000
+    total_seconds = total_ms // 1000
+    s = total_seconds % 60
+    total_minutes = total_seconds // 60
+    m = total_minutes % 60
+    h = total_minutes // 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def generate_srt(transcript_or_lyrics: dict[str, Any]) -> str:
+    """Generate SubRip (.srt) subtitles from a canonical transcript or LyricsFile dictionary.
+
+    YouTube and standard video players require sequential cues with timestamps in
+    HH:MM:SS,mmm format. Background vocals are rendered inside parentheses.
+    """
+    if "lines" in transcript_or_lyrics and "segments" not in transcript_or_lyrics:
+        segments = []
+        for line in transcript_or_lyrics.get("lines", []):
+            text = str(line.get("text", "")).strip()
+            if not text:
+                continue
+            start = line.get("start_ms", 0) / 1000.0
+            end = line.get("end_ms", line.get("start_ms", 0) + 500) / 1000.0
+            segments.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                    "isBackground": bool(line.get("isBackground", False)),
+                }
+            )
+    else:
+        segments = transcript_or_lyrics.get("segments", [])
+
+    srt_entries: list[str] = []
+    counter = 1
+    for segment in segments:
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start + 0.5))
+        if end <= start:
+            end = start + 0.5
+        if segment.get("isBackground") and not (text.startswith("(") and text.endswith(")")):
+            text = f"({text})"
+
+        start_ts = format_srt_timestamp(start)
+        end_ts = format_srt_timestamp(end)
+        srt_entries.append(f"{counter}\n{start_ts} --> {end_ts}\n{text}")
+        counter += 1
+
+    if not srt_entries:
+        return ""
+    return "\n\n".join(srt_entries) + "\n"

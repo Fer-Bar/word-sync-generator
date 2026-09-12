@@ -98,9 +98,23 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
                     if agent and isinstance(agent, str) and agent.strip() and agent.strip() not in detected_agents:
                         detected_agents.append(agent.strip())
 
+            doc_to_serve = json.loads(json.dumps(self.document))
+            if "watermark" not in doc_to_serve:
+                from karaoke_app.job_document import DEFAULT_BANNER_RELATIVE, PROJECT_ROOT
+
+                default_banner = PROJECT_ROOT / DEFAULT_BANNER_RELATIVE
+                if default_banner.is_file():
+                    doc_to_serve["watermark"] = {
+                        "path": DEFAULT_BANNER_RELATIVE,
+                        "position": "top_left",
+                        "scale": 0.18,
+                        "margin": 0.05,
+                        "opacity": 0.85,
+                    }
+
             state = {
                 "title": self.document.get("title", ""),
-                "job": self.document,
+                "job": doc_to_serve,
                 "transcript": self.transcript,
                 "available_fonts": CURATED_FONTS,
                 "detected_agents": detected_agents,
@@ -113,16 +127,25 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(content)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            pass
+        except Exception as error:
+            LOGGER.exception("Failed to serve state")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
 
     def _serve_media_asset(self, raw_path: str) -> None:
         decoded = urllib.parse.unquote(raw_path)
+        if ".." in Path(decoded).parts:
+            self.send_error(HTTPStatus.NOT_FOUND, "Asset not found or access denied")
+            return
         try:
             asset_path = resolve_job_asset(self.job_dir, decoded, "asset")
         except (ValueError, FileNotFoundError):
-            self.send_error(HTTPStatus.NOT_FOUND, "Asset not found or access denied")
-            return
+            try:
+                from karaoke_app.job_document import resolve_watermark_path
+
+                asset_path = resolve_watermark_path(self.job_dir, decoded)
+            except (ValueError, FileNotFoundError):
+                self.send_error(HTTPStatus.NOT_FOUND, "Asset not found or access denied")
+                return
 
         mime_type, _ = mimetypes.guess_type(asset_path.name)
         if not mime_type:
@@ -207,7 +230,7 @@ class KaraokeEditorHandler(SimpleHTTPRequestHandler):
                 )
                 (self.job_dir / f"{mode}.ass").write_text(ass_content, encoding="utf-8")
 
-            response_data = {"status": "ok", "message": "Estilos guardados y subtítulos .ass actualizados"}
+            response_data = {"status": "ok", "message": "Estilos guardados y subtítulos (.ass) actualizados"}
             content = json.dumps(response_data).encode("utf-8")
 
             self.send_response(HTTPStatus.OK)
@@ -630,6 +653,10 @@ HTML_PAGE = """<!DOCTYPE html>
             <option value="vocals">Pista de Voz</option>
             <option value="original">Audio Original</option>
           </select>
+          <select id="preview-mode-select" title="Modo de visualización">
+            <option value="lyrics" selected>Modo: Lyrics (Letras)</option>
+            <option value="karaoke">Modo: Karaoke (Teleprompter)</option>
+          </select>
         </div>
         <div style="font-size: 0.8rem; color: var(--text-muted);">
           Resolución: <span id="res-badge">1920x1080</span>
@@ -677,7 +704,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- Paleta de Colores Global -->
       <div class="control-group">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div class="group-title">Colores de Letra (Por Defecto)</div>
+          <div class="group-title">Colores de Letra (Karaoke)</div>
           <button type="button" class="btn-swap" id="btn-swap-global"
                   title="Intercambiar color de texto y resalte">⇄ Invertir</button>
         </div>
@@ -694,6 +721,25 @@ HTML_PAGE = """<!DOCTYPE html>
           <div class="color-input-wrap">
             <input type="color" id="col-highlight" value="#FFFFFF">
             <input type="text" class="color-hex" id="hex-highlight" value="#FFFFFF" maxlength="7">
+          </div>
+        </div>
+      </div>
+
+      <!-- Colores Modo Lyrics (Letras) -->
+      <div class="control-group">
+        <div class="group-title">Colores Modo Lyrics (Letras)</div>
+        <div class="form-row">
+          <label>Inactivo (Sin cantar)</label>
+          <div class="color-input-wrap">
+            <input type="color" id="col-lyrics-inactive" value="#9A8F8B">
+            <input type="text" class="color-hex" id="hex-lyrics-inactive" value="#9A8F8B" maxlength="7">
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Activo (Cantado)</label>
+          <div class="color-input-wrap">
+            <input type="color" id="col-lyrics-active" value="#F4EEE6">
+            <input type="text" class="color-hex" id="hex-lyrics-active" value="#F4EEE6" maxlength="7">
           </div>
         </div>
       </div>
@@ -795,6 +841,10 @@ HTML_PAGE = """<!DOCTYPE html>
     let state = null;
     let bgImage = null;
     let bgLoaded = false;
+    let wmImage = null;
+    let wmLoaded = false;
+    let introImg = null;
+    let introLoaded = false;
     const canvas = document.getElementById('preview-canvas');
     const ctx = canvas.getContext('2d');
     const audio = document.getElementById('audio-player');
@@ -1035,6 +1085,10 @@ HTML_PAGE = """<!DOCTYPE html>
       setInputVal('overlay-opacity', overlayVal, '%', true);
       syncColor('bg', bg.color || '#0B1020');
 
+      const lc = style.lyrics_colors || {};
+      syncColor('lyrics-inactive', lc.inactive || '#9A8F8B');
+      syncColor('lyrics-active', lc.active || '#F4EEE6');
+
       // Load background image if available
       if (bg.kind === 'image' && bg.path) {
         bgImage = new Image();
@@ -1042,6 +1096,21 @@ HTML_PAGE = """<!DOCTYPE html>
         bgImage.src = `/media/${encodeURIComponent(bg.path)}`;
         bgImage.onload = () => { bgLoaded = true; renderFrame(); };
       }
+
+      // Load watermark image if available
+      const wm = state?.job?.watermark;
+      if (wm && wm.path) {
+        wmImage = new Image();
+        wmImage.crossOrigin = 'anonymous';
+        wmImage.src = `/media/${encodeURIComponent(wm.path)}`;
+        wmImage.onload = () => { wmLoaded = true; renderFrame(); };
+      }
+
+      // Load intro card image if available
+      introImg = new Image();
+      introImg.crossOrigin = 'anonymous';
+      introImg.src = '/media/intro_card.png';
+      introImg.onload = () => { introLoaded = true; renderFrame(); };
 
       // Audio setup
       updateAudioSource();
@@ -1141,13 +1210,22 @@ HTML_PAGE = """<!DOCTYPE html>
         if (el) el.addEventListener('change', renderFrame);
       });
 
-      ['primary', 'highlight', 'outline', 'shadow', 'bg'].forEach(id => {
+      const modeSelect = document.getElementById('preview-mode-select');
+      if (modeSelect) modeSelect.addEventListener('change', renderFrame);
+
+      const colorIds = [
+        'primary', 'highlight', 'outline', 'shadow', 'bg',
+        'lyrics-inactive', 'lyrics-active'
+      ];
+      colorIds.forEach(id => {
         const col = document.getElementById(`col-${id}`);
         const txt = document.getElementById(`hex-${id}`);
-        col.addEventListener('input', () => { txt.value = col.value.toUpperCase(); renderFrame(); });
-        txt.addEventListener('input', () => {
-          if (/^#[0-9A-Fa-f]{6}$/.test(txt.value)) { col.value = txt.value; renderFrame(); }
-        });
+        if (col && txt) {
+          col.addEventListener('input', () => { txt.value = col.value.toUpperCase(); renderFrame(); });
+          txt.addEventListener('input', () => {
+            if (/^#[0-9A-Fa-f]{6}$/.test(txt.value)) { col.value = txt.value; renderFrame(); }
+          });
+        }
       });
 
       // Actions
@@ -1175,6 +1253,9 @@ HTML_PAGE = """<!DOCTYPE html>
         }
       });
 
+      const lcInactive = document.getElementById('col-lyrics-inactive')?.value || '#9A8F8B';
+      const lcActive = document.getElementById('col-lyrics-active')?.value || '#F4EEE6';
+
       return {
         font_family: document.getElementById('font-family').value,
         font_size: parseInt(document.getElementById('font-size').value, 10),
@@ -1183,6 +1264,10 @@ HTML_PAGE = """<!DOCTYPE html>
         line_gap_factor: parseFloat(document.getElementById('line-gap').value),
         primary_color: document.getElementById('col-primary').value,
         highlight_color: document.getElementById('col-highlight').value,
+        lyrics_colors: {
+          inactive: lcInactive,
+          active: lcActive,
+        },
         outline_color: document.getElementById('col-outline').value,
         outline_width: parseInt(document.getElementById('outline-width').value, 10),
         shadow_color: document.getElementById('col-shadow').value,
@@ -1227,15 +1312,71 @@ HTML_PAGE = """<!DOCTYPE html>
         ctx.fillRect(0, 0, W, H);
       }
 
-      // 2. Teleprompter segments for currentTime
+      // Draw Watermark / Banner if present
+      if (wmLoaded && wmImage) {
+        const wm = state?.job?.watermark || {};
+        const scale = parseFloat(wm.scale || 0.18);
+        const margin = parseFloat(wm.margin || 0.05);
+        const opacity = parseFloat(wm.opacity || 0.85);
+        const position = wm.position || 'top_left';
+
+        const wmWidth = W * scale;
+        const wmHeight = wmWidth * (wmImage.height / wmImage.width);
+
+        let wmX = W * margin;
+        let wmY = H * margin;
+        if (position === 'top_right') {
+          wmX = W - wmWidth - (W * margin);
+          wmY = H * margin;
+        } else if (position === 'bottom_left') {
+          wmX = W * margin;
+          wmY = H - wmHeight - (H * margin);
+        } else if (position === 'bottom_right') {
+          wmX = W - wmWidth - (W * margin);
+          wmY = H - wmHeight - (H * margin);
+        }
+
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(wmImage, wmX, wmY, wmWidth, wmHeight);
+        ctx.restore();
+      }
+
+      // 2. Draw Intro Card if present and active
       const currentTime = audio.currentTime || 0;
       const segments = state?.transcript?.segments || [];
+      const firstSeg = segments.find(s => s.words && s.words.length > 0);
+      const firstVocalStart = firstSeg ? firstSeg.start : 10.0;
+      const introDuration = Math.min(state?.job?.intro?.duration || 5.0, Math.max(1.5, firstVocalStart - 0.8));
+      const introStart = 0.0;
+      const introEnd = introStart + introDuration;
+      const fadeOutDur = 0.6;
+      const fadeOutStart = Math.max(0, introEnd - fadeOutDur);
+
+      if (introLoaded && introImg && currentTime >= introStart && currentTime <= introEnd) {
+        let alpha = 1.0;
+        if (currentTime > fadeOutStart) {
+          alpha = (introEnd - currentTime) / fadeOutDur;
+        }
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+        ctx.drawImage(introImg, 0, 0, W, H);
+        ctx.restore();
+      }
+
+      // 3. Teleprompter segments for currentTime
       const detectedAgents = state?.detected_agents || [];
 
       if (segments.length === 0) return;
 
-      const slotOffset = Math.max(Math.round(style.font_size * style.line_gap_factor * 1.5), Math.round(H * 0.14));
+      // Do not render lyrics during the intro card or before the first vocal enters
       const nominalSlideSec = 0.35;
+      const firstEntryStart = Math.max(0, segments[0].start - nominalSlideSec);
+      const isIntroActive = introLoaded && introImg && (state?.job?.intro?.enabled !== false);
+      const minLyricTime = isIntroActive ? Math.max(introEnd, firstEntryStart) : firstEntryStart;
+      if (currentTime < minLyricTime) return;
+
+      const slotOffset = Math.max(Math.round(style.font_size * style.line_gap_factor * 1.5), Math.round(H * 0.14));
       const maxGapSec = 2.0;
 
       // Build synchronized transition windows matching ASS generation
@@ -1368,6 +1509,10 @@ HTML_PAGE = """<!DOCTYPE html>
           ctx.shadowBlur = 4;
         }
 
+        const previewMode = document.getElementById('preview-mode-select')?.value || 'lyrics';
+        const lcInactive = style.lyrics_colors?.inactive || '#9A8F8B';
+        const lcActive = style.lyrics_colors?.active || '#F4EEE6';
+
         // Render each word
         words.forEach(word => {
           const wordText = word.text + ' ';
@@ -1381,39 +1526,76 @@ HTML_PAGE = """<!DOCTYPE html>
             wordHCol = style.agent_colors[word.agent].highlight_color || wordHCol;
           }
 
-          // Base outline
-          if (style.outline_width > 0) {
-            ctx.strokeStyle = style.outline_color;
-            ctx.lineWidth = style.outline_width * 2;
-            ctx.lineJoin = 'round';
-            ctx.strokeText(wordText, wordCenterX, y);
-          }
-
-          // Inactive base color
-          ctx.fillStyle = wordPCol;
-          ctx.fillText(wordText, wordCenterX, y);
-
-          // Active karaoke highlight wipe
-          if (currentTime >= word.start) {
-            ctx.save();
-            let progress = 1.0;
-            if (currentTime < word.end && word.end > word.start) {
-              progress = (currentTime - word.start) / (word.end - word.start);
-            }
-            const clipWidth = wordWidth * progress;
-            ctx.beginPath();
-            ctx.rect(currentX, y - segFontSize, clipWidth, segFontSize * 2);
-            ctx.clip();
-
+          if (previewMode === 'lyrics') {
+            // Lyrics mode: 2-color progressive fill (words wipe to active and stay active)
             if (style.outline_width > 0) {
               ctx.strokeStyle = style.outline_color;
               ctx.lineWidth = style.outline_width * 2;
               ctx.lineJoin = 'round';
               ctx.strokeText(wordText, wordCenterX, y);
             }
-            ctx.fillStyle = wordHCol;
+
+            // Inactive base color
+            ctx.fillStyle = lcInactive;
             ctx.fillText(wordText, wordCenterX, y);
-            ctx.restore();
+
+            // Active wipe: sweeps while singing, remains active after word ends
+            if (currentTime >= word.start) {
+              ctx.save();
+              let progress = 1.0;
+              if (currentTime < word.end && word.end > word.start) {
+                progress = (currentTime - word.start) / (word.end - word.start);
+              }
+              const clipWidth = wordWidth * progress;
+              ctx.beginPath();
+              ctx.rect(currentX, y - segFontSize, clipWidth, segFontSize * 2);
+              ctx.clip();
+
+              if (style.outline_width > 0) {
+                ctx.strokeStyle = style.outline_color;
+                ctx.lineWidth = style.outline_width * 2;
+                ctx.lineJoin = 'round';
+                ctx.strokeText(wordText, wordCenterX, y);
+              }
+              ctx.fillStyle = lcActive;
+              ctx.fillText(wordText, wordCenterX, y);
+              ctx.restore();
+            }
+          } else {
+            // Karaoke mode: classic 2-color teleprompter wipe
+            if (style.outline_width > 0) {
+              ctx.strokeStyle = style.outline_color;
+              ctx.lineWidth = style.outline_width * 2;
+              ctx.lineJoin = 'round';
+              ctx.strokeText(wordText, wordCenterX, y);
+            }
+
+            // Inactive base color
+            ctx.fillStyle = wordPCol;
+            ctx.fillText(wordText, wordCenterX, y);
+
+            // Active karaoke highlight wipe
+            if (currentTime >= word.start) {
+              ctx.save();
+              let progress = 1.0;
+              if (currentTime < word.end && word.end > word.start) {
+                progress = (currentTime - word.start) / (word.end - word.start);
+              }
+              const clipWidth = wordWidth * progress;
+              ctx.beginPath();
+              ctx.rect(currentX, y - segFontSize, clipWidth, segFontSize * 2);
+              ctx.clip();
+
+              if (style.outline_width > 0) {
+                ctx.strokeStyle = style.outline_color;
+                ctx.lineWidth = style.outline_width * 2;
+                ctx.lineJoin = 'round';
+                ctx.strokeText(wordText, wordCenterX, y);
+              }
+              ctx.fillStyle = wordHCol;
+              ctx.fillText(wordText, wordCenterX, y);
+              ctx.restore();
+            }
           }
 
           currentX += wordWidth;
