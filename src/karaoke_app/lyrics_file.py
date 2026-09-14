@@ -11,9 +11,15 @@ LYRICS_FILENAME = "lyrics.lyricsfile.yaml"
 
 
 class _IndentedSafeDumper(yaml.SafeDumper):
+    def represent_str(self, value: str) -> Any:
+        style = "|" if "\n" in value else '"' if "'" in value else None
+        return self.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
     def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
         return super().increase_indent(flow, indentless=False)
 
+
+_IndentedSafeDumper.add_representer(str, _IndentedSafeDumper.represent_str)
 
 def load_lyrics_file(path: Path, *, require_words: bool = True) -> dict[str, Any]:
     """Load and validate a LyricsFile YAML document."""

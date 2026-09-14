@@ -27,6 +27,8 @@ window.setup = async data => {
   renderer.setLyrics(data.lyrics);
   records=renderer.lines;
   forEveryLiveView(engine=>{engine.lineCullObserver?.disconnect();engine.culledLineElements.clear();});
+  const marginV = data.margin_v ?? Math.round(data.height * .22);
+  document.querySelector('#mount').style.setProperty('--margin-v', `${marginV}px`);
   for(const record of records){
     record.lyricElement.style.left=`${data.margin}px`;
     record.lyricElement.style.width=`${data.width-2*data.margin}px`;
@@ -65,14 +67,15 @@ window.renderFrame = time => {
     for(const line of group.lines){
       const element=records[line.index].lyricElement;
       const record=records[line.index];
-      let y=scene.mode==='karaoke' ? scene.height*.38+group.offset-scrollOffset+line.y*group.scale
+      let y=scene.mode==='karaoke' ? scene.height*.45+group.offset-scrollOffset+line.y*group.scale
         : (scene.height-group.height*group.scale)/2+line.y*group.scale;
       element.style.top=`${y}px`;
       element.style.transform=`scale(${group.scale})`;
       element.style.visibility=allowed && y>-group.height && y<scene.height ? 'visible':'hidden';
-      const past=Math.max(0,Math.min(1,(time-record.time-record.duration-.35)/.5));
+      const rawPast=Math.max(0,Math.min(1,(time-record.time-record.duration-.35)/.5));
+      const past=rawPast>0?bezier(rawPast,.4,0,.2,1):0;
       const future=time<record.time;
-      element.dataset.state=past>=1?'past':future?'future':'active';
+      element.dataset.state=rawPast>=1?'past':future?'future':'active';
       element.style.opacity=String(future ? .66 : 1-.67*past);
       element.style.filter=`blur(${2.5*scene.font_size/48*past}px)`;
       // Rebuild WAAPI effects at the exact sampled time, then pause them. This

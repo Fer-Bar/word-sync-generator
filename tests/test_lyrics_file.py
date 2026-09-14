@@ -1,6 +1,32 @@
 import unittest
 
-from karaoke_app.lyrics_file import sanitize_lyrics_lines, validate_lyrics_file
+import yaml
+
+from karaoke_app.lyrics_file import dump_lyrics_file, sanitize_lyrics_lines, validate_lyrics_file
+
+
+class LyricsFileSerializationTests(unittest.TestCase):
+    def test_readable_apostrophes_and_literal_line_breaks_round_trip(self) -> None:
+        texts = ["He's here", "Don't go: #stay", "彼はここにいる"]
+        document = {
+            "version": "1.0",
+            "metadata": {"title": "A song"},
+            "lines": [
+                {
+                    "text": text,
+                    "start_ms": index * 1000,
+                    "end_ms": (index + 1) * 1000,
+                    "words": [{"text": text, "start_ms": index * 1000, "end_ms": (index + 1) * 1000}],
+                }
+                for index, text in enumerate(texts)
+            ],
+        }
+
+        serialized = dump_lyrics_file(document)
+
+        self.assertIn("plain: |-\n  He's here\n  Don't go: #stay\n  彼はここにいる\n", serialized)
+        self.assertNotIn("He''s", serialized)
+        self.assertEqual(yaml.safe_load(serialized), validate_lyrics_file(document))
 
 
 class LyricsFileSanitizationTests(unittest.TestCase):

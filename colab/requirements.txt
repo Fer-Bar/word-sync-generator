@@ -1,6 +1,7 @@
 ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@11855d1de76af2b490dd2e8e2db2661805ae90a0
 demucs==4.1.0
 faster-whisper==1.2.1
+lyricsgenius==3.12.2
 huggingface-hub>=0.34.0
 num2words>=0.5.14,<0.6
 PyYAML>=6.0.2

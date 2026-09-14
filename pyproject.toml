@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2.5.3",
     "imageio-ffmpeg>=0.6.0",
     "playwright>=1.55,<2",
+    "lyricsgenius>=3.7,<4",
 ]
 
 [project.scripts]

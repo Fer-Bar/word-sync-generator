@@ -252,12 +252,17 @@ def _build_page_dialogues(
 
     for page in pages:
         lanes = _page_lanes(page)
-        sorted_lanes = sorted(lanes, key=lambda item: 1 if item[0][1] else 0)
-
         all_lane_lines: list[tuple[tuple[str, bool], dict[str, Any]]] = []
-        for channel, lane_page in sorted_lanes:
+        for channel, lane_page in lanes:
             for line in lane_page["lines"]:
                 all_lane_lines.append((channel, line))
+
+        all_lane_lines.sort(
+            key=lambda item: (
+                min(w["start"] for w in item[1]["words"]) if item[1].get("words") else item[1].get("start", 0),
+                1 if item[0][1] else 0,
+            )
+        )
 
         line_count = len(all_lane_lines)
         if line_count == 0:
@@ -329,8 +334,12 @@ def _build_pages(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for segment in segments:
         if not segment.get("words"):
             continue
-        gap = segment["start"] - current[-1]["end"] if current else 0
-        duration = segment["end"] - current[0]["start"] if current else 0
+        gap = segment["start"] - max(s["end"] for s in current) if current else 0
+        duration = (
+            max(s["end"] for s in current + [segment]) - min(s["start"] for s in current + [segment])
+            if current
+            else 0
+        )
         if current and (
             len(current) >= MAX_LYRIC_LINES_PER_PAGE
             or gap >= PAGE_BREAK_SILENCE_SECONDS

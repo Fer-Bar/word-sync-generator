@@ -62,10 +62,25 @@ def _layout(group, font_path, size, available, height, line_gap):
 def _fixed_pages(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from karaoke_app.ass import _build_pages, _page_lanes
 
-    return [{"lines": [line for _, lane in _page_lanes(page) for line in lane["lines"]],
-             "start": page["source_start_cs"], "end": page["karaoke_end_cs"],
-             "display_start": page["display_start_cs"], "display_end": page["display_end_cs"]}
-            for page in _build_pages(segments)]
+    pages = []
+    for page in _build_pages(segments):
+        lines = [line for _, lane in _page_lanes(page) for line in lane["lines"]]
+        lines.sort(
+            key=lambda line: (
+                min(w["start"] for w in line["words"]) if line.get("words") else line.get("start", 0),
+                1 if line.get("isBackground") else 0,
+            )
+        )
+        pages.append(
+            {
+                "lines": lines,
+                "start": page["source_start_cs"],
+                "end": page["karaoke_end_cs"],
+                "display_start": page["display_start_cs"],
+                "display_end": page["display_end_cs"],
+            }
+        )
+    return pages
 
 
 def _row_line(row) -> dict[str, Any]:

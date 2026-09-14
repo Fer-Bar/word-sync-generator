@@ -4,9 +4,7 @@
 <style>
 @font-face {font-family: Switzer; src:url('/font.otf');font-weight:600}
 html,body {margin:0;padding:0;background:transparent;overflow:hidden}
-#mount {position:absolute;inset:0;overflow:hidden}
+#mount {position:absolute;inset:0;overflow:hidden;-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent calc(var(--margin-v,140px)*.3),black var(--margin-v,140px),black calc(100% - var(--margin-v,140px)),transparent calc(100% - var(--margin-v,140px)*.3),transparent 100%);mask-image:linear-gradient(to bottom,transparent 0,transparent calc(var(--margin-v,140px)*.3),black var(--margin-v,140px),black calc(100% - var(--margin-v,140px)),transparent calc(100% - var(--margin-v,140px)*.3),transparent 100%)}
 .blyrics-container {position:absolute!important;inset:0;padding:0!important;transform:none!important}
 .blyrics-container > div {position:absolute!important;margin:0!important;padding:0!important;transform-origin:center top;text-align:center}
-.blyrics-container > div[data-state="past"] .blyrics--word:not(.blyrics-word-highlight) {color:white}
-.blyrics-container > div[data-state="past"] .blyrics-word-highlight {visibility:hidden}
 </style></head><body><div id="mount"></div><script type="module" src="/browser_lyrics/player.js"></script></body></html>

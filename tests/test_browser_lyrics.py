@@ -44,6 +44,19 @@ def test_scene_preserves_original_word_and_fragment_times(transcript):
     assert transcript == before
 
 
+def test_scene_includes_vertical_margin(transcript):
+    scene = scene_for(transcript, "karaoke")
+    assert "margin_v" in scene
+    assert scene["margin_v"] == round(360 * 0.22)
+    custom_scene = build_browser_scene(
+        transcript,
+        {"width": 1920, "height": 1080, "fps": 30},
+        {"font_size": 64, "margin_h": 70, "margin_v": 150},
+        "karaoke",
+    )
+    assert custom_scene["margin_v"] == 150
+
+
 @pytest.fixture(scope="module")
 def browser_font():
     pytest.importorskip("playwright.sync_api")
@@ -107,6 +120,12 @@ def test_lines_stay_centered_including_scaled_pages(browser_font, mode, line_cou
             assert (left + right) / 2 == pytest.approx(320, abs=.5)
         if line_count > 1:
             assert lines[0]["box"]["width"] < 560
+        margin_v_val = page.evaluate(
+            "getComputedStyle(document.querySelector('#mount')).getPropertyValue('--margin-v')"
+        )
+        assert margin_v_val.strip() == f"{scene['margin_v']}px"
+        if mode == "karaoke":
+            assert lines[0]["box"]["y"] == pytest.approx(scene["height"] * 0.45, abs=10)
 
 
 @pytest.mark.parametrize("position", ["top_left", "bottom_right"])
@@ -184,4 +203,53 @@ def test_render_browser_overlay_inside_active_asyncio_loop(tmp_path, browser_fon
     result_path = asyncio.run(run_in_loop())
     assert result_path.is_file()
     assert result_path == output
+
+
+def test_lyrics_deactivation_transition_is_smooth(browser_font):
+    transcript = {
+        "segments": [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "words": [
+                    {"text": "Smooth ", "start": 1.0, "end": 1.5},
+                    {"text": "fade", "start": 1.5, "end": 2.0},
+                ],
+            }
+        ]
+    }
+    scene = build_browser_scene(
+        transcript,
+        {"width": 640, "height": 360, "fps": 30},
+        {"font_size": 48, "margin_h": 40, "margin_v": 60},
+        "karaoke",
+    )
+    scene["groups"][0]["end"] = 10.0
+    with browser_scene(scene, browser_font) as page:
+        page.evaluate("t => window.renderFrame(t)", 2.84)
+        info_before = page.evaluate("""() => {
+            const el = document.querySelector('.blyrics-container > div');
+            const hl = el.querySelector('.blyrics-word-highlight');
+            return {
+                state: el.dataset.state,
+                hlVis: getComputedStyle(hl).visibility,
+                opacity: parseFloat(getComputedStyle(el).opacity),
+            };
+        }""")
+        page.evaluate("t => window.renderFrame(t)", 2.86)
+        info_after = page.evaluate("""() => {
+            const el = document.querySelector('.blyrics-container > div');
+            const hl = el.querySelector('.blyrics-word-highlight');
+            return {
+                state: el.dataset.state,
+                hlVis: getComputedStyle(hl).visibility,
+                opacity: parseFloat(getComputedStyle(el).opacity),
+            };
+        }""")
+        assert info_before["hlVis"] == "visible"
+        assert info_after["hlVis"] == "visible"
+        assert info_before["state"] == "active"
+        assert info_after["state"] == "past"
+        assert abs(info_after["opacity"] - info_before["opacity"]) < 0.01
+
 

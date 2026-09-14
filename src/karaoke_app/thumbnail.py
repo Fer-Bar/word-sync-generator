@@ -150,7 +150,7 @@ def create_thumbnail(
     output_path: Path,
     *,
     mode: str = "lyrics",
-    background_path: Path = REFERENCES / "background.png",
+    background_path: Path | Image.Image = REFERENCES / "background.png",
     logo_path: Path | None = THUMBNAIL_LOGO,
     title_font: Path = FONTS / "Anton-Regular.ttf",
     artist_font: Path = FONTS / "Montserrat.ttf",
@@ -167,13 +167,18 @@ def create_thumbnail(
     if isinstance(width, bool) or not isinstance(width, int) or width < 640 or width > 3840 or width % 16:
         raise ValueError("Width must be a multiple of 16 between 640 and 3840")
     output_path = Path(output_path)
-    inputs = [background_path, title_font, artist_font, *([logo_path] if logo_path else [])]
+    inputs = [title_font, artist_font, *([logo_path] if logo_path else [])]
+    if isinstance(background_path, (str, Path)):
+        inputs.append(Path(background_path))
     if output_path.resolve() in {Path(p).resolve() for p in inputs}:
         raise ValueError("Output must not overwrite a source asset")
     if output_path.suffix.lower() != ".png":
         raise ValueError("Thumbnail output must have a .png extension")
-    with Image.open(background_path) as source:
-        canvas = ImageOps.fit(source.convert("RGBA"), SIZE, method=Image.Resampling.LANCZOS)
+    if isinstance(background_path, Image.Image):
+        canvas = ImageOps.fit(background_path.convert("RGBA"), SIZE, method=Image.Resampling.LANCZOS)
+    else:
+        with Image.open(background_path) as source:
+            canvas = ImageOps.fit(source.convert("RGBA"), SIZE, method=Image.Resampling.LANCZOS)
     canvas.alpha_composite(
         create_title_overlay(
             title,
@@ -193,13 +198,19 @@ def create_thumbnail(
 
 def run_thumbnail(argv: list[str]) -> None:
     """Parse the independent thumbnail command and optionally read job metadata."""
+    from karaoke_app.themes import THEMES, apply_render_theme
+    from karaoke_app.visual_config import BACKGROUND_STYLES
+
     parser = argparse.ArgumentParser(prog="karaoke thumbnail", description=__doc__)
     parser.add_argument("job_dir", nargs="?", type=Path)
     parser.add_argument("--title")
     parser.add_argument("--artist")
     parser.add_argument("--mode", choices=("lyrics", "karaoke", "both"), default="both")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--background", type=Path, default=REFERENCES / "background.png")
+    parser.add_argument("--background", type=Path, default=None)
+    parser.add_argument("--background-style", choices=BACKGROUND_STYLES)
+    parser.add_argument("--theme", choices=tuple(THEMES.keys()), help="Preset color palette")
+    parser.add_argument("--cover", type=Path, help="Artwork palette for procedural background")
     parser.add_argument("--logo", type=Path, default=THUMBNAIL_LOGO)
     parser.add_argument("--no-logo", action="store_true")
     parser.add_argument("--title-font", type=Path, default=FONTS / "Anton-Regular.ttf")
@@ -208,11 +219,12 @@ def run_thumbnail(argv: list[str]) -> None:
     parser.add_argument("--no-texture", action="store_true")
     args = parser.parse_args(argv)
     title, artist = args.title, args.artist
+    doc = None
     if args.job_dir:
         from karaoke_app.job_document import load_job_document
 
         doc = load_job_document(args.job_dir)
-        title = title if title is not None else doc["title"]
+        title = title if title is not None else doc.get("title")
         artist = (
             artist
             if artist is not None
@@ -227,13 +239,45 @@ def run_thumbnail(argv: list[str]) -> None:
         if args.job_dir
         else Path("outputs/thumbnails") / _safe_filename(f"{artist}-{title}")
     )
+
+    bg: Path | Image.Image
+    if args.background is not None:
+        bg = args.background
+    elif (
+        args.background_style
+        or args.theme
+        or args.cover
+        or (doc and doc.get("background", {}).get("kind") in {"cosmic", "image"})
+    ):
+        from karaoke_app.render_graphics import background_frame
+        from karaoke_app.visual_config import apply_visual_options
+
+        target_doc = doc if doc is not None else {
+            "video": {"width": 1920, "height": 1080, "fps": 24},
+            "background": {"kind": "solid", "color": "#0B1020"},
+        }
+        if "video" not in target_doc:
+            target_doc["video"] = {"width": 1920, "height": 1080, "fps": 24}
+        if args.background_style or args.cover:
+            target_doc = apply_visual_options(
+                target_doc,
+                background_style=args.background_style,
+                cover=args.cover,
+            )
+        if args.theme:
+            target_doc, _ = apply_render_theme(target_doc, theme=args.theme)
+        job_root = args.job_dir or Path(".")
+        bg = background_frame(job_root, target_doc)
+    else:
+        bg = REFERENCES / "background.png"
+
     for mode in ("lyrics", "karaoke") if args.mode == "both" else (args.mode,):
         output = create_thumbnail(
             title,
             artist,
             output_dir / f"thumbnail_{mode}.png",
             mode=mode,
-            background_path=args.background,
+            background_path=bg,
             logo_path=None if args.no_logo else args.logo,
             title_font=args.title_font,
             artist_font=args.artist_font,

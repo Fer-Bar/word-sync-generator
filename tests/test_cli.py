@@ -292,6 +292,31 @@ class SourceReliabilityTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob("*.recovery")))
         self.assertEqual(self.payload["watermark"], {"enabled": False})
 
+    def test_lyric_reference_is_uploaded_with_service(self) -> None:
+        text_path = self.root / "reference.txt"
+        text_path.write_text("first verse\nsecond verse", encoding="utf-8")
+        self.args.lyrics_text = text_path
+        self.args.genius_url = "https://genius.com/Artist-song-lyrics"
+        cli.run_job(self.args)
+        self.assertEqual(self.payload["lyrics"]["text_path"], str(cli.REMOTE_LYRICS_TEXT))
+        self.assertEqual(self.payload["lyrics"]["genius_url"], self.args.genius_url)
+        uploads = [command[-1] for command, _ in self.commands if command[2] == "upload"]
+        self.assertIn(str(cli.REMOTE_LYRICS_TEXT), uploads)
+        self.assertIn(str(cli.REMOTE_REFERENCES_MODULE), uploads)
+
+    def test_force_whisper_rejects_reference_before_provisioning(self) -> None:
+        self.args.no_lrclib = True
+        self.args.genius_url = "https://genius.com/Artist-song-lyrics"
+        with self.assertRaisesRegex(ValueError, "forces Whisper"):
+            cli.run_job(self.args)
+        self.assertFalse(self.commands)
+
+    def test_invalid_reference_url_does_not_provision_colab(self) -> None:
+        self.args.genius_url = "https://example.com/song-lyrics"
+        with self.assertRaisesRegex(ValueError, "Genius URL"):
+            cli.run_job(self.args)
+        self.assertFalse(self.commands)
+
     def test_archive_download_exhaustion_keeps_status_and_stops(self) -> None:
         def runner(command, **kwargs):
             if command[2] == "download" and command[-2] == str(cli.REMOTE_ARCHIVE):

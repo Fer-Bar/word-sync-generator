@@ -62,6 +62,28 @@ def test_overlapping_vocals_are_grouped_without_retiming():
     assert groups[0]["lines"][1]["words"][0]["start"] == 2
 
 
+def test_fixed_pages_interleaves_background_vocals():
+    from karaoke_app.word_synced import _fixed_pages
+
+    segments = [
+        segment("Lead 1", 1.0, 3.0),
+        {
+            "text": "(Backing 1)",
+            "start": 1.5,
+            "end": 2.5,
+            "isBackground": True,
+            "words": [{"text": "(Backing 1)", "start": 1.5, "end": 2.5, "isBackground": True}],
+        },
+        segment("Lead 2", 3.5, 5.0),
+    ]
+    pages = _fixed_pages(segments)
+    assert len(pages) == 1
+    assert len(pages[0]["lines"]) == 3
+    assert pages[0]["lines"][0]["text"] == "Lead 1"
+    assert pages[0]["lines"][1]["text"] == "(Backing 1)"
+    assert pages[0]["lines"][2]["text"] == "Lead 2"
+
+
 def test_words_keep_silence_and_fragment_timing(monkeypatch):
     bundled = Path(__file__).resolve().parents[1] / "src/karaoke_app/assets/fonts/Montserrat.ttf"
     monkeypatch.setattr("karaoke_app.word_synced.switzer_font", lambda: bundled)

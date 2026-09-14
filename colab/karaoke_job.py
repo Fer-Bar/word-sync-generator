@@ -20,6 +20,7 @@ STATUS_PATH = Path("/content/karaoke_status.json")
 HF_TOKEN_PATH = Path("/content/.hf_token")
 WORK_DIR = Path("/content/karaoke_workspace")
 LYRICS_MODULE_PATH = Path("/content/karaoke_lyrics_file.py")
+REFERENCES_MODULE_PATH = Path("/content/karaoke_lyric_references.py")
 RENDER_JOB_PATH = Path("/content/karaoke_render_job.zip")
 LOGGER = logging.getLogger(__name__)
 LRCLIB_API = "https://lrclib.net/api"
@@ -49,10 +50,11 @@ def main() -> None:
 
     lyrics_config = config.get("lyrics", {})
     record = None
-    if not lyrics_config.get("disable_lrclib") and lyrics_config.get("lrclib_id") is not None:
+    lookup_enabled = not lyrics_config.get("disable_lrclib") and not lyrics_config.get("text_path")
+    if lookup_enabled and lyrics_config.get("lrclib_id") is not None:
         record = _fetch_lrclib({}, config)
     source_path, metadata = _acquire_source(config)
-    if not lyrics_config.get("disable_lrclib") and lyrics_config.get("lrclib_id") is None:
+    if lookup_enabled and lyrics_config.get("lrclib_id") is None:
         record = _fetch_lrclib(metadata, config)
     if record is not None and lyrics_config.get("lrclib_id") is not None:
         document = _lyrics_document_from_record(record, metadata, config)
@@ -80,7 +82,9 @@ def main() -> None:
         "disable_lrclib": bool(lyrics_config.get("disable_lrclib")),
     }
     try:
-        lyrics, alignment = _prepare_lyrics(vocals_path, metadata, config, selected_record=record)
+        lyrics, alignment = _prepare_lyrics(
+            vocals_path, metadata, config, selected_record=record, artifacts_dir=output_dir,
+        )
     except Exception as error:
         checkpoint = {
             "status": "lyrics_failed",
@@ -281,6 +285,19 @@ def _load_lyrics_module() -> Any:
     return module
 
 
+def _load_references_module() -> Any:
+    if not REFERENCES_MODULE_PATH.is_file():
+        import karaoke_app.lyric_references as module
+
+        return module
+    spec = importlib.util.spec_from_file_location("karaoke_lyric_references", REFERENCES_MODULE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load the uploaded lyric references service")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _extract_archive(archive_path: Path, destination: Path) -> None:
     import zipfile
 
@@ -441,45 +458,151 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
 
 def _prepare_lyrics(
     vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any],
-    *, selected_record: dict[str, Any] | None,
+    *, selected_record: dict[str, Any] | None, artifacts_dir: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     lyrics_module = _load_lyrics_module()
+    references = _load_references_module()
     record = selected_record
-    fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_lrclib_match"
-    if record is not None:
+    document, evidence = references.resolve_reference(
+        config.get("lyrics", {}), metadata, record,
+        record_to_document=lambda: _lyrics_document_from_record(record, metadata, config),
+        candidate_is_safe=_lrclib_candidate_is_safe,
+    )
+    _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
+    transcript = None
+    validation: dict[str, Any] = {"needs_review": True, "status": "unavailable", "lines": []}
+    try:
+        transcript = _transcribe(vocals_path, metadata, config)
+        _save_lyrics_evidence(artifacts_dir, "transcription.json", transcript)
+    except RuntimeError as error:
+        if document is None:
+            raise
+        validation["error"] = str(error)
+        LOGGER.warning("Independent Whisper validation unavailable: %s", error)
+    if document is not None:
+        document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
+        document["metadata"]["language"] = (
+            config["language"] if config["language"] != "auto"
+            else transcript["transcription"]["language"] if transcript else document["metadata"].get("language")
+        )
+        if transcript:
+            validation = references.compare_reference(document["lines"], transcript)
+            if evidence.get("text_conflict"):
+                alternative = references.compare_reference(evidence["alternative_lines"], transcript)
+                evidence["alternative_validation"] = alternative
+                # Do not replace timed or authored text solely on a weak ASR preference.
+                current_score = min(validation["reference_coverage"], validation["asr_coverage"])
+                alternative_score = min(alternative["reference_coverage"], alternative["asr_coverage"])
+                if (not _has_complete_word_timings(document) and alternative_score >= 0.95
+                        and alternative_score - current_score >= 0.15):
+                    evidence["selected_variant"] = "plain_confirmed_by_asr"
+                    document["lines"] = evidence["alternative_lines"]
+                    validation = alternative
+                else:
+                    evidence["selected_variant"] = "original_conflict_needs_review"
+                validation["needs_review"] = True
+            if (evidence["source"] != "txt" and not config.get("lyrics", {}).get("lrclib_id")
+                    and references.likely_incomplete(validation)):
+                evidence["rejection"] = "likely_incomplete_reference_against_asr"
+                if evidence["source"] == "lrclib":
+                    extra, extra_evidence = references.resolve_reference(
+                        config.get("lyrics", {}), metadata, None,
+                        record_to_document=lambda: document, candidate_is_safe=_lrclib_candidate_is_safe,
+                    )
+                    if extra is not None:
+                        extra_validation = references.compare_reference(extra["lines"], transcript)
+                        if (min(extra_validation["reference_coverage"], extra_validation["asr_coverage"]) >= 0.9
+                                and not references.likely_incomplete(extra_validation)):
+                            extra["metadata"] = dict(document["metadata"])
+                            extra_evidence["previous_reference"] = evidence
+                            document, evidence, validation = extra, extra_evidence, extra_validation
+                    else:
+                        evidence["attempts"].extend(extra_evidence["attempts"])
+        _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
+        _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
+
+    fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_reference"
+    provenance: dict[str, Any] = {}
+    lyrics = None
+    if document is not None and not evidence.get("rejection"):
         try:
-            document = _lyrics_document_from_record(record, metadata, config)
             if _has_complete_word_timings(document):
                 lyrics = lyrics_module.validate_lyrics_file(document, require_words=True)
-                return lyrics, {
-                    "engine": "lrclib",
-                    "lrclib_id": record.get("id"),
-                    "word_timing": "provided",
-                    "language": lyrics["metadata"].get("language"),
-                    "strategy": "provided_word_timings",
-                }
-            provenance: dict[str, Any] = {}
-            lyrics, words = _align_known_lyrics(vocals_path, document, config, provenance=provenance)
-            return lyrics, {
-                "engine": "ctc-forced-aligner",
-                "model": CTC_ALIGNER_MODEL,
-                "model_revision": CTC_ALIGNER_MODEL_REVISION,
-                "lrclib_id": record.get("id"),
-                "word_timing": "generated",
-                "words": words,
-                **provenance,
-            }
+                provenance.update(engine=evidence["source"], word_timing="provided", strategy="provided_word_timings")
+            else:
+                lyrics, _ = _align_known_lyrics(vocals_path, document, config, provenance=provenance)
+                provenance.update(engine="ctc-forced-aligner", word_timing="generated",
+                                  model=CTC_ALIGNER_MODEL, model_revision=CTC_ALIGNER_MODEL_REVISION)
         except (AssertionError, KeyError, RuntimeError, ValueError) as error:
             fallback_reason = str(error)
-            LOGGER.warning(
-                "LRCLIB record %s (%s) could not be used; falling back to Faster Whisper: %s",
-                record.get("id"),
-                record.get("trackName"),
-                error,
-            )
+            LOGGER.warning("Reference alignment failed; trying independent ASR anchors: %s", error)
+            recovery = references.anchored_document(document, validation)
+            if recovery is not None:
+                try:
+                    lyrics, _ = _align_known_lyrics(
+                        vocals_path, recovery, config, provenance=provenance, recovery_only=True,
+                    )
+                    provenance.update(engine="ctc-forced-aligner", word_timing="generated",
+                                      model=CTC_ALIGNER_MODEL, model_revision=CTC_ALIGNER_MODEL_REVISION,
+                                      strategy="whisper_anchored_ctc", anchor_source="independent_whisper")
+                except (AssertionError, KeyError, RuntimeError, ValueError) as recovery_error:
+                    fallback_reason = f"{error}; ASR recovery: {recovery_error}"
 
-    transcript = _transcribe(vocals_path, metadata, config)
-    lyrics = _transcript_to_lyrics(transcript)
+    if lyrics is not None:
+        desired = evidence.get("structure_lines")
+        if desired:
+            try:
+                regrouped, grouping = references.merge_reference_lines(lyrics, desired)
+                lyrics = lyrics_module.validate_lyrics_file(regrouped, require_words=True)
+                evidence["grouping"] = grouping
+                validation["needs_review"] |= bool(grouping["unresolved_reference_boundaries"])
+                evidence["structure_restored"] = not grouping["unresolved_reference_boundaries"]
+            except ValueError as error:
+                evidence["structure_error"] = str(error)
+                validation["needs_review"] = True
+        if transcript:
+            prior_review = validation["needs_review"]
+            validation = references.compare_reference(lyrics["lines"], transcript)
+            validation["line_basis"] = "output"
+            validation["needs_review"] |= prior_review
+            for line, diagnostic in zip(lyrics["lines"], validation["lines"], strict=True):
+                if "anchor" in diagnostic:
+                    drift = abs(line["start_ms"] - diagnostic["anchor"]["start_ms"])
+                    diagnostic["start_deviation_ms"] = drift
+                    if drift > 1500:
+                        diagnostic["needs_review"] = True
+                        validation["needs_review"] = True
+    else:
+        if transcript is None:
+            raise RuntimeError(f"No timed lyrics available: {fallback_reason}")
+        lyrics = _transcript_to_lyrics(transcript)
+        provenance.update(engine="faster-whisper", model=config["whisper_model"], word_timing="generated",
+                          strategy="transcription", segmentation="heuristic", fallback_reason=fallback_reason)
+        validation["needs_review"] = True
+        validation["reference_not_applied"] = document is not None
+        if document is not None and not evidence.get("rejection"):
+            try:
+                desired = evidence.get("structure_lines") or document["lines"]
+                regrouped, grouping = references.merge_reference_lines(lyrics, desired)
+                lyrics = lyrics_module.validate_lyrics_file(regrouped, require_words=True)
+                evidence["grouping"] = grouping
+                validation["needs_review"] |= bool(grouping["unresolved_reference_boundaries"])
+                provenance.update(strategy="reference_grouped_asr", segmentation="reference")
+                validation["reference_not_applied"] = False
+            except ValueError as error:
+                evidence["structure_error"] = str(error)
+        if evidence.get("rejection"):
+            provenance["fallback_reason"] = evidence["rejection"]
+        if document is None:
+            validation.update(status="no_reference", line_basis="output", lines=[
+                {"line_index": index, "text": line["text"], "needs_review": True,
+                 "reason": "heuristic_segmentation"} for index, line in enumerate(lyrics["lines"])
+            ])
+
+    _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
+    _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
+    if validation["needs_review"]:
+        LOGGER.warning("Lyrics need review; inspect lyrics_validation.json (reference: %s)", evidence["source"])
     words = []
     for line_idx, line in enumerate(lyrics["lines"]):
         for word_idx, word in enumerate(line.get("words", [])):
@@ -490,18 +613,38 @@ def _prepare_lyrics(
                     "end": round(word["end_ms"] / 1000, 3),
                     "text": word["text"].strip(),
                     "probability": word.get("confidence", 0.0),
+                    **{key: word[key] for key in ("agent", "isBackground") if key in word},
                 }
             )
     return lyrics, {
-        "engine": "faster-whisper",
-        "model": config["whisper_model"],
-        "language": transcript["transcription"]["language"],
-        "word_timing": "generated",
-        "strategy": "transcription",
-        "fallback_reason": fallback_reason,
+        **provenance,
+        "language": lyrics["metadata"].get("language"),
+        "reference_source": evidence["source"],
+        "grouping": evidence.get("grouping"),
+        "needs_review": validation["needs_review"],
+        "reference_file": "lyrics_reference.json",
+        "validation_file": "lyrics_validation.json",
+        "transcription_file": "transcription.json" if transcript else None,
         "lrclib_id": record.get("id") if record else None,
         "words": words,
     }
+
+
+def _save_lyrics_evidence(directory: Path | None, filename: str, value: dict[str, Any]) -> None:
+    if directory is not None:
+        if filename == "lyrics_reference.json":
+            lines = (
+                value.get("alternative_lines") if value.get("selected_variant") == "plain_confirmed_by_asr"
+                else value.get("structure_lines") or value.get("lines")
+            )
+            if lines:
+                (directory / "reference.txt").write_text(
+                    "\n".join(line["text"] for line in lines) + "\n", encoding="utf-8",
+                )
+                value = {key: item for key, item in value.items()
+                         if key not in {"lines", "structure_lines", "original_text", "lrclib_record"}}
+                value.update(reference_text_file="reference.txt", line_count=len(lines))
+        (directory / filename).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _normalize_text(text: str | None) -> str:
@@ -1228,7 +1371,7 @@ def _is_alignment_healthy(
         severe_drift_count = 0
         for raw_line, out_line in zip(raw_lines, output_lines, strict=False):
             raw_start_ms = raw_line.get("start_ms")
-            if not isinstance(raw_start_ms, int | float) or raw_start_ms <= 0:
+            if not isinstance(raw_start_ms, int | float) or raw_start_ms < 0:
                 continue
             aligned_start_ms = out_line["start_ms"]
             drift_sec = abs(aligned_start_ms - raw_start_ms) / 1000.0
@@ -1371,7 +1514,7 @@ def _align_tokenized_lines(
 
 def _align_known_lyrics(
     vocals_path: Path, document: dict[str, Any], config: dict[str, Any],
-    *, provenance: dict[str, Any] | None = None,
+    *, provenance: dict[str, Any] | None = None, recovery_only: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     import torch
     from ctc_forced_aligner import (
@@ -1417,7 +1560,7 @@ def _align_known_lyrics(
     waveform = load_audio(str(vocals_path), model.dtype, model.device)
 
     has_line_timestamps = any(
-        isinstance(raw_line.get("start_ms"), int | float) and raw_line["start_ms"] > 0
+        isinstance(raw_line.get("start_ms"), int | float) and raw_line["start_ms"] >= 0
         for raw_line, _ in tokenized_lines
     )
 
@@ -1427,40 +1570,44 @@ def _align_known_lyrics(
 
     # --- Tier 1: Global Continuous MMS CTC Alignment (Quality-First) ---
     global_succeeded = False
-    try:
-        candidate_lines = _align_tokenized_lines(
-            model=model,
-            tokenizer=tokenizer,
-            waveform=waveform,
-            tokenized_lines=tokenized_lines,
-            language=language,
-            character_alignment=character_alignment,
-            generate_emissions=generate_emissions,
-            preprocess_text=preprocess_text,
-            get_alignments=get_alignments,
-            get_spans=get_spans,
-            postprocess_results=postprocess_results,
-            time_offset_sec=0.0,
-            batch_size=4,
-        )
-        if _is_alignment_healthy(candidate_lines, raw_lines_for_check):
-            output_lines = candidate_lines
-            global_succeeded = True
-            LOGGER.info("Global continuous CTC alignment succeeded with healthy metrics")
-        else:
-            LOGGER.warning("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
+    if not recovery_only:
+        try:
+            candidate_lines = _align_tokenized_lines(
+                model=model,
+                tokenizer=tokenizer,
+                waveform=waveform,
+                tokenized_lines=tokenized_lines,
+                language=language,
+                character_alignment=character_alignment,
+                generate_emissions=generate_emissions,
+                preprocess_text=preprocess_text,
+                get_alignments=get_alignments,
+                get_spans=get_spans,
+                postprocess_results=postprocess_results,
+                time_offset_sec=0.0,
+                batch_size=4,
+            )
+            if _is_alignment_healthy(candidate_lines, raw_lines_for_check):
+                output_lines = candidate_lines
+                global_succeeded = True
+                LOGGER.info("Global continuous CTC alignment succeeded with healthy metrics")
+            else:
+                LOGGER.warning("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
+                if provenance is not None:
+                    provenance["fallback_reason"] = "global_alignment_failed_health_checks"
+        except Exception as error:
             if provenance is not None:
-                provenance["fallback_reason"] = "global_alignment_failed_health_checks"
-    except Exception as error:
-        if provenance is not None:
-            provenance["fallback_reason"] = str(error)
-        LOGGER.warning("Global continuous CTC alignment failed: %s", error)
+                provenance["fallback_reason"] = str(error)
+            LOGGER.warning("Global continuous CTC alignment failed: %s", error)
 
     # --- Tier 2: Anchor-Guided Macro-Section Alignment (Recovery for long instrumental solos) ---
     if not global_succeeded:
         if has_line_timestamps:
             LOGGER.info("Attempting Tier 2 anchor-guided macro-section alignment")
-            sections = _group_lines_into_macro_sections(tokenized_lines, gap_threshold_sec=6.0)
+            sections = (
+                [[line] for line in tokenized_lines] if recovery_only
+                else _group_lines_into_macro_sections(tokenized_lines, gap_threshold_sec=6.0)
+            )
             sample_rate = 16000
             total_samples = waveform.shape[-1]
             audio_duration_sec = total_samples / sample_rate

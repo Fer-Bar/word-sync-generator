@@ -279,11 +279,87 @@ folder and renders both the instrumental karaoke video and the original-audio ly
 
 ## Lyrics strategy
 
-Preparation selects the first usable source in this order:
+Preparation resolves text and timing separately:
 
-1. A matching LRCLIB LyricsFile that already contains word timings.
-2. LRCLIB line-synced or plain lyrics aligned to the separated vocal stem with CTC forced alignment.
-3. Faster Whisper transcription with word timestamps when LRCLIB has no safe match or alignment fails.
+1. An explicit UTF-8 TXT (`--lyrics-text`) takes priority and preserves its verse boundaries.
+2. LRCLIB supplies the reference and any existing word or line timings. When its plain and synced
+   text have identical normalized words, the plain line boundaries are applied to the timed words.
+3. Genius supplies plain text when LRCLIB has no usable reference. Searches use title, artist and
+   edition checks; ambiguous results are rejected. `--genius-url` selects a matching song URL among
+   search results; provide accurate `--title` and `--artist`, including for local recordings.
+4. Faster Whisper runs once on the vocal stem for independent comparison, including when word
+   timings already exist. Without an accepted reference it also supplies the fallback lyrics.
+
+CTC still generates missing word timings. If alignment fails, complete, unambiguous Whisper matches
+with word probabilities of at least 0.5 provide per-line recovery windows. When CTC still fails,
+ordered fuzzy text alignment transfers reliable reference boundaries to the existing timed words
+(`reference_grouped_asr`). Small transcription differences no longer reject the whole reference.
+Uncertain boundaries retain the existing grouping and are listed in the diagnostic. Low overall
+text similarity rejects regrouping; the fallback is marked `segmentation: heuristic`.
+No word timestamps are interpolated to create a verse boundary.
+
+Whisper is evidence, not ground truth. Ordered comparison reports unmatched words, substitutions
+and insertions per verse; ambiguous repetitions are not used as recovery anchors. Timing differences
+over 1.5 seconds from an available ASR anchor are flagged, not silently corrected. `needs_review`
+in `alignment.json` and `job.json` indicates discrepancies, unavailable validation or fallback output.
+It does not block rendering; inspect `lyrics_validation.json` and review the affected verses first.
+
+If LRCLIB plain and synced text differ, the original timed variant is retained unless the plain
+variant reaches at least 95% coverage on both sides and improves the weaker coverage by 15 percentage
+points. The conflict remains flagged. Existing word-timed text is never replaced by this rule.
+Automatic references matching at least 90% of their own words but under 70% of ASR, with at least
+five extra ASR tokens, are flagged as likely incomplete: LRCLIB can then fall through to Genius;
+otherwise the full ASR output is retained for review. Explicit TXT and forced LRCLIB IDs remain
+authoritative selections even when this heuristic disagrees with them.
+
+El campo `plain` se deriva de `lines[].text` y se escribe como bloque literal YAML (`|-`) cuando
+contiene varias líneas, conservando saltos y apóstrofes legibles. En archivos anteriores, `He''s`
+dentro de comillas simples era el escape YAML de `He's`, no una duplicación en la letra cargada.
+Para corregir versos, edita las líneas en LyricsEditor: cambiar solo `plain` no cambia las líneas
+ni sus tiempos, y el pipeline vuelve a derivarlo al guardar.
+
+Sin una letra de referencia, Whisper agrupa palabras por longitud (42 caracteres), pausas
+(más de 0,8 segundos) y puntuación final; esos grupos no garantizan los versos originales.
+Las letras planas de LRCLIB sí conservan sus límites de línea al alinearlas con CTC.
+Genius usa [LyricsGenius](https://lyricsgenius.readthedocs.io/en/master/how_it_works.html): búsqueda
+autenticada cuando hay token, o pública cuando no lo hay, y extracción del HTML de la canción. Tiene timeout y
+reintentos limitados; un
+bloqueo, cambio de HTML o resultado ambiguo se registra y permite continuar con Whisper. Los
+encabezados independientes como `[Chorus]` no se cantan; se mantienen los paréntesis de voces de fondo.
+Los versos de referencia se guardan en `reference.txt`, listo para importar en LyricsEditor.
+`lyrics_reference.json` conserva procedencia, URL, decisiones y errores, sin duplicar el TXT ni
+la respuesta completa de LRCLIB. `lyrics_validation.json` conserva las discrepancias para revisión;
+`transcription.json` permite volver a trabajar sobre la transcripción sin ejecutar Whisper otra vez.
+No se utilizan snippets de buscadores. El acceso gratuito no concede una licencia de publicación.
+Musixmatch, tanto oficial como no oficial, queda fuera de esta versión.
+
+Después de descargar el trabajo y cerrar Colab, la CLI intenta recuperar Genius localmente si
+el resultado quedó con segmentación heurística. Esto permite recuperar un 403 específico de Colab
+cuando Genius sí responde desde la máquina local; no garantiza acceso ante cualquier bloqueo.
+La CLI carga `.env` local sin sobrescribir variables ya exportadas. Se usa
+`GENIUS_CLIENT_ACCESS_TOKEN` (o `GENIUS_ACCESS_TOKEN`); `GENIUS_CLIENT_ID` y
+`GENIUS_CLIENT_SECRET` no son necesarios para este flujo. `.env.template` solo documenta las variables.
+Las credenciales no se suben a Colab ni se incluyen en los artefactos.
+
+La reparación guarda una carpeta `lyrics-backup-*` antes de actualizar YAML, SRT y diagnósticos.
+Actúa como Smart Merge: mantiene todas las palabras y sus tiempos y reorganiza líneas; no hace
+Smart Replace ni corrige automáticamente el texto. Un TXT o ID de LRCLIB elegido explícitamente
+no se sustituye por Genius. La recuperación local usa los tiempos ya generados y no consume otra sesión GPU.
+
+```bash
+uv run karaoke YOUTUBE_URL --title "Song" --artist "Artist" --lyrics-text ./verses.txt
+uv run karaoke YOUTUBE_URL --title "Song" --artist "Artist" --genius-url https://genius.com/Artist-song-lyrics
+```
+
+`--no-lrclib` conserva su significado anterior: fuerza Whisper y desactiva todas las referencias.
+No puede combinarse con `--lyrics-text`, `--genius-url` ni `--lrclib-id`. Un TXT explícito tiene
+prioridad sobre un ID de LRCLIB o URL de Genius. Los trabajos ya preparados no se modifican;
+estas mejoras se aplican en una nueva preparación.
+
+Las pruebas de regresión de `tests/test_lyric_references.py` comprueban separación de versos,
+conservación exacta de tiempos, repeticiones, conflictos y recuperación. No constituyen una medida
+de precisión acústica: para medirla, preparar de nuevo audios con versos y tiempos revisados,
+comparar errores de límites de verso y desviaciones de inicio/fin contra esa referencia manual.
 
 Automatic LRCLIB matches evaluate track title, artist variants, duration, and song editions (such as Acoustic or Live)
 through progressive discovery tiers (exact metadata, without album, primary artist, and structured search) while
@@ -314,6 +390,10 @@ from plain lyrics.
 |---|---|
 | `job.json` | Durable media, source, alignment, video, and background configuration. |
 | `lyrics.lyricsfile.yaml` | Canonical editable lyrics and word timings. |
+| `reference.txt` | Reference verse boundaries for LyricsEditor and later regrouping; no invented timestamps. |
+| `lyrics_reference.json` | Original reference, source metadata, alternate text and provider failures. |
+| `transcription.json` | Independent Whisper transcript; omitted if transcription failed. |
+| `lyrics_validation.json` | Per-verse text comparison, available ASR anchors and review flags. |
 | `vocals.flac` | Separated vocal stem recommended for alignment review. |
 | `instrumental.flac` | Reusable accompaniment for karaoke renders. |
 | `original_audio.*` | Original source used by lyrics-mode renders. |
@@ -472,6 +552,8 @@ canonical quoted form when entering a URL manually: `"https://www.youtube.com/wa
 | `--artist` | source metadata | Artist override for LRCLIB. |
 | `--album` | source metadata | Album override for LRCLIB. |
 | `--lrclib-id` | automatic | Force one LRCLIB record. |
+| `--lyrics-text` | none | UTF-8 TXT with authored verse boundaries; uploaded to Colab. |
+| `--genius-url` | automatic search | Select a metadata-checked Genius song when LRCLIB is unavailable. |
 | `--no-lrclib` | disabled | Skip lyrics lookup and use Faster Whisper. |
 | `--whisper-model` | `large-v3` | Faster Whisper fallback model. |
 | `--demucs-model` | `htdemucs_ft` | Source separation model; `htdemucs` is faster. |

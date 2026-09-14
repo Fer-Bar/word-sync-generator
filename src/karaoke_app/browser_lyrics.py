@@ -39,17 +39,37 @@ def build_browser_scene(transcript: dict[str, Any], video: dict[str, int], style
                         text = text.lstrip()
                     if fragment_index == len(fragments) - 1:
                         text = text.rstrip() + (" " if index < len(words) - 1 else "")
-                    parts.append({"startTimeMs": fragment["start"] * 1000,
-                                  "durationMs": max(1, (fragment["end"] - fragment["start"]) * 1000), "words": text})
+                    part = {
+                        "startTimeMs": fragment["start"] * 1000,
+                        "durationMs": max(1, (fragment["end"] - fragment["start"]) * 1000),
+                        "words": text,
+                    }
+                    if word.get("isBackground") or line.get("isBackground"):
+                        part["isBackground"] = True
+                    parts.append(part)
             start = min(word["start"] for word in words)
             end = max(word["end"] for word in words)
             indices.append(len(lyrics))
-            lyrics.append({"startTimeMs": start * 1000, "durationMs": max(1, (end - start) * 1000),
-                           "words": "".join(part["words"] for part in parts), "parts": parts})
+            lyric_record = {
+                "startTimeMs": start * 1000,
+                "durationMs": max(1, (end - start) * 1000),
+                "words": "".join(p["words"] for p in parts),
+                "parts": parts,
+            }
+            if line.get("isBackground"):
+                lyric_record["isBackground"] = True
+            lyrics.append(lyric_record)
         groups.append({"start": group["start"] / 100, "end": group["end"] / 100, "indices": indices})
+    margin_h = min(style.get("margin_h", 70), video["width"] * .2)
+    configured_mv = style.get("margin_v")
+    if configured_mv is None:
+        margin_v = round(video["height"] * .22)
+    else:
+        margin_v = max(configured_mv, round(video["height"] * .12))
+    margin_v = min(margin_v, round(video["height"] * .30))
     return {"version": 1, "engine": "braccato-1.6.2", "mode": mode, "width": video["width"],
             "height": video["height"], "fps": video["fps"], "font_size": style["font_size"],
-            "margin": min(style["margin_h"], video["width"] * .2), "lyrics": lyrics, "groups": groups}
+            "margin": margin_h, "margin_v": margin_v, "lyrics": lyrics, "groups": groups}
 
 
 @contextmanager

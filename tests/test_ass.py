@@ -227,6 +227,65 @@ class AssLayoutTests(unittest.TestCase):
         # Lead style has primary_color (&H0000D7FF in BGR)
         self.assertIn("Style: Agent_v1,DejaVu Sans,64,&H0000D7FF,&H00FFFFFF,", content)
 
+    def test_lyrics_mode_background_vocals_interleaved_chronologically(self) -> None:
+        """Verify background vocals stay next to the corresponding lead vocal line rather than dropping to bottom."""
+        import re
+
+        from karaoke_app.style import StyleConfig
+
+        transcript = {
+            "segments": [
+                {
+                    "start": 10.0,
+                    "end": 12.0,
+                    "text": "First lead vocal line",
+                    "agent": "v1",
+                    "words": [{"start": 10.0, "end": 12.0, "text": "First lead vocal line", "agent": "v1"}],
+                },
+                {
+                    "start": 10.5,
+                    "end": 12.0,
+                    "text": "First line background echo",
+                    "agent": "v2",
+                    "isBackground": True,
+                    "words": [
+                        {
+                            "start": 10.5,
+                            "end": 12.0,
+                            "text": "First line background echo",
+                            "agent": "v2",
+                            "isBackground": True,
+                        }
+                    ],
+                },
+                {
+                    "start": 12.5,
+                    "end": 14.5,
+                    "text": "Second lead vocal line",
+                    "agent": "v1",
+                    "words": [{"start": 12.5, "end": 14.5, "text": "Second lead vocal line", "agent": "v1"}],
+                },
+            ]
+        }
+        style = StyleConfig.from_dict({"font_family": "DejaVu Sans", "font_size": 64}, height=1080)
+        content = generate_ass(transcript, {"width": 1920, "height": 1080, "fps": 24}, style=style, mode="lyrics")
+
+        dialogues = [line for line in content.splitlines() if line.startswith("Dialogue:")]
+        self.assertEqual(len(dialogues), 3)
+
+        self.assertIn("First lead vocal line", dialogues[0])
+        self.assertIn("(First line background echo)", dialogues[1])
+        self.assertIn("Second lead vocal line", dialogues[2])
+
+        y_coords = []
+        for d in dialogues:
+            match = re.search(r"\\pos\((\d+),(\d+)\)", d)
+            self.assertIsNotNone(match)
+            y_coords.append(int(match.group(2)))
+
+        self.assertLess(y_coords[0], y_coords[1])
+        self.assertLess(y_coords[1], y_coords[2])
+
     def test_teleprompter_zero_gap_collision_avoidance(self) -> None:
         """Verify back-to-back lines with 0s gap execute synchronized moves without overlapping."""
         transcript = {

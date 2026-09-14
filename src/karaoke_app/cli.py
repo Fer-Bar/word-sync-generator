@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
 ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
 LYRICS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyrics_file.py"
+REFERENCES_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyric_references.py"
 COSMIC_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "cosmic_background.py"
 COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
@@ -34,6 +35,8 @@ REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
 REMOTE_HF_TOKEN = Path("/content/.hf_token")
 REMOTE_LYRICS_MODULE = Path("/content/karaoke_lyrics_file.py")
+REMOTE_REFERENCES_MODULE = Path("/content/karaoke_lyric_references.py")
+REMOTE_LYRICS_TEXT = Path("/content/lyrics_reference.txt")
 REMOTE_RENDER_JOB = Path("/content/karaoke_render_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
@@ -47,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artist", help="Artist override used for LRCLIB matching")
     parser.add_argument("--album", help="Album override used for LRCLIB matching")
     parser.add_argument("--lrclib-id", type=int, help="Use a specific LRCLIB record")
+    parser.add_argument("--lyrics-text", type=Path, help="UTF-8 TXT reference with one lyric verse per line")
+    parser.add_argument("--genius-url", help="Metadata-checked Genius song URL used when LRCLIB has no reference")
     parser.add_argument("--no-lrclib", action="store_true", help="Skip LRCLIB and transcribe with Faster Whisper")
     parser.add_argument("--whisper-model", default="large-v3", help="Faster Whisper model")
     parser.add_argument("--demucs-model", default="htdemucs_ft", help="Demucs separation model")
@@ -297,6 +302,15 @@ def run_job(args: argparse.Namespace) -> Path:
         raise ValueError("Timeout must be positive")
     if args.lrclib_id is not None and (args.no_lrclib or args.lrclib_id <= 0):
         raise ValueError("LRCLIB ID must be positive and cannot be combined with --no-lrclib")
+    from karaoke_app.lyric_references import plain_lines, validate_genius_url
+
+    lyrics_text = args.lyrics_text.resolve() if args.lyrics_text else None
+    if args.no_lrclib and (lyrics_text or args.genius_url):
+        raise ValueError("--no-lrclib forces Whisper and cannot be combined with lyric references")
+    if lyrics_text and not plain_lines(lyrics_text.read_text(encoding="utf-8-sig")):
+        raise ValueError("Lyrics TXT contains no lyric lines")
+    if args.genius_url:
+        validate_genius_url(args.genius_url)
     for name, value, minimum, maximum in (
         ("Logo scale", args.logo_scale, 0.01, 0.5),
         ("Logo opacity", args.logo_opacity, 0.0, 1.0),
@@ -380,6 +394,8 @@ def run_job(args: argparse.Namespace) -> Path:
                 "album": args.album,
                 "lrclib_id": args.lrclib_id,
                 "disable_lrclib": args.no_lrclib,
+                "text_path": str(REMOTE_LYRICS_TEXT) if lyrics_text else None,
+                "genius_url": args.genius_url,
             },
             "whisper_model": args.whisper_model,
             "demucs_model": args.demucs_model,
@@ -417,6 +433,9 @@ def run_job(args: argparse.Namespace) -> Path:
                 _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
             _upload(colab, session, ASS_MODULE, Path("/content/karaoke_ass.py"))
             _upload(colab, session, LYRICS_MODULE, REMOTE_LYRICS_MODULE)
+            _upload(colab, session, REFERENCES_MODULE, REMOTE_REFERENCES_MODULE)
+            if lyrics_text:
+                _upload(colab, session, lyrics_text, REMOTE_LYRICS_TEXT)
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
             exec_error = None
             try:
@@ -485,6 +504,20 @@ def run_job(args: argparse.Namespace) -> Path:
                     (recovery_dir / "recovery.json").write_text(json.dumps(recovery, indent=2), encoding="utf-8")
                     raise RuntimeError("Session stop was not confirmed; session may still be running")
                 shutil.rmtree(recovery_dir, ignore_errors=True)
+
+    if not args.no_lrclib:
+        from dotenv import load_dotenv
+
+        from karaoke_app.lyric_repair import repair_prepared_lyrics
+
+        load_dotenv(PROJECT_ROOT / ".env", override=False)
+        try:
+            repair = repair_prepared_lyrics(output_dir, COLAB_SCRIPT, genius_url=args.genius_url)
+            LOGGER.info("Local lyric reference recovery: %s", repair)
+        except Exception as error:
+            LOGGER.warning(
+                "Local lyric reference recovery failed (%s); keeping prepared artifacts", type(error).__name__,
+            )
 
     LOGGER.info("Artifacts saved to %s", output_dir)
     LOGGER.info("To customize fonts, colors, and preview in real-time, run:")

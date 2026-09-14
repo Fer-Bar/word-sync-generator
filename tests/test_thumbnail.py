@@ -88,3 +88,41 @@ def test_job_metadata_and_overrides(monkeypatch, tmp_path):
     assert all(item[0][:2] == ("Override", "Job artist") for item in seen)
     assert seen[0][0][2] == Path(tmp_path) / "thumbnails" / "thumbnail_lyrics.png"
     assert seen[0][1]["logo_path"] is None
+
+
+def test_create_thumbnail_with_in_memory_image(tmp_path, assets):
+    mem_img = Image.new("RGB", (320, 180), (10, 20, 30))
+    out = tmp_path / "result.png"
+    result = create_thumbnail("Song", "Artist", out, background_path=mem_img, logo_path=assets["logo_path"])
+    assert result.is_file()
+    with Image.open(result) as img:
+        assert img.size == (1280, 720)
+
+
+def test_run_thumbnail_with_background_style(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr("karaoke_app.thumbnail.create_thumbnail", lambda *args, **kwargs: seen.append((args, kwargs)))
+    run_thumbnail([
+        "--title", "Cosmic Song", "--artist", "Artist",
+        "--background-style", "cosmic-sand", "--output-dir", str(tmp_path),
+    ])
+    assert len(seen) == 2
+    assert isinstance(seen[0][1]["background_path"], Image.Image)
+
+
+def test_run_thumbnail_inherits_cosmic_background(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "karaoke_app.job_document.load_job_document",
+        lambda _: {
+            "title": "Cosmic Job",
+            "metadata": {"artist": "Artist"},
+            "background": {"kind": "cosmic", "appearance": "cosmic", "seed": 42},
+            "video": {"width": 1280, "height": 720, "fps": 24},
+        },
+    )
+    seen = []
+    monkeypatch.setattr("karaoke_app.thumbnail.create_thumbnail", lambda *args, **kwargs: seen.append((args, kwargs)))
+    run_thumbnail([str(tmp_path), "--mode", "lyrics"])
+    assert len(seen) == 1
+    assert isinstance(seen[0][1]["background_path"], Image.Image)
+
