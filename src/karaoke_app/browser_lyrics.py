@@ -69,7 +69,8 @@ def build_browser_scene(transcript: dict[str, Any], video: dict[str, int], style
     margin_v = min(margin_v, round(video["height"] * .30))
     return {"version": 1, "engine": "braccato-1.6.2", "mode": mode, "width": video["width"],
             "height": video["height"], "fps": video["fps"], "font_size": style["font_size"],
-            "margin": margin_h, "margin_v": margin_v, "lyrics": lyrics, "groups": groups}
+            "margin": margin_h, "margin_v": margin_v, "lyrics": lyrics, "groups": groups,
+            "ink_color": (style.get("lyrics_colors") or {}).get("active", "#FFFFFF")}
 
 
 @contextmanager

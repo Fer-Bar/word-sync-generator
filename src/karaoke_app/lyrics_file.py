@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from karaoke_app.lyric_references import sanitize_text
+
 LYRICS_FILENAME = "lyrics.lyricsfile.yaml"
 
 
@@ -20,6 +22,7 @@ class _IndentedSafeDumper(yaml.SafeDumper):
 
 
 _IndentedSafeDumper.add_representer(str, _IndentedSafeDumper.represent_str)
+
 
 def load_lyrics_file(path: Path, *, require_words: bool = True) -> dict[str, Any]:
     """Load and validate a LyricsFile YAML document."""
@@ -57,6 +60,7 @@ def validate_lyrics_file(value: Any, *, require_words: bool = True) -> dict[str,
         text = raw_line.get("text")
         if not isinstance(text, str):
             raise ValueError(f"LyricsFile line {line_index} text must be a string")
+        text = sanitize_text(text)
 
         line_agent = _optional_agent(raw_line.get("agent"), f"LyricsFile line {line_index} agent")
         line_is_background = _optional_background(
@@ -201,6 +205,7 @@ def sanitize_lyrics_lines(
                 word_text = word.get("text", "")
                 if not isinstance(word_text, str) or not word_text.strip():
                     continue
+                word_text = sanitize_text(word_text)
 
                 raw_start = word.get("start_ms", 0)
                 raw_end = word.get("end_ms")
@@ -323,6 +328,7 @@ def _normalize_words(
         text = word.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
+        text = sanitize_text(text)
         start_ms = starts[index]
         end_ms = _optional_milliseconds(word.get("end_ms"), f"line {line_index} word {index + 1} end_ms")
         if end_ms is None:

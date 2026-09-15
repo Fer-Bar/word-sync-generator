@@ -114,6 +114,10 @@ def build_render_parser() -> argparse.ArgumentParser:
         description="Render corrected lyrics from a prepared job folder without repeating preparation.",
     )
     parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
+    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
+    parser.add_argument("--graphic-palette", choices=("light", "dark"))
+    parser.add_argument("--title-layout", choices=("stacked", "wide"))
     parser.add_argument("--theme", choices=(*THEMES, "even-better-lyrics-plus", "random", "job"), default="job",
                         help="Palette override; default: preserve the saved job background")
     parser.add_argument("--visual-style", choices=VISUAL_STYLES, help="Override the saved typography")
@@ -183,6 +187,10 @@ def build_intro_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("job_dir", type=Path, help="Path to prepared job directory")
     parser.add_argument("--mode", choices=("lyrics", "karaoke"), default="lyrics")
+    parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
+    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
+    parser.add_argument("--graphic-palette", choices=("light", "dark"))
+    parser.add_argument("--title-layout", choices=("stacked", "wide"))
     return parser
 
 
@@ -191,7 +199,10 @@ def run_intro(args: argparse.Namespace) -> Path:
     from karaoke_app.intro_card import generate_intro_card_for_job
 
     root = args.job_dir.expanduser().resolve()
-    result = generate_intro_card_for_job(root, mode=args.mode)
+    result = generate_intro_card_for_job(root, mode=args.mode, align=getattr(args, "align", None),
+                                         graphic_style=getattr(args, "graphic_style", None),
+                                         graphic_palette=getattr(args, "graphic_palette", None),
+                                         title_layout=getattr(args, "title_layout", None))
     if result is None:
         raise RuntimeError(f"Intro is disabled for {root}")
     LOGGER.info("Intro card created: %s", result)
@@ -514,6 +525,11 @@ def run_job(args: argparse.Namespace) -> Path:
         try:
             repair = repair_prepared_lyrics(output_dir, COLAB_SCRIPT, genius_url=args.genius_url)
             LOGGER.info("Local lyric reference recovery: %s", repair)
+            if repair.get("estimated_words"):
+                LOGGER.info(
+                    "Reference text applied; %s word timings estimated. Optional acoustic realignment: %s",
+                    repair["estimated_words"], repair.get("realign_hint"),
+                )
         except Exception as error:
             LOGGER.warning(
                 "Local lyric reference recovery failed (%s); keeping prepared artifacts", type(error).__name__,
@@ -569,9 +585,19 @@ def render_colab(args: argparse.Namespace) -> Path:
             if override is not None:
                 watermark[name] = override
         document["watermark"] = watermark
+    from karaoke_app.fomo import apply_graphic_options
     from karaoke_app.job_document import validate_job_document
     from karaoke_app.srt import generate_srt
 
+    document = apply_graphic_options(document, graphic_style=getattr(args, "graphic_style", None),
+                                         graphic_palette=getattr(args, "graphic_palette", None),
+                                     title_layout=getattr(args, "title_layout", None),
+                                     align=getattr(args, "align", None))
+    if (document.get("watermark") or {}).get("enabled", False):
+        for name in ("position", "scale", "opacity"):
+            override = getattr(args, f"logo_{name}", None)
+            if override is not None:
+                document["watermark"][name] = override
     document = validate_job_document(document)
 
     lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
@@ -688,7 +714,7 @@ def _create_render_bundle(
     audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
     required = {str(media[audio_keys[item]]) for item in modes}
     background = document["background"]
-    if isinstance(background, dict) and background.get("kind") == "image":
+    if isinstance(background, dict) and background.get("kind") in {"image", "video"}:
         required.add(str(background["path"]))
 
     bundle_document = json.loads(json.dumps(document))
@@ -702,6 +728,17 @@ def _create_render_bundle(
     with tempfile.TemporaryDirectory(prefix="render-graphics-") as graphics_directory:
         graphics = Path(graphics_directory)
         timing = generate_render_graphics(job_dir, document, modes, graphics, transcript)
+        if watermark_file is not None and (document.get("intro") or {}).get("graphic_style") in ("fomo", "fomo-xerox"):
+            from karaoke_app.fomo import fomo_logo
+
+            prepared_logo = Path(graphics_directory) / "fomo-watermark.png"
+            fomo_logo(watermark_file, palette=(document.get("intro") or {}).get("graphic_palette", "light")).save(
+                prepared_logo)
+            watermark_file = prepared_logo
+            bundle_document["watermark"]["path"] = "watermark.png"
+        if (document.get("intro") or {}).get("graphic_style") == "fomo-xerox":
+            bundle_document["background"] = {"kind": "image", "path": "graphics/background.png",
+                                             "overlay_opacity": 0}
         bundle_document["intro"] = timing or {"enabled": False}
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
             archive.writestr("job.json", json.dumps(bundle_document, ensure_ascii=False, indent=2) + "\n")

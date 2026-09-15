@@ -83,7 +83,11 @@ def main() -> None:
     }
     try:
         lyrics, alignment = _prepare_lyrics(
-            vocals_path, metadata, config, selected_record=record, artifacts_dir=output_dir,
+            vocals_path,
+            metadata,
+            config,
+            selected_record=record,
+            artifacts_dir=output_dir,
         )
     except Exception as error:
         checkpoint = {
@@ -171,17 +175,34 @@ def _render_existing_job(config: dict[str, Any]) -> None:
     audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
     output_dir = WORK_DIR / "render_result"
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "render-settings.json").write_text(json.dumps({
-        "theme": config.get("theme", "job"), "mode": requested_mode,
-        "renderer": "braccato-1.6.2" if (document.get("style") or {}).get("lyrics_effect") == "word-synced" else "ass",
-        "background": document["background"], "video": document["video"], "style": document.get("style", {}),
-    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "render-settings.json").write_text(
+        json.dumps(
+            {
+                "theme": config.get("theme", "job"),
+                "mode": requested_mode,
+                "renderer": "braccato-1.6.2"
+                if (document.get("style") or {}).get("lyrics_effect") == "word-synced"
+                else "ass",
+                "background": document["background"],
+                "video": document["video"],
+                "style": document.get("style", {}),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     title = _safe_filename(document["title"])
     background = document["background"]
     render_background = {
         "kind": background["kind"],
-        "value": str(job_dir / background["path"]) if background["kind"] == "image" else background.get("color"),
+        "value": (
+            str(job_dir / background["path"])
+            if background["kind"] in {"image", "video"} else background.get("color")
+        ),
         "overlay_opacity": background.get("overlay_opacity", 0),
+        "crop_right": background.get("crop_right", 0),
     }
     if background["kind"] == "cosmic":
         cosmic_module_path = job_dir / "cosmic_background.py"
@@ -255,7 +276,10 @@ def _render_existing_job(config: dict[str, Any]) -> None:
         overlay = None
         if browser_renderer is not None:
             overlay = browser_renderer.render_bundled_overlay(
-                job_dir, mode, job_dir / f"{mode}-overlay.mov", _probe_duration(audio_path),
+                job_dir,
+                mode,
+                job_dir / f"{mode}-overlay.mov",
+                _probe_duration(audio_path),
             )
             render_config["lyrics_overlay"] = str(overlay)
         _render_video(
@@ -457,14 +481,20 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
 
 
 def _prepare_lyrics(
-    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any],
-    *, selected_record: dict[str, Any] | None, artifacts_dir: Path | None = None,
+    vocals_path: Path,
+    metadata: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    selected_record: dict[str, Any] | None,
+    artifacts_dir: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     lyrics_module = _load_lyrics_module()
     references = _load_references_module()
     record = selected_record
     document, evidence = references.resolve_reference(
-        config.get("lyrics", {}), metadata, record,
+        config.get("lyrics", {}),
+        metadata,
+        record,
         record_to_document=lambda: _lyrics_document_from_record(record, metadata, config),
         candidate_is_safe=_lrclib_candidate_is_safe,
     )
@@ -482,57 +512,35 @@ def _prepare_lyrics(
     if document is not None:
         document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
         document["metadata"]["language"] = (
-            config["language"] if config["language"] != "auto"
-            else transcript["transcription"]["language"] if transcript else document["metadata"].get("language")
+            config["language"]
+            if config["language"] != "auto"
+            else transcript["transcription"]["language"]
+            if transcript
+            else document["metadata"].get("language")
         )
         if transcript:
             validation = references.compare_reference(document["lines"], transcript)
-            if evidence.get("text_conflict"):
-                alternative = references.compare_reference(evidence["alternative_lines"], transcript)
-                evidence["alternative_validation"] = alternative
-                # Do not replace timed or authored text solely on a weak ASR preference.
-                current_score = min(validation["reference_coverage"], validation["asr_coverage"])
-                alternative_score = min(alternative["reference_coverage"], alternative["asr_coverage"])
-                if (not _has_complete_word_timings(document) and alternative_score >= 0.95
-                        and alternative_score - current_score >= 0.15):
-                    evidence["selected_variant"] = "plain_confirmed_by_asr"
-                    document["lines"] = evidence["alternative_lines"]
-                    validation = alternative
-                else:
-                    evidence["selected_variant"] = "original_conflict_needs_review"
-                validation["needs_review"] = True
-            if (evidence["source"] != "txt" and not config.get("lyrics", {}).get("lrclib_id")
-                    and references.likely_incomplete(validation)):
-                evidence["rejection"] = "likely_incomplete_reference_against_asr"
-                if evidence["source"] == "lrclib":
-                    extra, extra_evidence = references.resolve_reference(
-                        config.get("lyrics", {}), metadata, None,
-                        record_to_document=lambda: document, candidate_is_safe=_lrclib_candidate_is_safe,
-                    )
-                    if extra is not None:
-                        extra_validation = references.compare_reference(extra["lines"], transcript)
-                        if (min(extra_validation["reference_coverage"], extra_validation["asr_coverage"]) >= 0.9
-                                and not references.likely_incomplete(extra_validation)):
-                            extra["metadata"] = dict(document["metadata"])
-                            extra_evidence["previous_reference"] = evidence
-                            document, evidence, validation = extra, extra_evidence, extra_validation
-                    else:
-                        evidence["attempts"].extend(extra_evidence["attempts"])
+            if references.likely_incomplete(validation):
+                evidence["possibly_incomplete"] = True
         _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
         _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
 
     fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_reference"
     provenance: dict[str, Any] = {}
     lyrics = None
-    if document is not None and not evidence.get("rejection"):
+    if document is not None:
         try:
             if _has_complete_word_timings(document):
                 lyrics = lyrics_module.validate_lyrics_file(document, require_words=True)
                 provenance.update(engine=evidence["source"], word_timing="provided", strategy="provided_word_timings")
             else:
                 lyrics, _ = _align_known_lyrics(vocals_path, document, config, provenance=provenance)
-                provenance.update(engine="ctc-forced-aligner", word_timing="generated",
-                                  model=CTC_ALIGNER_MODEL, model_revision=CTC_ALIGNER_MODEL_REVISION)
+                provenance.update(
+                    engine="ctc-forced-aligner",
+                    word_timing="generated",
+                    model=CTC_ALIGNER_MODEL,
+                    model_revision=CTC_ALIGNER_MODEL_REVISION,
+                )
         except (AssertionError, KeyError, RuntimeError, ValueError) as error:
             fallback_reason = str(error)
             LOGGER.warning("Reference alignment failed; trying independent ASR anchors: %s", error)
@@ -540,26 +548,32 @@ def _prepare_lyrics(
             if recovery is not None:
                 try:
                     lyrics, _ = _align_known_lyrics(
-                        vocals_path, recovery, config, provenance=provenance, recovery_only=True,
+                        vocals_path,
+                        recovery,
+                        config,
+                        provenance=provenance,
+                        recovery_only=True,
                     )
-                    provenance.update(engine="ctc-forced-aligner", word_timing="generated",
-                                      model=CTC_ALIGNER_MODEL, model_revision=CTC_ALIGNER_MODEL_REVISION,
-                                      strategy="whisper_anchored_ctc", anchor_source="independent_whisper")
+                    provenance.update(
+                        engine="ctc-forced-aligner",
+                        word_timing="generated",
+                        model=CTC_ALIGNER_MODEL,
+                        model_revision=CTC_ALIGNER_MODEL_REVISION,
+                        strategy="whisper_anchored_ctc",
+                        anchor_source="independent_whisper",
+                    )
                 except (AssertionError, KeyError, RuntimeError, ValueError) as recovery_error:
                     fallback_reason = f"{error}; ASR recovery: {recovery_error}"
 
     if lyrics is not None:
-        desired = evidence.get("structure_lines")
-        if desired:
-            try:
-                regrouped, grouping = references.merge_reference_lines(lyrics, desired)
-                lyrics = lyrics_module.validate_lyrics_file(regrouped, require_words=True)
-                evidence["grouping"] = grouping
-                validation["needs_review"] |= bool(grouping["unresolved_reference_boundaries"])
-                evidence["structure_restored"] = not grouping["unresolved_reference_boundaries"]
-            except ValueError as error:
-                evidence["structure_error"] = str(error)
-                validation["needs_review"] = True
+        desired = evidence.get("structure_lines") or document["lines"]
+        lyrics, grouping = references.apply_reference_text(lyrics, desired)
+        lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
+        evidence["grouping"] = grouping
+        evidence["structure_restored"] = True
+        validation["needs_review"] |= bool(grouping["estimated_words"])
+        if grouping["estimated_words"]:
+            provenance.update(word_timing="estimated", timing_fallback="reference_text")
         if transcript:
             prior_review = validation["needs_review"]
             validation = references.compare_reference(lyrics["lines"], transcript)
@@ -576,33 +590,46 @@ def _prepare_lyrics(
         if transcript is None:
             raise RuntimeError(f"No timed lyrics available: {fallback_reason}")
         lyrics = _transcript_to_lyrics(transcript)
-        provenance.update(engine="faster-whisper", model=config["whisper_model"], word_timing="generated",
-                          strategy="transcription", segmentation="heuristic", fallback_reason=fallback_reason)
+        provenance.update(
+            engine="faster-whisper",
+            model=config["whisper_model"],
+            word_timing="generated",
+            strategy="transcription",
+            segmentation="heuristic",
+            fallback_reason=fallback_reason,
+        )
         validation["needs_review"] = True
         validation["reference_not_applied"] = document is not None
-        if document is not None and not evidence.get("rejection"):
-            try:
-                desired = evidence.get("structure_lines") or document["lines"]
-                regrouped, grouping = references.merge_reference_lines(lyrics, desired)
-                lyrics = lyrics_module.validate_lyrics_file(regrouped, require_words=True)
-                evidence["grouping"] = grouping
-                validation["needs_review"] |= bool(grouping["unresolved_reference_boundaries"])
-                provenance.update(strategy="reference_grouped_asr", segmentation="reference")
-                validation["reference_not_applied"] = False
-            except ValueError as error:
-                evidence["structure_error"] = str(error)
-        if evidence.get("rejection"):
-            provenance["fallback_reason"] = evidence["rejection"]
+        if document is not None:
+            desired = evidence.get("structure_lines") or document["lines"]
+            lyrics, grouping = references.apply_reference_text(lyrics, desired)
+            lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
+            evidence["grouping"] = grouping
+            provenance.update(
+                strategy="reference_text_asr_timing",
+                segmentation="reference",
+                word_timing="estimated" if grouping["estimated_words"] else "asr_reused",
+            )
+            validation["reference_not_applied"] = False
         if document is None:
-            validation.update(status="no_reference", line_basis="output", lines=[
-                {"line_index": index, "text": line["text"], "needs_review": True,
-                 "reason": "heuristic_segmentation"} for index, line in enumerate(lyrics["lines"])
-            ])
+            validation.update(
+                status="no_reference",
+                line_basis="output",
+                lines=[
+                    {
+                        "line_index": index,
+                        "text": line["text"],
+                        "needs_review": True,
+                        "reason": "heuristic_segmentation",
+                    }
+                    for index, line in enumerate(lyrics["lines"])
+                ],
+            )
 
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
     if validation["needs_review"]:
-        LOGGER.warning("Lyrics need review; inspect lyrics_validation.json (reference: %s)", evidence["source"])
+        LOGGER.info("Lyrics diagnostics saved to lyrics_validation.json (reference: %s)", evidence["source"])
     words = []
     for line_idx, line in enumerate(lyrics["lines"]):
         for word_idx, word in enumerate(line.get("words", [])):
@@ -619,6 +646,7 @@ def _prepare_lyrics(
     return lyrics, {
         **provenance,
         "language": lyrics["metadata"].get("language"),
+        "text_source": evidence["source"],
         "reference_source": evidence["source"],
         "grouping": evidence.get("grouping"),
         "needs_review": validation["needs_review"],
@@ -634,15 +662,20 @@ def _save_lyrics_evidence(directory: Path | None, filename: str, value: dict[str
     if directory is not None:
         if filename == "lyrics_reference.json":
             lines = (
-                value.get("alternative_lines") if value.get("selected_variant") == "plain_confirmed_by_asr"
+                value.get("alternative_lines")
+                if value.get("selected_variant") == "plain_confirmed_by_asr"
                 else value.get("structure_lines") or value.get("lines")
             )
             if lines:
                 (directory / "reference.txt").write_text(
-                    "\n".join(line["text"] for line in lines) + "\n", encoding="utf-8",
+                    "\n".join(line["text"] for line in lines) + "\n",
+                    encoding="utf-8",
                 )
-                value = {key: item for key, item in value.items()
-                         if key not in {"lines", "structure_lines", "original_text", "lrclib_record"}}
+                value = {
+                    key: item
+                    for key, item in value.items()
+                    if key not in {"lines", "structure_lines", "original_text", "lrclib_record"}
+                }
                 value.update(reference_text_file="reference.txt", line_count=len(lines))
         (directory / filename).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1170,6 +1203,9 @@ def _lyrics_document_from_record(
 ) -> dict[str, Any]:
     import yaml
 
+    references = _load_references_module()
+    sanitize = getattr(references, "sanitize_text", lambda s: s)
+
     raw_lyrics_file = record.get("lyricsfile") or record.get("lyricsFile")
     if isinstance(raw_lyrics_file, str) and raw_lyrics_file.strip():
         document = None
@@ -1188,6 +1224,14 @@ def _lyrics_document_from_record(
                 and any(isinstance(line, dict) and str(line.get("text") or "").strip() for line in raw_lines)
             )
             if has_text_lines:
+                for line in raw_lines:
+                    if isinstance(line, dict):
+                        if isinstance(line.get("text"), str):
+                            line["text"] = sanitize(line["text"])
+                        if isinstance(line.get("words"), list):
+                            for word in line["words"]:
+                                if isinstance(word, dict) and isinstance(word.get("text"), str):
+                                    word["text"] = sanitize(word["text"])
                 document.setdefault("version", "1.0")
                 if not isinstance(document.get("metadata"), dict):
                     document["metadata"] = {}
@@ -1208,6 +1252,8 @@ def _lyrics_document_from_record(
         )
         lines = _parse_synced_lyrics(synced_source, duration_ms)
         if lines:
+            for line in lines:
+                line["text"] = sanitize(line["text"])
             return {
                 "version": "1.0",
                 "metadata": {
@@ -1224,7 +1270,7 @@ def _lyrics_document_from_record(
     if isinstance(plain_source, str) and plain_source.strip():
         lines = []
         for raw_line in plain_source.splitlines():
-            text = raw_line.strip()
+            text = sanitize(raw_line.strip())
             if text:
                 lines.append({"text": text})
         if lines:
@@ -1513,8 +1559,12 @@ def _align_tokenized_lines(
 
 
 def _align_known_lyrics(
-    vocals_path: Path, document: dict[str, Any], config: dict[str, Any],
-    *, provenance: dict[str, Any] | None = None, recovery_only: bool = False,
+    vocals_path: Path,
+    document: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    provenance: dict[str, Any] | None = None,
+    recovery_only: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     import torch
     from ctc_forced_aligner import (
@@ -1605,7 +1655,8 @@ def _align_known_lyrics(
         if has_line_timestamps:
             LOGGER.info("Attempting Tier 2 anchor-guided macro-section alignment")
             sections = (
-                [[line] for line in tokenized_lines] if recovery_only
+                [[line] for line in tokenized_lines]
+                if recovery_only
                 else _group_lines_into_macro_sections(tokenized_lines, gap_threshold_sec=6.0)
             )
             sample_rate = 16000
@@ -2026,16 +2077,23 @@ def _render_video(
     if subtitle_filter and config.get("fonts_dir"):
         subtitle_filter += f":fontsdir={_escape_filter_path(Path(config['fonts_dir']))}"
 
-    if background["kind"] == "video":
-        input_args = ["-stream_loop", "-1", "-i", str(background["value"])]
-        bg_chain = "[0:v]setpts=PTS-STARTPTS[bg]"
-    elif background["kind"] == "image":
+    if background["kind"] in {"video", "image"}:
         background_path = Path(background["value"])
         if not background_path.is_file():
             raise FileNotFoundError(f"Uploaded background not found: {background_path}")
         overlay_opacity = background.get("overlay_opacity", 0)
-        input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(background_path)]
-        bg_filters = [f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"]
+        if background["kind"] == "video":
+            input_args = ["-stream_loop", "-1", "-i", str(background_path)]
+        else:
+            input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(background_path)]
+        bg_filters = []
+        crop_right = background.get("crop_right", 0)
+        if crop_right:
+            bg_filters.append(f"crop=w=trunc(iw*{1 - crop_right:.8f}):h=ih:x=0:y=0:exact=1")
+        bg_filters.extend([
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+            "setsar=1", "setpts=PTS-STARTPTS",
+        ])
         if overlay_opacity > 0:
             bg_filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
         bg_chain = f"[0:v]{','.join(bg_filters)}[bg]"
@@ -2124,14 +2182,8 @@ def _render_video(
     else:
         extra_inputs = []
         video_map = "0:v:0"
-        if background["kind"] == "video":
-            video_filter = subtitle_filter
-        elif background["kind"] == "image":
-            filters = [
-                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-            ]
-            if overlay_opacity > 0:
-                filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{overlay_opacity:.2f}:t=fill")
+        if background["kind"] in {"video", "image"}:
+            filters = list(bg_filters)
             if ass_path is not None:
                 filters.append(subtitle_filter)
             video_filter = ",".join(filters)
@@ -2374,9 +2426,7 @@ def _run_with_status() -> None:
         if isinstance(error, LyricsPreparationError):
             status["recovery_archive_path"] = str(error.recovery_archive_path)
             status["stage"] = "lyrics"
-        STATUS_PATH.write_text(
-            json.dumps(status, ensure_ascii=False), encoding="utf-8"
-        )
+        STATUS_PATH.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
         raise
     STATUS_PATH.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
 

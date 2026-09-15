@@ -12,6 +12,7 @@ function bezier(t, x1=.86, y1=0, x2=.2, y2=1) {
 let renderer, scene, groups, records;
 window.setup = async data => {
   scene=data;
+  const ink = /^#[0-9a-f]{6}$/i.test(data.ink_color) ? data.ink_color : "#FFFFFF";
   await document.fonts.load(`600 ${data.font_size}px Switzer`);
   renderer=createLyricsRenderer({document,window,mount:document.querySelector('#mount'),host:{
     isViewVisible:()=>true,isLoaderActive:()=>false,syncAdState:()=>false,
@@ -22,8 +23,9 @@ window.setup = async data => {
     --blyrics-font-size:${data.font_size}px;--blyrics-line-height:1.35;
     --blyrics-animate-scroll:0;--blyrics-animate-line-scale:0;
     --blyrics-richsync-timing-offset:0s;--blyrics-timing-offset:0s;
-    --blyrics-scroll-timing-offset:0s;--blyrics-glow-color:rgba(255,255,255,.5);
-    --blyrics-lyric-active-color:#fff;--blyrics-lyric-inactive-color:rgba(255,255,255,.3);}`);
+    --blyrics-scroll-timing-offset:0s;--blyrics-glow-color:color-mix(in srgb, ${ink} 50%, transparent);
+    --blyrics-lyric-active-color:${ink};
+    --blyrics-lyric-inactive-color:color-mix(in srgb, ${ink} 30%, transparent);}`);
   renderer.setLyrics(data.lyrics);
   records=renderer.lines;
   forEveryLiveView(engine=>{engine.lineCullObserver?.disconnect();engine.culledLineElements.clear();});

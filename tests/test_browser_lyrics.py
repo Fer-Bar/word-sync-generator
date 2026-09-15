@@ -253,3 +253,17 @@ def test_lyrics_deactivation_transition_is_smooth(browser_font):
         assert abs(info_after["opacity"] - info_before["opacity"]) < 0.01
 
 
+
+
+def test_dark_ink_reaches_actual_browser(transcript, browser_font):
+    scene = build_browser_scene(transcript, {"width": 640, "height": 360, "fps": 12},
+                                {"font_size": 40, "lyrics_colors": {"active": "#111111"}}, "lyrics")
+    with browser_scene(scene, browser_font) as page:
+        page.evaluate("window.renderFrame(1.3)")
+        color = page.evaluate("getComputedStyle(document.documentElement)"
+                              ".getPropertyValue('--blyrics-lyric-active-color').trim()")
+        assert color == "#111111"
+        pixels = np.array(Image.open(io.BytesIO(page.screenshot(omit_background=True))).convert("RGBA"))
+        visible = pixels[:, :, 3] > 150
+        assert visible.any()
+        assert pixels[:, :, :3][visible].mean() < 80

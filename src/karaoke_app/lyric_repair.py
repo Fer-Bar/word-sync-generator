@@ -1,19 +1,42 @@
-"""Recover reference-based line grouping locally after a Colab preparation."""
+"""Apply authoritative reference text locally after a Colab preparation."""
 
 import importlib.util
 import json
+import shlex
 import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from karaoke_app.lyric_references import compare_reference, genius_reference, merge_reference_lines
+from karaoke_app.lyric_references import (
+    apply_reference_text,
+    compare_reference,
+    genius_reference,
+    plain_lines,
+)
 from karaoke_app.lyrics_file import dump_lyrics_file, generate_srt, load_lyrics_file, lyrics_to_transcript
 
 
+def _realign_hint(job_dir: Path, document: dict[str, Any]) -> str:
+    """Suggest optional acoustic realignment of estimated fallback word timings."""
+    source = document.get("source") or {}
+    title = source.get("title") or document.get("title") or "Song"
+    artist = source.get("artist") or ""
+    album = source.get("album") or ""
+    origin = source.get("source_url") or "<URL-o-audio-local>"
+    parts = ["uv", "run", "karaoke", "source", origin, "--title", title]
+    if artist:
+        parts.extend(["--artist", artist])
+    if album:
+        parts.extend(["--album", album])
+    parts.extend(["--lyrics-text", str((job_dir / "reference.txt").resolve())])
+    parts.extend(["--output-dir", str(job_dir.resolve().parent)])
+    return shlex.join(parts)
+
+
 def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: str | None = None) -> dict[str, Any]:
-    """Recover missing reference lines, backing up changed artifacts and keeping every word timestamp."""
+    """Apply saved or recovered reference text, backing up lyrics and timing diagnostics."""
     job_path = job_dir / "job.json"
     document = json.loads(job_path.read_text(encoding="utf-8"))
     preparation = document.get("preparation", {})
@@ -21,33 +44,45 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
         return {"status": "skipped", "reason": "forced_whisper"}
     reference_path = job_dir / "lyrics_reference.json"
     previous_reference = json.loads(reference_path.read_text(encoding="utf-8")) if reference_path.is_file() else {}
-    if preparation.get("lrclib_id") is not None or previous_reference.get("source") == "txt":
-        return {"status": "skipped", "reason": "explicit_reference_selection"}
     alignment_path = job_dir / "alignment.json"
     if not alignment_path.is_file():
         return {"status": "skipped", "reason": "no_alignment"}
     alignment = json.loads(alignment_path.read_text(encoding="utf-8"))
-    if alignment.get("segmentation") != "heuristic":
-        return {"status": "skipped", "reason": "reference_structure_already_applied"}
-    spec = importlib.util.spec_from_file_location("karaoke_reference_matching", pipeline_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Cannot load pipeline metadata matching")
-    pipeline = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(pipeline)
-    metadata = document.get("source") or {"title": document["title"]}
-    cached_path = job_dir / "genius_reference.json"
-    reference = json.loads(cached_path.read_text(encoding="utf-8")) if cached_path.is_file() else None
-    if reference and genius_url and reference.get("url") != genius_url:
-        reference = None
-    if reference:
-        candidate = {"trackName": reference["metadata"]["title"],
-                     "artistName": reference["metadata"]["artist"], "plainLyrics": reference["original_text"]}
-        if not pipeline._lrclib_candidate_is_safe(
-            candidate, track=metadata.get("track") or metadata["title"], artist=metadata.get("artist"), duration=None,
-        ):
-            reference = None
+    saved_text = job_dir / "reference.txt"
+    reference = None
+    if saved_text.is_file():
+        reference = {**previous_reference, "source": previous_reference.get("source", "txt"),
+                     "lines": plain_lines(saved_text.read_text(encoding="utf-8-sig"))}
+    elif preparation.get("lrclib_id") is not None or previous_reference.get("source") == "txt":
+        return {"status": "skipped", "reason": "missing_explicit_reference_text"}
+    elif alignment.get("segmentation") != "heuristic":
+        return {"status": "skipped", "reason": "no_local_reference"}
     if reference is None:
-        reference = genius_reference(metadata, url=genius_url, candidate_is_safe=pipeline._lrclib_candidate_is_safe)
+        spec = importlib.util.spec_from_file_location("karaoke_reference_matching", pipeline_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Cannot load pipeline metadata matching")
+        pipeline = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pipeline)
+        metadata = document.get("source") or {"title": document["title"]}
+        cached_path = job_dir / "genius_reference.json"
+        reference = json.loads(cached_path.read_text(encoding="utf-8")) if cached_path.is_file() else None
+        if reference and genius_url and reference.get("url") != genius_url:
+            reference = None
+        if reference:
+            candidate = {
+                "trackName": reference["metadata"]["title"],
+                "artistName": reference["metadata"]["artist"],
+                "plainLyrics": reference["original_text"],
+            }
+            if not pipeline._lrclib_candidate_is_safe(
+                candidate,
+                track=metadata.get("track") or metadata["title"],
+                artist=metadata.get("artist"),
+                duration=None,
+            ):
+                reference = None
+        if reference is None:
+            reference = genius_reference(metadata, url=genius_url, candidate_is_safe=pipeline._lrclib_candidate_is_safe)
     if reference is None:
         return {"status": "unavailable", "reason": "no_safe_local_genius_reference"}
 
@@ -55,39 +90,64 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
     if not lyrics_path.is_relative_to(job_dir.resolve()):
         raise ValueError("Lyrics artifact must be inside the job directory")
     original = load_lyrics_file(lyrics_path)
-    merged, grouping = merge_reference_lines(original, reference["lines"])
+    if [line["text"] for line in original["lines"]] == [line["text"] for line in reference["lines"]]:
+        return {"status": "skipped", "reason": "reference_text_already_applied"}
+    merged, grouping = apply_reference_text(original, reference["lines"])
+    text_summary = {"text_action": "reference_applied", "estimated_words": grouping["estimated_words"]}
+    realign_command = _realign_hint(job_dir, document)
     serialized = dump_lyrics_file(merged)
     transcript_path = job_dir / "transcription.json"
     speech = json.loads(transcript_path.read_text(encoding="utf-8")) if transcript_path.is_file() else None
-    validation = compare_reference(merged["lines"], speech) if speech else {"needs_review": True, "lines": []}
-    validation.update(line_basis="output", grouping=grouping)
-    validation["needs_review"] |= bool(grouping["unresolved_reference_boundaries"])
-    before = [(w["text"].strip(), w["start_ms"], w["end_ms"])
-              for line in original["lines"] for w in line["words"]]
-    after = [(w["text"].strip(), w["start_ms"], w["end_ms"])
-             for line in merged["lines"] for w in line["words"]]
-    if before != after:
-        raise ValueError("Line repair must preserve every word and timestamp")
+    validation = compare_reference(reference["lines"], speech) if speech else {"needs_review": True, "lines": []}
+    validation.update(line_basis="reference", grouping=grouping, **text_summary, realign_hint=realign_command)
+    validation["needs_review"] |= bool(grouping["estimated_words"])
     if "fallback_reason" in alignment:
         alignment["initial_fallback_reason"] = alignment.pop("fallback_reason")
-    alignment.update(strategy="reference_grouped_asr", segmentation="reference", reference_source="genius",
-                     needs_review=validation["needs_review"], grouping=grouping, local_reference_recovery=True,
-                     reference_file="lyrics_reference.json", reference_text_file="reference.txt",
-                     validation_file="lyrics_validation.json")
-    alignment["words"] = [{**word, "text": word["text"].strip()}
-                          for segment in lyrics_to_transcript(merged)["segments"] for word in segment["words"]]
+    alignment.update(
+        strategy="reference_text_asr_timing",
+        word_timing="estimated" if grouping["estimated_words"] else alignment.get("word_timing", "provided"),
+        text_source=reference["source"],
+        segmentation="reference",
+        reference_source=reference["source"],
+        needs_review=validation["needs_review"],
+        grouping=grouping,
+        local_reference_recovery=True,
+        text_action=text_summary["text_action"],
+        estimated_words=grouping["estimated_words"],
+        realign_hint=realign_command,
+        reference_file="lyrics_reference.json",
+        reference_text_file="reference.txt",
+        validation_file="lyrics_validation.json",
+    )
+    alignment["words"] = [
+        {**word, "text": word["text"].strip()}
+        for segment in lyrics_to_transcript(merged)["segments"]
+        for word in segment["words"]
+    ]
     document["alignment"] = {key: value for key, value in alignment.items() if key != "words"}
     provenance = {key: value for key, value in reference.items() if key not in {"lines", "original_text"}}
-    provenance.update(reference_text_file="reference.txt", line_count=len(reference["lines"]),
-                      acquisition="local", grouping=grouping)
+    provenance.update(
+        reference_text_file="reference.txt",
+        line_count=len(reference["lines"]),
+        acquisition="local",
+        grouping=grouping,
+        text_action=text_summary["text_action"],
+        estimated_words=grouping["estimated_words"],
+        realign_hint=realign_command,
+    )
     payloads = {
         lyrics_path.relative_to(job_dir.resolve()).as_posix(): serialized,
         "lyrics.srt": generate_srt(merged),
         "reference.txt": "\n".join(line["text"] for line in reference["lines"]) + "\n",
-        **{name: json.dumps(value, ensure_ascii=False, indent=2) + "\n" for name, value in (
-            ("alignment.json", alignment), ("job.json", document),
-            ("lyrics_reference.json", provenance), ("lyrics_validation.json", validation),
-        )},
+        **{
+            name: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+            for name, value in (
+                ("alignment.json", alignment),
+                ("job.json", document),
+                ("lyrics_reference.json", provenance),
+                ("lyrics_validation.json", validation),
+            )
+        },
     }
     backup = job_dir / f"lyrics-backup-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
     backup.mkdir()
@@ -109,4 +169,11 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
             else:
                 (job_dir / name).unlink(missing_ok=True)
         raise
-    return {"status": "repaired", "backup": str(backup), "words_preserved": len(before), **grouping}
+    return {
+        "status": "repaired",
+        "backup": str(backup),
+        "reused_word_timings": grouping["reused_word_timings"],
+        "realign_hint": realign_command,
+        **grouping,
+        **text_summary,
+    }

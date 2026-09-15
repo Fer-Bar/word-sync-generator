@@ -60,11 +60,11 @@ def validate_job_document(value: Any) -> dict[str, Any]:
         background = normalize_cosmic_background(background)
     else:
         background = validate_config_object(
-            background, {"kind", "color", "path", "overlay_opacity"}, "background"
+            background, {"kind", "color", "path", "overlay_opacity", "crop_right"}, "background"
         )
     kind = background.get("kind")
-    if kind not in ("solid", "image", "cosmic"):
-        raise ValueError("background.kind must be solid, image or cosmic")
+    if kind not in ("solid", "image", "video", "cosmic"):
+        raise ValueError("background.kind must be solid, image, video or cosmic")
     if kind == "cosmic":
         normalized_background = background
     elif kind == "solid":
@@ -82,6 +82,10 @@ def validate_job_document(value: Any) -> dict[str, Any]:
             "path": _relative_path(background.get("path"), "background.path"),
             "overlay_opacity": validate_number(opacity, "background.overlay_opacity", 0, 1),
         }
+    if kind in {"image", "video"} and "crop_right" in background:
+        normalized_background["crop_right"] = validate_number(
+            background["crop_right"], "background.crop_right", 0, 0.5
+        )
     result["background"] = normalized_background
 
     style = value.get("style", {})
@@ -122,7 +126,8 @@ def validate_job_document(value: Any) -> dict[str, Any]:
 
     if "intro" in value:
         intro = validate_config_object(
-            value["intro"], {"enabled", "title", "artist", "logo", "start", "duration", "end"}, "intro"
+            value["intro"], {"enabled", "title", "artist", "logo", "start", "duration", "end", "align",
+                             "graphic_style", "title_layout", "graphic_palette"}, "intro"
         )
         normalized_intro = {"enabled": intro.get("enabled", True)}
         if not isinstance(normalized_intro["enabled"], bool):
@@ -132,6 +137,16 @@ def validate_job_document(value: Any) -> dict[str, Any]:
                 if not isinstance(intro[key], str):
                     raise ValueError(f"intro.{key} must be a string")
                 normalized_intro[key] = intro[key].strip()
+        if "align" in intro:
+            if intro["align"] not in ("start", "center", "end"):
+                raise ValueError("intro.align must be start, center or end")
+            normalized_intro["align"] = intro["align"]
+        for key, choices in (("graphic_style", ("default", "fomo", "fomo-xerox")),
+                             ("title_layout", ("stacked", "wide")), ("graphic_palette", ("light", "dark"))):
+            if key in intro:
+                if intro[key] not in choices:
+                    raise ValueError(f"intro.{key} must be one of {choices}")
+                normalized_intro[key] = intro[key]
         if "logo" in intro:
             normalized_intro["logo"] = _relative_path(intro["logo"], "intro.logo")
         for key in ("start", "duration", "end"):

@@ -1,9 +1,12 @@
 """Generate fresh thumbnails and transparent intro cards from a render job."""
 
+import io
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import imageio_ffmpeg
 from PIL import Image, ImageEnhance, ImageOps
 
 from karaoke_app.branding import THUMBNAIL_LOGO
@@ -39,6 +42,12 @@ def background_frame(job_dir: Path, document: dict[str, Any]) -> Image.Image:
     """Render time zero with the same dimensions, seed and dimming as the video."""
     video, background = document["video"], document["background"]
     size = (video["width"], video["height"])
+    config = document.get("intro") or {}
+    if config.get("graphic_style") in ("fomo", "fomo-xerox"):
+        from karaoke_app.fomo import fomo_paper
+
+        return fomo_paper(size, xerox=config.get("graphic_style") == "fomo-xerox",
+                          palette=config.get("graphic_palette", "light"))
     if background["kind"] == "cosmic":
         from karaoke_app.cosmic_background import CosmicBackground
 
@@ -46,7 +55,18 @@ def background_frame(job_dir: Path, document: dict[str, Any]) -> Image.Image:
     if background["kind"] == "solid":
         return Image.new("RGB", size, background["color"])
     path = resolve_job_asset(job_dir, background["path"], "background")
-    with Image.open(path) as image:
+    source = path
+    if background["kind"] == "video":
+        result = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", str(path),
+             "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            check=True, capture_output=True,
+        )
+        source = io.BytesIO(result.stdout)
+    with Image.open(source) as image:
+        crop_right = background.get("crop_right", 0)
+        if crop_right:
+            image = image.crop((0, 0, max(1, int(image.width * (1 - crop_right))), image.height))
         frame = ImageOps.fit(image.convert("RGB"), size, method=Image.Resampling.LANCZOS)
     # FFmpeg's drawbox uses the opacity rounded to two decimal places.
     return ImageEnhance.Brightness(frame).enhance(1 - round(background.get("overlay_opacity", 0), 2))
@@ -84,15 +104,27 @@ def generate_render_graphics(
     if not artist:
         LOGGER.warning("No artist metadata found; render graphics will show only the song title")
     logo = graphic_logo(job_dir, document)
+    config = document.get("intro") or {}
+    fomo = config.get("graphic_style") in ("fomo", "fomo-xerox")
     frame = background_frame(job_dir, document)
     destination.mkdir(parents=True, exist_ok=True)
     frame.save(destination / "background.png")
     timing = intro_timing(document, transcript)
     for mode in modes:
-        overlay = create_title_overlay(title, artist, mode=mode, size=frame.size)
+        overlay = create_title_overlay(
+            title, artist, mode=mode, size=frame.size, align=config.get("align", "start"),
+            graphic_style=config.get("graphic_style", "default"), title_layout=config.get("title_layout", "stacked"),
+            graphic_palette=config.get("graphic_palette", "light")
+        )
         thumbnail = Image.alpha_composite(frame.convert("RGBA"), overlay)
         if logo is not None:
-            add_thumbnail_logo(thumbnail, logo)
+            if fomo:
+                from karaoke_app.fomo import add_fomo_logo
+
+                add_fomo_logo(thumbnail, logo, align=config.get("align", "start"),
+                              palette=config.get("graphic_palette", "light"))
+            else:
+                add_thumbnail_logo(thumbnail, logo)
         thumbnail = thumbnail.convert("RGB")
         thumbnails = destination / "thumbnails"
         thumbnails.mkdir(exist_ok=True)

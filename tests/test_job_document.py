@@ -183,3 +183,18 @@ def test_relative_asset_and_watermark_symlinks_cannot_escape_root(tmp_path, monk
         resolve_watermark_path(job, "escape.png")
     with pytest.raises(ValueError):
         resolve_watermark_path(job, "../external.png")
+
+
+@pytest.mark.parametrize("align", ["start", "center", "end"])
+def test_intro_alignment_survives_normalization(document, align):
+    document["intro"] = {"align": align}
+    result = validate_job_document(document)
+    assert result["intro"]["align"] == align
+    assert validate_job_document(result) == result
+
+
+@pytest.mark.parametrize("align", ["left", "", None, [], True])
+def test_invalid_intro_alignment(document, align):
+    document["intro"] = {"align": align}
+    with pytest.raises(ValueError, match="intro.align"):
+        validate_job_document(document)

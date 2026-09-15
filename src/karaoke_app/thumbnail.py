@@ -90,13 +90,77 @@ def _paint_text(canvas: Image.Image, mask: Image.Image, position: tuple[int, int
     canvas.alpha_composite(ink)
 
 
+def _lyrics_overlay(title: str, artist: str | None, title_font: Path, artist_font: Path, align: str) -> Image.Image:
+    """Compose an aligned music cover with a localized transparent scrim."""
+    lines = title.strip().upper().splitlines()
+    if len(lines) > 2 or any(not line.strip() for line in lines):
+        raise ValueError("Title supports at most two non-empty lines")
+    font = _font(title_font, 260, 900)
+    max_width = round(SIZE[0] * 0.70)
+    if len(lines) == 1 and font.getlength(lines[0]) > max_width:
+        words = lines[0].split()
+        if len(words) > 1:
+            split = min(range(1, len(words)), key=lambda i: max(
+                font.getlength(" ".join(words[:i])), font.getlength(" ".join(words[i:]))))
+            lines = [" ".join(words[:split]), " ".join(words[split:])]
+    masks = [_text_mask(line.strip(), font) for line in lines]
+    scale = min(1, max_width / max(mask.width for mask in masks))
+    masks = [mask.resize((max(1, round(mask.width * scale)), max(1, round(mask.height * scale))),
+                         Image.Resampling.LANCZOS) for mask in masks]
+    gap = max(8, round(30 * scale))
+    artist_mask = None
+    if artist and artist.strip():
+        artist_mask = _text_mask(" ".join(artist.split()), _font(artist_font, max(1, round(70 * scale)), 700))
+        artist_scale = min(1, max_width / artist_mask.width)
+        artist_mask = artist_mask.resize((max(1, round(artist_mask.width * artist_scale)),
+                                         max(1, round(artist_mask.height * artist_scale))), Image.Resampling.LANCZOS)
+    height = sum(mask.height for mask in masks) + gap * (len(masks) - 1)
+    if artist_mask is not None:
+        height += 38 + artist_mask.height
+    margin, top = round(SIZE[0] * .08), (SIZE[1] - height) // 2
+
+    def text_x(width: int) -> int:
+        if align == "center":
+            return (SIZE[0] - width) // 2
+        return margin if align == "start" else SIZE[0] - margin - width
+    yy, xx = np.mgrid[:SIZE[1], :SIZE[0]]
+    horizontal = np.clip(1 - xx / (SIZE[0] * .88), 0, 1)
+    if align == "end":
+        horizontal = horizontal[:, ::-1]
+    elif align == "center":
+        horizontal = np.clip(1 - abs(xx - SIZE[0] / 2) / (SIZE[0] * .5), 0, 1)
+    vertical = np.clip(1 - np.maximum(top - yy, yy - (top + height)) / 120, 0, 1)
+    canvas = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    canvas.putalpha(Image.fromarray((horizontal * vertical * 145).astype(np.uint8)))
+    text_layer = Image.new("L", SIZE)
+    y = top
+    for mask in masks:
+        text_layer.paste(mask, (text_x(mask.width), y))
+        y += mask.height + gap
+    if artist_mask is not None:
+        text_layer.paste(artist_mask, (text_x(artist_mask.width), top + height - artist_mask.height))
+    shadow_mask = Image.new("L", SIZE)
+    shadow_mask.paste(text_layer, (2, 3))
+    shadow = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    shadow.putalpha(shadow_mask.filter(ImageFilter.GaussianBlur(5)))
+    canvas.alpha_composite(shadow)
+    ink = Image.new("RGBA", SIZE, (255, 252, 245, 0))
+    ink.putalpha(text_layer)
+    canvas.alpha_composite(ink)
+    return canvas
+
+
 def create_title_overlay(
     title: str,
     artist: str | None,
     *,
     mode: str = "lyrics",
+    align: str = "start",
+    graphic_style: str = "default",
+    graphic_palette: str = "light",
+    title_layout: str = "stacked",
     logo_path: Path | None = None,
-    title_font: Path = FONTS / "Anton-Regular.ttf",
+    title_font: Path | None = None,
     artist_font: Path = FONTS / "Montserrat.ttf",
     size: tuple[int, int] = SIZE,
     texture: bool = True,
@@ -104,8 +168,27 @@ def create_title_overlay(
     """Draw the shared thumbnail/intro design on a transparent canvas."""
     if not isinstance(title, str) or not title.strip():
         raise ValueError("Title must be non-empty text")
+    if align not in ("start", "center", "end"):
+        raise ValueError("Align must be start, center or end")
     if mode not in {"lyrics", "karaoke"}:
         raise ValueError("Mode must be lyrics or karaoke")
+    from karaoke_app.fomo import GRAPHIC_STYLES, add_fomo_logo, create_fomo_overlay
+
+    if graphic_style not in GRAPHIC_STYLES:
+        raise ValueError("Unknown graphic style")
+    if graphic_style in ("fomo", "fomo-xerox"):
+        canvas = create_fomo_overlay(title, artist, size=size, align=align, layout=title_layout, title_font=title_font,
+                                     xerox=graphic_style == "fomo-xerox", palette=graphic_palette)
+        if logo_path is not None:
+            add_fomo_logo(canvas, logo_path, align=align, palette=graphic_palette)
+        return canvas
+    title_font = title_font or FONTS / ("AbrilFatface-Regular.ttf" if graphic_style in ("fomo", "fomo-xerox") else
+                                      ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf"))
+    if mode == "lyrics":
+        canvas = _lyrics_overlay(title, artist, title_font, artist_font, align)
+        if logo_path is not None:
+            add_thumbnail_logo(canvas, logo_path)
+        return canvas.resize(size, Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", SIZE)
     if artist and artist.strip():
         artist_mask = _text_mask(" ".join(artist.upper().split()), _font(artist_font, 128, 900))
@@ -150,9 +233,13 @@ def create_thumbnail(
     output_path: Path,
     *,
     mode: str = "lyrics",
+    align: str = "start",
+    graphic_style: str = "default",
+    graphic_palette: str = "light",
+    title_layout: str = "stacked",
     background_path: Path | Image.Image = REFERENCES / "background.png",
     logo_path: Path | None = THUMBNAIL_LOGO,
-    title_font: Path = FONTS / "Anton-Regular.ttf",
+    title_font: Path | None = None,
     artist_font: Path = FONTS / "Montserrat.ttf",
     width: int = 1280,
     texture: bool = True,
@@ -162,11 +249,15 @@ def create_thumbnail(
         raise ValueError("Title and artist must be non-empty text")
     if len(title) > 200 or len(artist) > 200:
         raise ValueError("Title and artist must each contain at most 200 characters")
+    if align not in ("start", "center", "end"):
+        raise ValueError("Align must be start, center or end")
     if mode not in {"lyrics", "karaoke"}:
         raise ValueError("Mode must be lyrics or karaoke")
     if isinstance(width, bool) or not isinstance(width, int) or width < 640 or width > 3840 or width % 16:
         raise ValueError("Width must be a multiple of 16 between 640 and 3840")
     output_path = Path(output_path)
+    title_font = title_font or FONTS / ("AbrilFatface-Regular.ttf" if graphic_style in ("fomo", "fomo-xerox") else
+                                      ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf"))
     inputs = [title_font, artist_font, *([logo_path] if logo_path else [])]
     if isinstance(background_path, (str, Path)):
         inputs.append(Path(background_path))
@@ -174,7 +265,11 @@ def create_thumbnail(
         raise ValueError("Output must not overwrite a source asset")
     if output_path.suffix.lower() != ".png":
         raise ValueError("Thumbnail output must have a .png extension")
-    if isinstance(background_path, Image.Image):
+    if graphic_style in ("fomo", "fomo-xerox"):
+        from karaoke_app.fomo import fomo_paper
+
+        canvas = fomo_paper(SIZE, xerox=graphic_style == "fomo-xerox", palette=graphic_palette).convert("RGBA")
+    elif isinstance(background_path, Image.Image):
         canvas = ImageOps.fit(background_path.convert("RGBA"), SIZE, method=Image.Resampling.LANCZOS)
     else:
         with Image.open(background_path) as source:
@@ -184,6 +279,10 @@ def create_thumbnail(
             title,
             artist,
             mode=mode,
+            align=align,
+            graphic_style=graphic_style,
+            graphic_palette=graphic_palette,
+            title_layout=title_layout,
             logo_path=logo_path,
             title_font=title_font,
             artist_font=artist_font,
@@ -203,6 +302,10 @@ def run_thumbnail(argv: list[str]) -> None:
 
     parser = argparse.ArgumentParser(prog="karaoke thumbnail", description=__doc__)
     parser.add_argument("job_dir", nargs="?", type=Path)
+    parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
+    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
+    parser.add_argument("--graphic-palette", choices=("light", "dark"))
+    parser.add_argument("--title-layout", choices=("stacked", "wide"))
     parser.add_argument("--title")
     parser.add_argument("--artist")
     parser.add_argument("--mode", choices=("lyrics", "karaoke", "both"), default="both")
@@ -213,7 +316,10 @@ def run_thumbnail(argv: list[str]) -> None:
     parser.add_argument("--cover", type=Path, help="Artwork palette for procedural background")
     parser.add_argument("--logo", type=Path, default=THUMBNAIL_LOGO)
     parser.add_argument("--no-logo", action="store_true")
-    parser.add_argument("--title-font", type=Path, default=FONTS / "Anton-Regular.ttf")
+    parser.add_argument(
+        "--title-font", type=Path,
+        help="Title font (default: Barlow Condensed Black Italic for lyrics, Anton for karaoke)"
+    )
     parser.add_argument("--artist-font", type=Path, default=FONTS / "Montserrat.ttf")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--no-texture", action="store_true")
@@ -247,7 +353,7 @@ def run_thumbnail(argv: list[str]) -> None:
         args.background_style
         or args.theme
         or args.cover
-        or (doc and doc.get("background", {}).get("kind") in {"cosmic", "image"})
+        or (doc and doc.get("background", {}).get("kind") in {"cosmic", "image", "video"})
     ):
         from karaoke_app.render_graphics import background_frame
         from karaoke_app.visual_config import apply_visual_options
@@ -271,12 +377,20 @@ def run_thumbnail(argv: list[str]) -> None:
     else:
         bg = REFERENCES / "background.png"
 
+    align = args.align if args.align is not None else ((doc or {}).get("intro") or {}).get("align", "start")
+    graphic_style = args.graphic_style or ((doc or {}).get("intro") or {}).get("graphic_style", "default")
+    graphic_palette = args.graphic_palette or ((doc or {}).get("intro") or {}).get("graphic_palette", "light")
+    title_layout = args.title_layout or ((doc or {}).get("intro") or {}).get("title_layout", "stacked")
     for mode in ("lyrics", "karaoke") if args.mode == "both" else (args.mode,):
         output = create_thumbnail(
             title,
             artist,
             output_dir / f"thumbnail_{mode}.png",
             mode=mode,
+            align=align,
+            graphic_style=graphic_style,
+            graphic_palette=graphic_palette,
+            title_layout=title_layout,
             background_path=bg,
             logo_path=None if args.no_logo else args.logo,
             title_font=args.title_font,

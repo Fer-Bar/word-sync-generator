@@ -148,9 +148,14 @@ uv run karaoke render outputs/JOB_ID --mode both --theme random
 # O solo uno: --mode lyrics / --mode karaoke
 ```
 
-Cada render genera automáticamente el thumbnail y la intro de cada modo con **el mismo diseño**:
-artista arriba, título grande condensado, textura marfil, sombra y etiqueta LYRICS/KARAOKE.
-Ambos usan la misma función de dibujo y las mismas fuentes incluidas en el proyecto.
+Cada render genera automáticamente el thumbnail y la intro con **identidades distintas**:
+- **Lyrics:** título en Barlow Condensed Black Italic, artista en Montserrat Bold debajo, alineados a la izquierda por defecto.
+  Título grande en mayúsculas e itálica, sin etiqueta LYRICS ni textura. Un degradado localizado protege
+  el texto blanco cálido sin ocultar el paisaje. El título usa hasta dos líneas y se ajusta al espacio.
+- **Karaoke:** artista arriba, título grande condensado Anton, textura marfil y etiqueta KARAOKE.
+
+Las fuentes están incluidas. Canción y artista aparecen solo durante la intro; después quedan
+las letras sincronizadas sobre el fondo en movimiento.
 No hace falta ejecutar `thumbnail` ni `intro` antes. Los gráficos se regeneran en cada render;
 un `intro_card.png` viejo no se reutiliza.
 
@@ -279,38 +284,31 @@ folder and renders both the instrumental karaoke video and the original-audio ly
 
 ## Lyrics strategy
 
-Preparation resolves text and timing separately:
+El texto de la referencia seleccionada es la fuente de verdad del YAML, tanto en
+`lines[].text` como en `lines[].words[].text`, incluyendo mayúsculas y puntuación:
 
-1. An explicit UTF-8 TXT (`--lyrics-text`) takes priority and preserves its verse boundaries.
-2. LRCLIB supplies the reference and any existing word or line timings. When its plain and synced
-   text have identical normalized words, the plain line boundaries are applied to the timed words.
-3. Genius supplies plain text when LRCLIB has no usable reference. Searches use title, artist and
-   edition checks; ambiguous results are rejected. `--genius-url` selects a matching song URL among
-   search results; provide accurate `--title` and `--artist`, including for local recordings.
-4. Faster Whisper runs once on the vocal stem for independent comparison, including when word
-   timings already exist. Without an accepted reference it also supplies the fallback lyrics.
+1. Un TXT explícito (`--lyrics-text`) tiene prioridad.
+2. LRCLIB aporta la referencia; si sus variantes plana y sincronizada discrepan, prevalece
+   `plainLyrics` y se vuelven a calcular los tiempos cuando cambian las palabras.
+3. Genius se usa cuando LRCLIB no tiene una referencia utilizable. La búsqueda comprueba título,
+   artista y edición; `--genius-url` permite seleccionar una canción que coincida con esos datos.
+4. Whisper aporta evidencia temporal y diagnósticos. Su texto solo se usa como letra final cuando
+   no hay referencia o se solicita `--no-lrclib`.
 
-CTC still generates missing word timings. If alignment fails, complete, unambiguous Whisper matches
-with word probabilities of at least 0.5 provide per-line recovery windows. When CTC still fails,
-ordered fuzzy text alignment transfers reliable reference boundaries to the existing timed words
-(`reference_grouped_asr`). Small transcription differences no longer reject the whole reference.
-Uncertain boundaries retain the existing grouping and are listed in the diagnostic. Low overall
-text similarity rejects regrouping; the fallback is marked `segmentation: heuristic`.
-No word timestamps are interpolated to create a verse boundary.
+Por ejemplo, si la referencia dice `bear` y Whisper detecta `bird`, el YAML y el SRT contienen
+`bear`. Las diferencias, incluso una referencia aparentemente incompleta, no permiten que Whisper
+cambie la fuente elegida ni obligan a realizar una revisión manual para continuar.
 
-Whisper is evidence, not ground truth. Ordered comparison reports unmatched words, substitutions
-and insertions per verse; ambiguous repetitions are not used as recovery anchors. Timing differences
-over 1.5 seconds from an available ASR anchor are flagged, not silently corrected. `needs_review`
-in `alignment.json` and `job.json` indicates discrepancies, unavailable validation or fallback output.
-It does not block rendering; inspect `lyrics_validation.json` and review the affected verses first.
+CTC alinea el texto de referencia con el audio. Si falla, se intenta recuperar la alineación con
+ventanas de Whisper inequívocas. Si también falla, `reference_text_asr_timing` conserva toda la
+referencia y utiliza los tiempos disponibles: reutiliza las coincidencias inequívocas y estima
+los intervalos restantes entre ellas. Las inserciones sin pausa pueden compartir el intervalo de
+una palabra vecina, repartido sin solapamientos. Este respaldo no es una alineación acústica.
 
-If LRCLIB plain and synced text differ, the original timed variant is retained unless the plain
-variant reaches at least 95% coverage on both sides and improves the weaker coverage by 15 percentage
-points. The conflict remains flagged. Existing word-timed text is never replaced by this rule.
-Automatic references matching at least 90% of their own words but under 70% of ASR, with at least
-five extra ASR tokens, are flagged as likely incomplete: LRCLIB can then fall through to Genius;
-otherwise the full ASR output is retained for review. Explicit TXT and forced LRCLIB IDs remain
-authoritative selections even when this heuristic disagrees with them.
+`alignment.json` indica `text_source`, la estrategia y `grouping.estimated_word_indexes` (índices
+desde cero sobre todas las palabras de salida). Las palabras con tiempos estimados no heredan la
+confianza de Whisper. `lyrics_validation.json` conserva las discrepancias con la transcripción;
+`needs_review` es informativo y no bloquea el render. La revisión o realineación acústica es opcional.
 
 El campo `plain` se deriva de `lines[].text` y se escribe como bloque literal YAML (`|-`) cuando
 contiene varias líneas, conservando saltos y apóstrofes legibles. En archivos anteriores, `He''s`
@@ -341,10 +339,13 @@ La CLI carga `.env` local sin sobrescribir variables ya exportadas. Se usa
 `GENIUS_CLIENT_SECRET` no son necesarios para este flujo. `.env.template` solo documenta las variables.
 Las credenciales no se suben a Colab ni se incluyen en los artefactos.
 
-La reparación guarda una carpeta `lyrics-backup-*` antes de actualizar YAML, SRT y diagnósticos.
-Actúa como Smart Merge: mantiene todas las palabras y sus tiempos y reorganiza líneas; no hace
-Smart Replace ni corrige automáticamente el texto. Un TXT o ID de LRCLIB elegido explícitamente
-no se sustituye por Genius. La recuperación local usa los tiempos ya generados y no consume otra sesión GPU.
+La recuperación local aplica primero el `reference.txt` guardado, incluso si el trabajo ya tenía
+versos agrupados. Solo intenta recuperar Genius cuando falta una referencia local y el resultado
+quedó con segmentación heurística; no reemplaza una selección explícita de TXT o LRCLIB.
+Guarda una carpeta `lyrics-backup-*` antes de actualizar YAML, SRT y diagnósticos. El resultado usa
+`text_action: reference_applied`, conserva la transcripción original y ofrece un `realign_hint`
+opcional para mejorar acústicamente los tiempos estimados. Ejecutarla otra vez no crea una nueva
+copia si el texto ya coincide. Esta recuperación no consume otra sesión GPU.
 
 ```bash
 uv run karaoke YOUTUBE_URL --title "Song" --artist "Artist" --lyrics-text ./verses.txt
@@ -353,8 +354,8 @@ uv run karaoke YOUTUBE_URL --title "Song" --artist "Artist" --genius-url https:/
 
 `--no-lrclib` conserva su significado anterior: fuerza Whisper y desactiva todas las referencias.
 No puede combinarse con `--lyrics-text`, `--genius-url` ni `--lrclib-id`. Un TXT explícito tiene
-prioridad sobre un ID de LRCLIB o URL de Genius. Los trabajos ya preparados no se modifican;
-estas mejoras se aplican en una nueva preparación.
+prioridad sobre un ID de LRCLIB o URL de Genius. La preparación aplica esta política automáticamente; la reparación local también puede aplicarla
+a un trabajo existente con `reference.txt`, conservando una copia de los archivos anteriores.
 
 Las pruebas de regresión de `tests/test_lyric_references.py` comprueban separación de versos,
 conservación exacta de tiempos, repeticiones, conflictos y recuperación. No constituyen una medida
@@ -390,8 +391,8 @@ from plain lyrics.
 |---|---|
 | `job.json` | Durable media, source, alignment, video, and background configuration. |
 | `lyrics.lyricsfile.yaml` | Canonical editable lyrics and word timings. |
-| `reference.txt` | Reference verse boundaries for LyricsEditor and later regrouping; no invented timestamps. |
-| `lyrics_reference.json` | Original reference, source metadata, alternate text and provider failures. |
+| `reference.txt` | Authoritative selected text, including spelling, punctuation and verse boundaries. |
+| `lyrics_reference.json` | Reference provenance, source decisions and provider failures; text is in `reference.txt`. |
 | `transcription.json` | Independent Whisper transcript; omitted if transcription failed. |
 | `lyrics_validation.json` | Per-verse text comparison, available ASR anchors and review flags. |
 | `vocals.flac` | Separated vocal stem recommended for alignment review. |
@@ -618,9 +619,11 @@ pre-1.0 kernel client API.
 
 ## Thumbnails dinámicos (local, sin Colab)
 
-Genera miniaturas PNG de 1280×720 siguiendo `references/thumbnails/thumbnail_complete.png`: artista arriba,
-título condensado en marfil con textura y sombra, etiqueta LYRICS/KARAOKE con líneas laterales y logo
-abajo a la izquierda. Reutiliza `references/thumbnails/background.png` y `logos/thumbnail.png`.
+Genera miniaturas PNG de 1280×720 con la identidad de cada modo descrita arriba y logo abajo
+a la izquierda. Karaoke sigue `references/thumbnails/thumbnail_complete.png`.
+Sin job ni fondo explícito usa `references/thumbnails/background.png` y `logos/thumbnail.png`.
+Con job reconoce fondos MP4: extrae el primer fotograma con el recorte y oscurecimiento del render.
+`--title-font` permite sobrescribir Barlow Condensed Black Italic (lyrics) o Anton (karaoke); `--artist-font` cambia la fuente del artista.
 El texto se dibuja de nuevo para cada canción; `song_and_artist_name.png` es solo una referencia.
 
 ```bash
@@ -653,10 +656,161 @@ con esos nombres: usa `--output-dir` diferente para conservar cada canción. No 
 - Títulos largos se reparten en dos líneas y se ajustan al espacio disponible. También puedes pasar
   un salto de línea explícito. Máximo 200 caracteres por campo y dos líneas de título.
 
-Se incluyen Anton y Montserrat con sus licencias SIL OFL en `src/karaoke_app/assets/fonts/`;
+Se incluyen Anton, Montserrat y Barlow Condensed con sus licencias SIL OFL en `src/karaoke_app/assets/fonts/`;
 no requiere descargar fuentes durante la generación. Proceden de
 [Google Fonts](https://github.com/google/fonts/tree/main/ofl).
 La tipografía y la textura son una aproximación reproducible: la referencia rasterizada no contiene
 la fuente original. El fondo se reutiliza como imagen fija y el logo conserva el diseño del PNG
 proporcionado, que difiere del logo en mayúsculas del ejemplo final. Para una instalación fuera del
 repositorio, pasa las rutas de fondo y logo explícitamente.
+
+### Paisajes propios y recorte del borde derecho
+
+Para usar un paisaje animado, copia el MP4 dentro del job y configura `background` en `job.json`:
+
+```json
+{"kind": "video", "path": "paisaje.mp4", "crop_right": 0.12, "overlay_opacity": 0.25}
+```
+
+Renderiza con `uv run karaoke render outputs/JOB_ID --mode lyrics --theme job`.
+El video se repite durante la canción; su audio no se utiliza. El thumbnail toma el primer fotograma.
+`crop_right` elimina una fracción del ancho original desde la derecha (0 a 0.5; por defecto 0).
+También funciona con `kind: "image"`. El recorte se aplica antes de ajustar el fondo a la resolución
+sin deformarlo, oscurecerlo y añadir letras, intro y logo. El ajuste puede recortar arriba y abajo.
+Comprueba el porcentaje con tu archivo: 0.12 es un ejemplo, no una detección automática de marcas.
+La configuración pertenece al job y afecta a todos los modos solicitados; usa un job separado de
+lyrics para conservar el fondo de tu job de karaoke. No selecciones un tema generado si quieres
+conservar este paisaje. La miniatura se extrae con el FFmpeg incluido por `imageio-ffmpeg`.
+
+Al generar el paisaje, reserva espacio prescindible para el recorte. Prompt de composición sugerido:
+
+> Paisaje horizontal 16:9. Cabaña en el tercio izquierdo, con margen respecto a los bordes.
+> Mar tranquilo hacia la derecha. Reserva el 15% derecho exclusivamente para agua o cielo,
+> sin objetos importantes. Mantén elementos importantes lejos de los bordes superior e inferior.
+> Centro despejado para letras. Cámara fija, movimiento muy suave, iluminación constante,
+> sin cortes, zoom ni texto.
+
+El prompt controla la composición; el recorte se realiza al renderizar. Conserva el archivo original.
+
+
+### Publicación y medición de lyrics en YouTube
+
+Usa un título como **Artista — Canción (Lyrics)** aunque la miniatura no incluya esa etiqueta.
+[YouTube para artistas](https://artists.youtube/intl/en-GB/resources/channel-optimization/)
+recomienda destacar artista y canción para facilitar su búsqueda.
+La música empieza sin tiempo añadido: la tarjeta se superpone al paisaje MP4 y desaparece antes de las voces.
+
+Esta identidad es una hipótesis visual, no una mejora de retención demostrada. Revisa CTR,
+retención a los 30 segundos y caídas al comenzar las letras en
+[YouTube Analytics](https://support.google.com/youtube/answer/9314415?hl=en).
+Cuando esté disponible, compara miniaturas en las
+[pruebas A/B de Studio](https://support.google.com/youtube/answer/16391400?hl=en):
+YouTube evalúa el tiempo de reproducción, no solo los clics. Mantén el contenido del video
+igual durante la comparación y evita atribuir diferencias entre canciones únicamente al diseño.
+
+
+### Alineación de la identidad lyrics
+
+`--align start|center|end` alinea título y artista a la izquierda, al centro o a la derecha,
+respectivamente. El degradado acompaña la posición del texto. El artista usa Montserrat Bold
+con mayor tamaño para mejorar la lectura en miniaturas. Karaoke conserva su composición.
+
+```bash
+uv run karaoke render outputs/JOB_ID --mode lyrics --align center
+uv run karaoke thumbnail outputs/JOB_ID --mode lyrics --align end
+uv run karaoke intro outputs/JOB_ID --mode lyrics --align start
+```
+
+Para guardar la preferencia, añade `"align": "center"` al objeto `intro` de `job.json`.
+Se aplica tanto a la miniatura como a la intro. La opción CLI tiene prioridad para esa ejecución;
+no modifica el job guardado. Sin configuración se usa `start`. No cambia la alineación de las letras cantadas.
+
+
+### Evitar el salto al repetir un paisaje MP4
+
+El render repite el fondo con `-stream_loop`: no crea una transición automáticamente.
+Si el último fotograma no coincide con el primero, prepara una copia del paisaje con un
+fundido cruzado entre final e inicio y usa esa copia en `background.path`.
+No apliques el fundido al video final: también desvanecería letras y marca de agua.
+
+El trabajo `outputs/karaoke-20260914-041237-ac979d` usa ahora `paisaje_loop.mp4`:
+1280×720, 24 fps, ciclo de 8,5 segundos, con un fundido de 1,5 segundos.
+Se conserva `paisaje.mp4` como original. La copia comienza en el segundo 1,5 del original;
+mezcla los últimos 1,5 segundos con los primeros y enlaza con ese mismo punto al repetirse.
+El solapamiento acorta el ciclo del fondo, sin alterar duración de la canción ni sincronización.
+La copia no contiene audio. El recorte y oscurecimiento del job siguen aplicándose al renderizar.
+
+Vista de tres vueltas: `outputs/previews/landscape-loop/three-cycles.mp4`.
+Los MP4 ya renderizados no cambian: vuelve a ejecutar `uv run karaoke render` para usar el fondo corregido.
+Un fundido suaviza el corte, pero puede superponer formas durante la unión; para nuevos paisajes,
+una cámara fija y posiciones similares al principio y al final facilitan una repetición más natural.
+
+
+### FOMO: intro, fondo y miniatura por canción
+
+El preset `--graphic-style fomo` usa blanco puro, tinta negra y **Abril Fatface** en
+intro y miniatura, sin grano, sombras ni separadores. El artista aparece encima del título;
+el logo ocupa una zona inferior reservada, sin añadir otra etiqueta de marca.
+Abril Fatface conserva la aproximación del póster original, no una identificación exacta
+de la tipografía de la portada. La fuente y su licencia OFL se incluyen en el paquete.
+
+Compara seis composiciones y tres longitudes de ejemplo en `outputs/fomo-poster.html`.
+La galería local permite descargar los PNG de intro, fondo y miniatura; sus botones muestran
+los comandos para usar la composición elegida con cualquier canción.
+
+```bash
+# Miniatura local para cualquier título, sin preparar audio:
+uv run karaoke thumbnail --title "TU CANCIÓN" --artist "DRAKE" --mode lyrics \
+  --graphic-style fomo --title-layout stacked --align center --logo logos/principal_logo.png
+
+# Guardar la identidad en un trabajo (crea backup del JSON):
+uv run karaoke configure outputs/JOB_ID --graphic-style fomo --title-layout wide --align start
+
+# Generar solo la tarjeta transparente, sin ejecutar Colab:
+uv run karaoke intro outputs/JOB_ID --mode lyrics
+
+# Generar video, fondo, miniatura e intro con esa configuración:
+uv run karaoke render outputs/JOB_ID --mode lyrics --logo logos/principal_logo.png
+```
+
+- `--title-layout stacked|wide`: hasta cuatro filas o hasta dos automáticamente.
+  Respeta saltos de línea explícitos con un máximo de cuatro filas no vacías.
+  Ajusta títulos de 1 a 200 caracteres, incluidas palabras largas, al área disponible.
+- `--align start|center|end`: izquierda, centro o derecha para artista, título y logo de la miniatura.
+- Las tres opciones están disponibles en `thumbnail`, `intro`, `render` y `configure`.
+  Solo `configure` las guarda en `intro.graphic_style`, `intro.title_layout` e `intro.align`.
+- FOMO configura el **fondo blanco durante todo el video** y letras cantadas oscuras.
+  Conserva la fuente de las letras cantadas (Switzer con Plus); Abril Fatface se usa en los títulos.
+  Al renderizar tiene prioridad sobre los fondos y paletas de otros presets.
+- La intro permanece transparente; el render añade el logo una sola vez, en escala de grises.
+  FOMO reserva la zona inferior para la marca del video; las opciones explícitas
+  `--logo-position` y `--logo-scale` de `render` tienen prioridad. `--no-logo` la desactiva.
+- La duración musical y los tiempos no cambian. La intro termina antes de la primera voz;
+  si esta comienza inmediatamente, la intro se omite. El fondo dura toda la canción.
+- `--graphic-style default` recupera la composición habitual; para recuperar el fondo y los
+  colores anteriores, restaura el backup o elige otra configuración visual explícitamente.
+
+El preset se aplica a los modos solicitados: usa `--mode lyrics` para esta identidad de lyrics.
+Las muestras están en `outputs/fomo-options/`; `outputs/fomo-poster.original.html` conserva
+el póster cuadrado original. La galería contiene ejemplos, no una lista de canciones del álbum.
+
+
+#### Acabado Xerox / Fotocopia opcional
+
+Selecciona **Xerox / Fotocopia** en `outputs/fomo-poster.html` para comparar las seis
+composiciones con el acabado limpio. Usa `--graphic-style fomo-xerox` en `thumbnail`,
+`intro`, `configure` o `render`. `--graphic-style fomo` conserva la versión limpia.
+
+```bash
+uv run karaoke thumbnail --title "TU CANCIÓN" --artist "DRAKE" --mode lyrics \
+  --graphic-style fomo-xerox --title-layout stacked --align center --logo logos/principal_logo.png
+uv run karaoke configure outputs/JOB_ID --graphic-style fomo-xerox --align center
+uv run karaoke render outputs/JOB_ID --mode lyrics --logo logos/principal_logo.png
+```
+
+La tinta tiene pequeñas pérdidas de cobertura y bordes irregulares; el papel tiene grano
+monocromático y variaciones suaves de densidad, sin líneas separadoras ni tono sepia.
+La textura es determinista: no cambia entre fotogramas ni al repetir la generación.
+La intro conserva la transparencia alrededor de las letras; el papel se incluye como
+imagen de fondo en el paquete del video y dura toda la canción. Las letras cantadas
+siguen nítidas para mantener la lectura; el desgaste se aplica al título y al artista.

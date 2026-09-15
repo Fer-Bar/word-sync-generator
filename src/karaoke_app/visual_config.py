@@ -66,7 +66,9 @@ def preparation_visuals(video: dict[str, int], args: Any) -> dict[str, Any]:
 
 
 def configure_job(job_dir: Path, *, visual_style: str = "plus", background_style: str | None = None,
-                  cover: Path | None = None) -> Path:
+                  cover: Path | None = None, graphic_style: str | None = None,
+                  title_layout: str | None = None, align: str | None = None,
+                  graphic_palette: str | None = None) -> Path:
     """Save visual preferences atomically with a byte-for-byte backup of the previous job."""
     import hashlib
     import json
@@ -77,8 +79,13 @@ def configure_job(job_dir: Path, *, visual_style: str = "plus", background_style
     root = job_dir.expanduser().resolve()
     path = root / "job.json"
     original = path.read_bytes()
-    document = validate_job_document(apply_visual_options(load_job_document(root), visual_style=visual_style,
-                                      background_style=background_style, cover=cover))
+    from karaoke_app.fomo import apply_graphic_options
+
+    document = apply_visual_options(load_job_document(root), visual_style=visual_style,
+                                    background_style=background_style, cover=cover)
+    document = validate_job_document(apply_graphic_options(document, graphic_style=graphic_style,
+                                                          title_layout=title_layout, align=align,
+                                                          graphic_palette=graphic_palette))
     if document == json.loads(original):
         return path
     backup = root / "backups" / f"job-{hashlib.sha256(original).hexdigest()[:12]}.json"
@@ -109,7 +116,13 @@ def run_configure(argv: list[str]) -> None:
     parser.add_argument("--visual-style", choices=VISUAL_STYLES, default="plus")
     parser.add_argument("--background-style", choices=BACKGROUND_STYLES)
     parser.add_argument("--cover", type=Path)
+    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
+    parser.add_argument("--graphic-palette", choices=("light", "dark"))
+    parser.add_argument("--title-layout", choices=("stacked", "wide"))
+    parser.add_argument("--align", choices=("start", "center", "end"))
     args = parser.parse_args(argv)
     path = configure_job(args.job_dir, visual_style=args.visual_style,
-                         background_style=args.background_style, cover=args.cover)
+                         background_style=args.background_style, cover=args.cover,
+                         graphic_style=args.graphic_style, title_layout=args.title_layout, align=args.align,
+                         graphic_palette=args.graphic_palette)
     logging.getLogger(__name__).info("Saved visual configuration: %s", path)
