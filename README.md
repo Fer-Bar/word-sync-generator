@@ -308,8 +308,7 @@ una palabra vecina, repartido sin solapamientos. Este respaldo no es una alineac
 `alignment.json` indica `text_source`, la estrategia y `grouping.estimated_word_indexes` (índices
 desde cero sobre todas las palabras de salida). Las palabras con tiempos estimados no heredan la
 confianza de Whisper. `lyrics_validation.json` conserva las discrepancias con la transcripción;
-`needs_review` textual es informativo. Los conflictos temporales graves sin resolver requieren revisión
-antes del render final; `--accept-timing-review` confirma esa revisión para una ejecución.
+`needs_review` es informativo y no bloquea el render. La revisión o realineación acústica es opcional.
 
 El campo `plain` se deriva de `lines[].text` y se escribe como bloque literal YAML (`|-`) cuando
 contiene varias líneas, conservando saltos y apóstrofes legibles. En archivos anteriores, `He''s`
@@ -815,13 +814,3 @@ La textura es determinista: no cambia entre fotogramas ni al repetir la generaci
 La intro conserva la transparencia alrededor de las letras; el papel se incluye como
 imagen de fondo en el paquete del video y dura toda la canción. Las letras cantadas
 siguen nítidas para mantener la lectura; el desgaste se aplica al título y al artista.
-
-
-## Recuperación de sincronización por tramos
-
-La preparación detecta conflictos temporales locales y reintenta únicamente las líneas
-afectadas, conservando sus vecinas. Guarda cobertura y referencias temporales; un conflicto
-grave sin resolver detiene el render final antes de iniciar Colab.
-
-- [Funcionamiento y revisión de los diagnósticos](docs/timing-quality.md).
-- [Comparación en GPU: Ghost, He Belongs y Jessie Reyez](docs/timing-ab-20261105.md).

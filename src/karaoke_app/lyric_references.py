@@ -12,153 +12,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-def _reference_agent(line: dict[str, Any], target: dict[str, Any]) -> None:
-    agent = target.get("agent")
-    if agent:
-        line["agent"] = agent
-        for word in line.get("words", []):
-            if word.get("agent") in (None, "v1"):
-                word["agent"] = agent
-
-
-def reference_vocal_tokens(
-    lines: list[dict[str, Any]], *, character_alignment: bool = False,
-) -> list[list[dict[str, Any]]]:
-    """Read parenthesized background spans across lines, retaining reference typography."""
-    result = []
-    depth = 0
-    for line in lines:
-        tokens = []
-        source_tokens = (
-            [character for character in line["text"] if not character.isspace()]
-            if character_alignment else re.findall(r"\S+\s*", line["text"])
-        )
-        for text in source_tokens:
-            background = bool(line.get("isBackground"))
-            for character in text:
-                if character == "(":
-                    depth += 1
-                elif character == ")":
-                    depth -= 1
-                    if depth < 0:
-                        raise ValueError("Unbalanced background-vocal parentheses in reference")
-                elif not character.isspace() and depth:
-                    background = True
-            tokens.append({"text": text, "isBackground": background})
-        result.append(tokens)
-    if depth:
-        raise ValueError("Unbalanced background-vocal parentheses in reference")
-    return result
-
-
-def _reference_backgrounds(document: dict[str, Any], desired: list[dict[str, Any]]) -> None:
-    try:
-        tokenized = reference_vocal_tokens(desired)
-    except ValueError:
-        # Incomplete provider punctuation is not evidence that the remaining song is a chorus.
-        return
-    for line, tokens in zip(document["lines"], tokenized, strict=True):
-        units = [(unit, token["isBackground"]) for token in tokens for unit in normalized_units(token["text"])]
-        words = line.get("words", [])
-        observed = [unit for word in words for unit in normalized_units(word["text"])]
-        if observed != [unit for unit, _ in units]:
-            continue
-        cursor = 0
-        for word in words:
-            count = len(normalized_units(word["text"]))
-            if count and all(background for _, background in units[cursor:cursor + count]):
-                word["isBackground"] = True
-            cursor += count
-
-
-def alignment_anchor_check(
-    document: dict[str, Any], desired: list[dict[str, Any]], validation: dict[str, Any],
-) -> dict[str, Any]:
-    """Reject multi-point drift against independent, complete ASR phrases; never shift word times."""
-    words = [word for line in document["lines"] for word in line.get("words", [])]
-    observed, owners = [], []
-    for index, word in enumerate(words):
-        units = normalized_units(word["text"])
-        observed.extend(units)
-        owners.extend([index] * len(units))
-    expected = [unit for line in desired for unit in normalized_units(line["text"])]
-    matches = _unambiguous_matches(expected, observed)
-    cursor, checked = 0, []
-    for line, diagnostic in zip(desired, validation.get("lines", []), strict=True):
-        units = normalized_units(line["text"])
-        anchors = diagnostic.get("anchor_spans")
-        if anchors is None:
-            anchor = diagnostic.get("anchor")
-            anchors = [{**anchor, "start_unit": 0, "end_unit": len(units)}] if anchor and len(units) >= 3 else []
-        for anchor in anchors:
-            first, last = cursor + anchor["start_unit"], cursor + anchor["end_unit"] - 1
-            if first not in matches or last not in matches:
-                continue
-            start = words[owners[matches[first]]]["start_ms"]
-            end = words[owners[matches[last]]]["end_ms"]
-            checked.append({"line_index": diagnostic["line_index"], "start_ms": start, "end_ms": end,
-                            "asr_start_ms": anchor["start_ms"], "asr_end_ms": anchor["end_ms"],
-                            "deviation_ms": abs(start - anchor["start_ms"])})
-        cursor += len(units)
-    severe = [item for item in checked if item["deviation_ms"] > 5000]
-    drift = len({item["line_index"] for item in severe}) >= 2 or any(item["deviation_ms"] > 10000 for item in severe)
-    return {"status": "drift" if drift else "checked" if len(checked) >= 2 else "insufficient_anchors",
-            "checked": len(checked), "severe_deviations": severe}
-
-
-def refine_estimated_timings(
-    document: dict[str, Any], grouping: dict[str, Any], candidates: list[dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Use acoustic timings only for estimated gaps bounded by unchanged ASR words on both sides."""
-    result, report = copy.deepcopy(document), copy.deepcopy(grouping)
-    words = [word for line in result["lines"] for word in line.get("words", [])]
-    lexical = [(index, word) for index, word in enumerate(words) if normalized_units(word["text"])]
-    expected = [normalized_units(word["text"]) for _, word in lexical]
-    estimated = set(report.get("estimated_word_indexes", []))
-    gaps, gap = [], []
-    for position, (index, _) in enumerate(lexical):
-        if index in estimated:
-            gap.append(position)
-        else:
-            if gap:
-                gaps.append(gap)
-            gap = []
-    refined = []
-    # Leading/trailing gaps lack two trustworthy bounds and intentionally remain estimated.
-    for candidate in reversed(candidates):
-        acoustic = [word for line in candidate["lines"] for word in line.get("words", [])
-                    if normalized_units(word["text"])]
-        if [normalized_units(word["text"]) for word in acoustic] != expected:
-            continue
-        for gap in gaps:
-            indexes = [lexical[position][0] for position in gap]
-            if gap[0] == 0 or not all(index in estimated for index in indexes):
-                continue
-            lower = lexical[gap[0] - 1][1]["end_ms"]
-            upper = lexical[gap[-1] + 1][1]["start_ms"]
-            proposed = [acoustic[position] for position in gap]
-            if (
-                proposed[0]["start_ms"] < lower or proposed[-1]["end_ms"] > upper
-                or any(word["end_ms"] <= word["start_ms"] for word in proposed)
-                or any(left["end_ms"] > right["start_ms"] for left, right in zip(proposed, proposed[1:], strict=False))
-                or (len(gap) >= 3 and proposed[-1]["end_ms"] - proposed[0]["start_ms"] < len(gap) * 50)
-            ):
-                continue
-            for index, source in zip(indexes, proposed, strict=True):
-                words[index].update(start_ms=source["start_ms"], end_ms=source["end_ms"])
-                if "confidence" in source:
-                    words[index]["confidence"] = source["confidence"]
-                estimated.remove(index)
-                refined.append(index)
-    if refined:
-        for line in result["lines"]:
-            line["start_ms"] = min(word["start_ms"] for word in line["words"])
-            line["end_ms"] = max(word["end_ms"] for word in line["words"])
-        report.update(estimated_word_indexes=sorted(estimated), estimated_words=len(estimated),
-                      acoustic_refined_word_indexes=sorted(refined), acoustic_refined_words=len(refined))
-    return result, report
-
-
 def normalized_units(text: str) -> list[str]:
     """Normalize only for comparison, retaining the original display text separately."""
     text = unicodedata.normalize("NFKC", text).casefold().replace("’", "'")
@@ -298,25 +151,13 @@ def sanitize_text(text: str) -> str:
 
 
 def plain_lines(text: str) -> list[dict[str, Any]]:
-    """Read section performers without treating standalone, possibly wrapped headers as vocals."""
+    """Keep authored line breaks and vocals; omit standalone editorial section headers."""
     cleaned = sanitize_text(text)
-    header = re.compile(r"(?m)^[ \t]*\[([^\[\]]+)\][ \t]*(?=\n|$)")
-    lines = []
-    agent = None
-    cursor = 0
-    for match in header.finditer(cleaned):
-        for line in cleaned[cursor:match.start()].splitlines():
-            if line.strip():
-                lines.append({"text": line.strip(), **({"agent": agent} if agent else {})})
-        label = " ".join(match.group(1).split())
-        section, separator, performer = label.partition(":")
-        # Multiple names identify a shared section, not a diarization of individual words.
-        agent = performer.strip() if separator and performer.strip() else None
-        cursor = match.end()
-    for line in cleaned[cursor:].splitlines():
-        if line.strip():
-            lines.append({"text": line.strip(), **({"agent": agent} if agent else {})})
-    return lines
+    return [
+        {"text": line.strip()}
+        for line in cleaned.splitlines()
+        if line.strip() and not re.fullmatch(r"\s*\[[^\]]+\]\s*", line)
+    ]
 
 
 def validate_genius_url(url: str) -> str:
@@ -546,30 +387,6 @@ def compare_reference(lines: list[dict[str, Any]], transcript: dict[str, Any]) -
             ],
         }
         entry["needs_review"] |= bool(entry["differences"])
-        spans, run = [], []
-        for position in [*indexes, cursor + len(units)]:
-            if (
-                position == cursor + len(units) or position not in reliable
-                or (run and mapping[position] != mapping[run[-1]] + 1)
-            ):
-                if len(run) >= 3:
-                    selected = words[owners[mapping[run[0]]]:owners[mapping[run[-1]]] + 1]
-                    if all(word.get("probability", 0) >= 0.5 and word["end"] > word["start"] for word in selected):
-                        spans.append({
-                            "start_unit": run[0] - cursor, "end_unit": run[-1] - cursor + 1,
-                            "start_ms": round(selected[0]["start"] * 1000),
-                            "end_ms": round(selected[-1]["end"] * 1000),
-                            "word_starts": [
-                                {"unit": position - cursor,
-                                 "start_ms": round(words[owners[mapping[position]]]["start"] * 1000)}
-                                for position in run
-                                if position == run[0] or owners[mapping[position]] != owners[mapping[position - 1]]
-                            ],
-                        })
-                run = []
-            if position in reliable and position < cursor + len(units):
-                run.append(position)
-        entry["anchor_spans"] = spans
         if anchor_safe:
             start_word, end_word = owners[matched[0]], owners[matched[-1]]
             selected = words[start_word : end_word + 1]
@@ -622,10 +439,7 @@ def anchored_document(document: dict[str, Any], validation: dict[str, Any]) -> d
 def restore_structure(document: dict[str, Any], desired: list[dict[str, Any]]) -> dict[str, Any]:
     """Regroup existing timed words at exact reference boundaries; never interpolate times."""
     if [line["text"] for line in document["lines"]] == [line["text"] for line in desired]:
-        result = copy.deepcopy(document)
-        for line, target in zip(result["lines"], desired, strict=True):
-            _reference_agent(line, target)
-        return result
+        return document
     words = []
     unspaced = str(document.get("metadata", {}).get("language", "")).split("-")[0] in {"zh", "chi", "ja", "jpn"}
     for line in document["lines"]:
@@ -663,7 +477,6 @@ def restore_structure(document: dict[str, Any], desired: list[dict[str, Any]]) -
                 "end_ms": max(w["end_ms"] for w in group),
             }
         )
-        _reference_agent(result["lines"][-1], target)
     if cursor != len(words):
         raise ValueError("Unassigned timed words after restoring reference structure")
     return result
@@ -768,7 +581,7 @@ def merge_reference_lines(
     result["lines"] = []
     ordered_cuts = sorted(cuts)
     reference_spans = {
-        (accepted[index], accepted[index + 1]): desired[index]
+        (accepted[index], accepted[index + 1]): desired[index]["text"]
         for index in range(len(desired))
         if index in accepted and index + 1 in accepted
     }
@@ -776,7 +589,7 @@ def merge_reference_lines(
     for start, end in zip(ordered_cuts, ordered_cuts[1:], strict=False):
         group = words[start:end]
         target = reference_spans.get((start, end))
-        if target is not None and _apply_reference_typography(group, target["text"]):
+        if target is not None and _apply_reference_typography(group, target):
             typography_applied += 1
         result["lines"].append(
             {
@@ -786,8 +599,6 @@ def merge_reference_lines(
                 "end_ms": max(word["end_ms"] for word in group),
             }
         )
-        if target is not None:
-            _reference_agent(result["lines"][-1], target)
     return result, {
         "method": "fuzzy_reference_boundaries",
         "text_replaced": False,
@@ -819,14 +630,9 @@ def apply_reference_text(
                     word.setdefault(key, line[key])
             words.append(word)
     if [line["text"] for line in document["lines"]] == [line["text"] for line in desired] and all(
-        normalized_units("".join(word["text"] for word in line.get("words", []))) == normalized_units(line["text"])
-        for line in document["lines"]
+        "".join(word["text"] for word in line.get("words", [])).strip() == line["text"] for line in document["lines"]
     ):
-        result = copy.deepcopy(document)
-        for line, target in zip(result["lines"], desired, strict=True):
-            _reference_agent(line, target)
-        _reference_backgrounds(result, desired)
-        return result, {
+        return copy.deepcopy(document), {
             "method": "existing_reference_timings",
             "text_action": "reference_applied",
             "text_replaced": False,
@@ -879,9 +685,8 @@ def apply_reference_text(
         source_end = anchors[right] if right < len(tokens) else len(words)
         lo = words[source_start]["start_ms"] if source_start < source_end else words[source_start - 1]["end_ms"]
         hi = words[source_end - 1]["end_ms"] if source_start < source_end else words[source_end]["start_ms"]
-        # ASR can omit a verse and leave only a few words near the next chorus.
-        # A 1ms validity check alone would pack the missing verse into those words.
-        if hi - lo < count or (count >= 3 and hi - lo < count * 50):
+        # Use the entire gap only if the observed words offer too little duration.
+        if hi - lo < count:
             lo = words[anchors[left]]["end_ms"] if left >= 0 else start
             hi = words[anchors[right]]["start_ms"] if right < len(tokens) else end
         for offset in range(count):
@@ -906,10 +711,8 @@ def apply_reference_text(
                 "end_ms": max(word["end_ms"] for word in group),
             }
         )
-        _reference_agent(result["lines"][-1], target)
         cursor += len(line_tokens)
     result["plain"] = "\n".join(line["text"] for line in desired)
-    _reference_backgrounds(result, desired)
     return result, {
         "method": "reference_text_with_asr_timing_fallback",
         "text_action": "reference_applied",

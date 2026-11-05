@@ -7,13 +7,7 @@ from typing import Any
 
 import yaml
 
-try:
-    from karaoke_app.lyric_references import sanitize_text
-except ModuleNotFoundError as error:
-    if error.name != "karaoke_app":
-        raise
-    # Colab receives these services as standalone files, without the local package.
-    from karaoke_lyric_references import sanitize_text
+from karaoke_app.lyric_references import sanitize_text
 
 LYRICS_FILENAME = "lyrics.lyricsfile.yaml"
 

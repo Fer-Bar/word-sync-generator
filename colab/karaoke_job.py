@@ -1,4 +1,3 @@
-import copy
 import importlib.util
 import json
 import logging
@@ -8,7 +7,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -23,7 +21,6 @@ HF_TOKEN_PATH = Path("/content/.hf_token")
 WORK_DIR = Path("/content/karaoke_workspace")
 LYRICS_MODULE_PATH = Path("/content/karaoke_lyrics_file.py")
 REFERENCES_MODULE_PATH = Path("/content/karaoke_lyric_references.py")
-TIMING_MODULE_PATH = Path("/content/karaoke_timing_quality.py")
 RENDER_JOB_PATH = Path("/content/karaoke_render_job.zip")
 LOGGER = logging.getLogger(__name__)
 LRCLIB_API = "https://lrclib.net/api"
@@ -35,350 +32,6 @@ MAX_PAGE_DURATION_SECONDS = 15.0
 PAGE_LEAD_SECONDS = 0.35
 PAGE_TAIL_SECONDS = 0.35
 PAGE_FADE_MILLISECONDS = 150
-
-
-def _resolve_reference(metadata, config, record):
-    return _load_references_module().resolve_reference(
-        config.get("lyrics", {}), metadata, record,
-        record_to_document=lambda: _lyrics_document_from_record(record, metadata, config),
-        candidate_is_safe=_lrclib_candidate_is_safe,
-    )
-
-
-def _timed_call(performance, stage, function, *args, **kwargs):
-    began = time.perf_counter()
-    succeeded = False
-    try:
-        result = function(*args, **kwargs)
-        succeeded = True
-        return result
-    finally:
-        elapsed = time.perf_counter() - began
-        if performance is not None:
-            performance["stages"].append({"stage": stage, "seconds": elapsed, "succeeded": succeeded})
-        LOGGER.info("Stage %s: %.2fs", stage, elapsed)
-
-
-def _verify_alignment_anchors(lyrics, document, validation, provenance):
-    if not validation.get("lines"):
-        return
-    check = _load_references_module().alignment_anchor_check(lyrics, document["lines"], validation)
-    provenance["asr_anchor_check"] = check
-    if check["status"] == "drift":
-        provenance.setdefault("rejected_acoustic_checks", []).append(check)
-        raise RuntimeError("CTC has severe timing drift against independent ASR phrases")
-
-
-def _check_vocal_boundaries(vocals_path: Path, lines: list[dict[str, Any]]) -> dict[str, Any]:
-    """Trim generated word tails only where the separated stem supports a sustained quiet gap."""
-    import numpy as np
-
-    try:
-        decoded = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(vocals_path), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
-            check=True, capture_output=True,
-        )
-        samples = np.frombuffer(decoded.stdout, dtype="<f4")
-        frame_size = 320  # 20 ms at 16 kHz; no model or GPU is needed for the boundary check.
-        usable = samples.size // frame_size * frame_size
-        if not samples.size or not np.isfinite(samples).all():
-            raise ValueError("Vocal audio is empty or non-finite")
-        frames = samples[:usable].reshape(-1, frame_size).astype(np.float64)
-        rms = np.sqrt(np.mean(frames * frames, axis=1))
-        if usable < samples.size:
-            # Keep the final partial frame so rounded CTC endings still have acoustic evidence.
-            tail = samples[usable:].astype(np.float64)
-            rms = np.append(rms, np.sqrt(np.mean(tail * tail)))
-        return _trim_quiet_word_tails(lines, rms)
-    except (OSError, subprocess.CalledProcessError, ValueError) as error:
-        LOGGER.warning("Vocal boundary check unavailable: %s", error)
-        return {"status": "unavailable", "reason": str(error), "corrections": []}
-
-
-def _trim_quiet_word_tails(lines: list[dict[str, Any]], rms: Any) -> dict[str, Any]:
-    """Apply conservative, gain-relative silence boundaries to all generated words in place."""
-    import numpy as np
-
-    corrections = []
-    unresolved = []
-    for line_index, line in enumerate(lines):
-        for word_index, word in enumerate(line.get("words", [])):
-            start, end = word["start_ms"], word["end_ms"]
-            if end - start < 800:
-                continue
-            first, stop = math.ceil(start / 20), end // 20
-            levels = np.asarray(rms[first:stop])
-            if stop > len(rms) or not len(levels) or levels.max() <= 1e-8:
-                unresolved.append({"line_index": line_index, "word_index": word_index, "reason": "no_vocal_evidence"})
-                continue
-            # A relative 35 dB drop preserves quiet songs and sustained vowels; duration alone never clips a word.
-            quiet = levels < levels.max() * 10 ** (-35 / 20)
-            gap_start = None
-            active_frames = 0
-            for index, is_quiet in enumerate(quiet):
-                if not is_quiet:
-                    active_frames += 1
-                    gap_start = None
-                    continue
-                if gap_start is None:
-                    gap_start = index
-                if index - gap_start + 1 < 30 or active_frames < 5:
-                    continue
-                new_end = max(start + 20, (first + gap_start) * 20 + 100)
-                corrections.append({
-                    "line_index": line_index, "word_index": word_index, "text": word["text"].strip(),
-                    "original_end_ms": end, "end_ms": new_end,
-                })
-                word["end_ms"] = new_end
-                break
-        if line.get("words"):
-            line["end_ms"] = max(word["end_ms"] for word in line["words"])
-    return {
-        "status": "needs_review" if unresolved else "checked", "method": "vocal_stem_relative_rms",
-        "frame_ms": 20, "quiet_drop_db": 35, "min_silence_ms": 600, "tail_pad_ms": 100,
-        "corrections": corrections, "unresolved": unresolved,
-    }
-
-
-class AlignmentContext:
-    """Lazily load one CTC model and waveform for all alignment attempts of a job."""
-
-    def __init__(self, vocals_path: Path):
-        self.vocals_path = vocals_path
-        self.loaded = None
-
-    def load(self):
-        if self.loaded is None:
-            import torch
-            from ctc_forced_aligner import load_alignment_model, load_audio
-            from huggingface_hub import snapshot_download
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
-            model_path = snapshot_download(
-                repo_id=CTC_ALIGNER_MODEL, revision=CTC_ALIGNER_MODEL_REVISION, cache_dir=WORK_DIR / "models")
-            model, tokenizer = load_alignment_model(device, model_path=model_path, dtype=dtype)
-            waveform = load_audio(str(self.vocals_path), model.dtype, model.device)
-            self.loaded = model, tokenizer, waveform
-        return self.loaded
-
-
-def _asr_recovery_sections(tokenized_lines, raw_lines, validation, duration_ms):
-    """Bound unmatched verses between reliable ASR phrases without estimating word timestamps."""
-    references = _load_references_module()
-    diagnostics = {id(line): diagnostic for line, diagnostic in zip(raw_lines, validation["lines"], strict=True)}
-    anchors = []
-    for index, (line, tokens) in enumerate(tokenized_lines):
-        anchor = diagnostics[id(line)].get("anchor")
-        if (
-            anchor and len(references.normalized_units(line["text"])) >= 3
-            and not any(token.get("isBackground") for token in tokens)
-        ):
-            anchors.append((index, anchor))
-    if len(anchors) < 2 or any(
-        left[1]["end_ms"] > right[1]["start_ms"]
-        for left, right in zip(anchors, anchors[1:], strict=False)
-    ):
-        raise ValueError("Insufficient ordered ASR phrases for bounded recovery")
-    boundaries = [(0, 0)]
-    boundaries.extend((index, anchor["start_ms"]) for index, anchor in anchors if index > 0)
-    boundaries.append((len(tokenized_lines), duration_ms))
-    sections = []
-    for (start, lo), (end, hi) in zip(boundaries, boundaries[1:], strict=False):
-        if hi <= lo:
-            raise ValueError("ASR recovery window has no audio")
-        section = [(dict(line), tokens) for line, tokens in tokenized_lines[start:end]]
-        section[0][0]["start_ms"] = lo
-        section[-1][0]["end_ms"] = hi
-        sections.append(section)
-    return sections
-
-
-def _alignment_document_tokens(
-    lines: list[dict[str, Any]], *, character_alignment: bool,
-) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
-    valid_lines = [line for line in lines if isinstance(line, dict) and isinstance(line.get("text"), str)]
-    reference_tokens = _load_references_module().reference_vocal_tokens(
-        valid_lines, character_alignment=character_alignment,
-    )
-    result = []
-    for line, source_tokens in zip(valid_lines, reference_tokens, strict=True):
-        agent = line.get("agent")
-        agent = agent if isinstance(agent, str) and agent.strip() else "v1"
-        tokens = []
-        for source in source_tokens:
-            text = source["text"].replace("(", "").replace(")", "").strip()
-            if not text:
-                continue
-            token = {"text": text, "agent": agent}
-            if source["isBackground"]:
-                token["isBackground"] = True
-            tokens.append(token)
-        if tokens:
-            result.append((line, tokens))
-    return result
-
-
-def _load_timing_module() -> Any:
-    if not TIMING_MODULE_PATH.is_file():
-        from karaoke_app import timing_quality
-
-        return timing_quality
-    spec = importlib.util.spec_from_file_location("karaoke_timing_quality", TIMING_MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _recover_local_timing(lyrics, reference, transcript, vocals_path, metadata, config, *, context, mixture_path=None):
-    """Retry bounded conflicts and retain all word timings outside the flagged lines."""
-    references, quality_module = _load_references_module(), _load_timing_module()
-    validation = references.compare_reference(reference["lines"], transcript) if transcript else {"lines": []}
-    quality = quality_module.assess_timing(
-        lyrics, reference["lines"], validation, normalize=references.normalized_units,
-    )
-    report = {"initial": quality, "attempts": []}
-    windows = quality_module.recovery_windows(quality, duration_ms=round(metadata["duration"] * 1000))
-    for window in windows:
-        attempt = {"window": window, "accepted": False, "candidates": []}
-        report["attempts"].append(attempt)
-        try:
-            checked_transcript = _recover_region_transcript(
-                transcript, reference, window, vocals_path, mixture_path, metadata, config,
-            )
-            checked_validation = (references.compare_reference(reference["lines"], checked_transcript)
-                                  if checked_transcript else {"lines": []})
-            before = quality_module.assess_timing(
-                lyrics, reference["lines"], checked_validation, normalize=references.normalized_units,
-                reference_calibration=quality,
-            )
-            flagged = {row["line_index"] for row in quality["lines"] if row["reasons"]
-                       and window["first_line"] <= row["line_index"] <= window["last_line"]}
-            for split in (False, True):
-                try:
-                    recovered = _align_timing_window(reference, config, context, window, quality, split=split)
-                    candidate = copy.deepcopy(lyrics)
-                    for index, line in enumerate(recovered, window["first_line"]):
-                        if index in flagged:
-                            candidate["lines"][index] = line
-                    candidate = _load_lyrics_module().validate_lyrics_file(candidate, require_words=True)
-                except (RuntimeError, ValueError) as error:
-                    attempt["candidates"].append({"split_by_phrase": split, "accepted": False, "error": str(error)})
-                    continue
-                after = quality_module.assess_timing(
-                    candidate, reference["lines"], checked_validation, normalize=references.normalized_units,
-                    reference_calibration=quality,
-                )
-                decision = _local_candidate_decision(before, after, flagged)
-                attempt["candidates"].append({"split_by_phrase": split, **decision})
-                if decision["accepted"]:
-                    lyrics, transcript = candidate, checked_transcript
-                    attempt["accepted"] = True
-                    break
-        except (RuntimeError, ValueError, OSError, ImportError) as error:
-            attempt["error"] = str(error)
-            LOGGER.warning("Local timing recovery unavailable: %s", error)
-    return lyrics, transcript, report
-
-
-def _local_candidate_decision(before, after, flagged):
-    rows_before = [row for row in before["lines"] if row["line_index"] in flagged]
-    rows_after = [row for row in after["lines"] if row["line_index"] in flagged]
-    if len(rows_before) != len(flagged) or len(rows_after) != len(flagged):
-        return {"accepted": False, "reason": "structure_changed"}
-    if any(row["reasons"] for row in rows_after):
-        return {"accepted": False, "reason": "conflicts_remain"}
-    old = [abs(a["deviation_ms"]) for row in rows_before for a in row["anchor_words"]]
-    new = [abs(a["deviation_ms"]) for row in rows_after for a in row["anchor_words"]]
-    if old and new and (sum(v > 1000 for v in new) > sum(v > 1000 for v in old)
-                       or sum(new) > sum(old) + 100 * len(new)):
-        return {"accepted": False, "reason": "independent_anchors_worsened"}
-    supported = len(new) >= 3 and sum(new) < sum(old) and sum(v <= 750 for v in new) / len(new) >= .8
-    old_score = sum(row["confidence"] or 0 for row in rows_before) / len(rows_before)
-    new_score = sum(row["confidence"] or 0 for row in rows_after) / len(rows_after)
-    reference_agrees = all(row["reference_residual_ms"] is not None
-                           and abs(row["reference_residual_ms"]) <= 1000 for row in rows_after)
-    acoustic_gain = new_score >= max(.25, old_score * 1.25)
-    return {"accepted": supported or (reference_agrees and acoustic_gain),
-            "independent_support": supported, "old_ctc_score": old_score, "new_ctc_score": new_score,
-            "reference_agrees": reference_agrees}
-
-
-def _recover_region_transcript(transcript, reference, window, vocals, mixture, metadata, config):
-    """Retry only a disputed interval without VAD; preserve original evidence outside it."""
-    references = _load_references_module()
-    start, end = window["start_ms"] / 1000, window["end_ms"] / 1000
-    best = transcript
-    raw_indexes = [i for i, line in enumerate(reference["lines"]) if references.normalized_units(line["text"])]
-    selected_indexes = set(raw_indexes[window["first_line"]:window["last_line"] + 1])
-
-    def coverage(speech):
-        if speech is None:
-            return 0
-        check = references.compare_reference(reference["lines"], speech)
-        return sum(len(span.get("word_starts", [])) for row in check["lines"]
-                   if row["line_index"] in selected_indexes
-                   for span in row.get("anchor_spans", []))
-    score = coverage(best)
-    for source in [vocals, *([mixture] if mixture is not None else [])]:
-        try:
-            with tempfile.TemporaryDirectory(prefix="karaoke-timing-") as directory:
-                clip = Path(directory) / "region.wav"
-                subprocess.run(["ffmpeg", "-v", "error", "-ss", str(start), "-i", str(source),
-                                "-t", str(end - start), "-ac", "1", "-ar", "16000", str(clip)],
-                               check=True, capture_output=True)
-                speech = _transcribe(clip, {**metadata, "duration": end - start}, config, vad_filter=False)
-        except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
-            LOGGER.warning("Regional transcription unavailable: %s", error)
-            continue
-        words = [dict(word, start=round(word["start"] + start, 3), end=round(word["end"] + start, 3))
-                 for segment in speech["segments"] for word in segment["words"]]
-        if transcript:
-            words.extend(word for segment in transcript["segments"] for word in segment["words"]
-                         if word["end"] <= start or word["start"] >= end)
-        merged = {**(transcript or speech), "segments": _group_words(
-            sorted(words, key=lambda w: w["start"]), max_chars=42, max_gap=.8,
-        )}
-        found = coverage(merged)
-        if found > score:
-            best, score = merged, found
-            break
-    return best
-
-
-def _align_timing_window(reference, config, context, window, assessment, *, split):
-    """Generate a local candidate using the existing model and overlapping audio context."""
-    from ctc_forced_aligner import generate_emissions, get_alignments, get_spans, postprocess_results, preprocess_text
-
-    language = _alignment_language(config["language"], reference.get("metadata"))
-    character_alignment = language in {"chi", "jpn"}
-    tokenized = _alignment_document_tokens(reference["lines"], character_alignment=character_alignment)
-    for _, tokens in tokenized:
-        for token in tokens:
-            token["alignment_units"] = _alignment_units(token["text"], language)
-    selected = tokenized[window["first_line"]:window["last_line"] + 1]
-    model, tokenizer, waveform = context.load()
-    groups = [[line] for line in selected] if split else [selected]
-    output = []
-    for local_index, group in enumerate(groups):
-        lo, hi = window["start_ms"], window["end_ms"]
-        if split:
-            index = window["first_line"] + local_index
-            rows, offset = assessment["lines"], assessment["reference_offset_ms"]
-            if offset is None or rows[index]["reference_start_ms"] is None:
-                raise ValueError("Phrase recovery needs a consistent timestamp reference")
-            lo = max(lo, round(rows[index]["reference_start_ms"] + offset - 400))
-            if index + 1 < len(rows) and rows[index + 1]["reference_start_ms"] is not None:
-                hi = min(hi, round(rows[index + 1]["reference_start_ms"] + offset + 400))
-        if hi <= lo:
-            raise ValueError("Empty timing recovery window")
-        output.extend(_align_tokenized_lines(
-            model=model, tokenizer=tokenizer, waveform=waveform[..., lo * 16:hi * 16],
-            tokenized_lines=group, language=language, character_alignment=character_alignment,
-            generate_emissions=generate_emissions, preprocess_text=preprocess_text, get_alignments=get_alignments,
-            get_spans=get_spans, postprocess_results=postprocess_results, time_offset_sec=lo / 1000, batch_size=1,
-        ))
-    return output
 
 
 def main() -> None:
@@ -435,7 +88,6 @@ def main() -> None:
             config,
             selected_record=record,
             artifacts_dir=output_dir,
-            mixture_path=mixture_path,
         )
     except Exception as error:
         checkpoint = {
@@ -835,21 +487,22 @@ def _prepare_lyrics(
     *,
     selected_record: dict[str, Any] | None,
     artifacts_dir: Path | None = None,
-    resolved_reference: tuple | None = None,
-    performance: dict | None = None,
-    mixture_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     lyrics_module = _load_lyrics_module()
     references = _load_references_module()
     record = selected_record
-    document, evidence = resolved_reference if resolved_reference is not None else _resolve_reference(
-        metadata, config, record)
-    alignment_context = AlignmentContext(vocals_path)
+    document, evidence = references.resolve_reference(
+        config.get("lyrics", {}),
+        metadata,
+        record,
+        record_to_document=lambda: _lyrics_document_from_record(record, metadata, config),
+        candidate_is_safe=_lrclib_candidate_is_safe,
+    )
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     transcript = None
     validation: dict[str, Any] = {"needs_review": True, "status": "unavailable", "lines": []}
     try:
-        transcript = _timed_call(performance, "whisper", _transcribe, vocals_path, metadata, config)
+        transcript = _transcribe(vocals_path, metadata, config)
         _save_lyrics_evidence(artifacts_dir, "transcription.json", transcript)
     except RuntimeError as error:
         if document is None:
@@ -865,7 +518,6 @@ def _prepare_lyrics(
             if transcript
             else document["metadata"].get("language")
         )
-        _save_lyrics_evidence(artifacts_dir, "timing_reference.json", document)
         if transcript:
             validation = references.compare_reference(document["lines"], transcript)
             if references.likely_incomplete(validation):
@@ -875,20 +527,14 @@ def _prepare_lyrics(
 
     fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_reference"
     provenance: dict[str, Any] = {}
-    timing_transcript = transcript
     lyrics = None
-    acoustic_candidates = []
     if document is not None:
         try:
             if _has_complete_word_timings(document):
                 lyrics = lyrics_module.validate_lyrics_file(document, require_words=True)
                 provenance.update(engine=evidence["source"], word_timing="provided", strategy="provided_word_timings")
             else:
-                lyrics, _ = _timed_call(
-                    performance, "ctc_alignment", _align_known_lyrics, vocals_path, document, config,
-                    provenance=provenance, context=alignment_context)
-                acoustic_candidates.append(lyrics)
-                _verify_alignment_anchors(lyrics, document, validation, provenance)
+                lyrics, _ = _align_known_lyrics(vocals_path, document, config, provenance=provenance)
                 provenance.update(
                     engine="ctc-forced-aligner",
                     word_timing="generated",
@@ -899,20 +545,15 @@ def _prepare_lyrics(
             fallback_reason = str(error)
             LOGGER.warning("Reference alignment failed; trying independent ASR anchors: %s", error)
             recovery = references.anchored_document(document, validation)
-            partial_anchors = recovery is None and sum("anchor" in line for line in validation["lines"]) >= 2
-            if recovery is not None or partial_anchors:
+            if recovery is not None:
                 try:
-                    lyrics, _ = _timed_call(
-                        performance, "ctc_recovery", _align_known_lyrics, vocals_path,
-                        recovery or document,
+                    lyrics, _ = _align_known_lyrics(
+                        vocals_path,
+                        recovery,
                         config,
                         provenance=provenance,
                         recovery_only=True,
-                        context=alignment_context,
-                        **({"anchor_validation": validation} if partial_anchors else {}),
                     )
-                    acoustic_candidates.append(lyrics)
-                    _verify_alignment_anchors(lyrics, document, validation, provenance)
                     provenance.update(
                         engine="ctc-forced-aligner",
                         word_timing="generated",
@@ -922,21 +563,7 @@ def _prepare_lyrics(
                         anchor_source="independent_whisper",
                     )
                 except (AssertionError, KeyError, RuntimeError, ValueError) as recovery_error:
-                    lyrics = None
                     fallback_reason = f"{error}; ASR recovery: {recovery_error}"
-            else:
-                lyrics = None
-
-    if lyrics is not None and provenance.get("word_timing") != "provided":
-        lyrics, timing_transcript, recovery_report = _recover_local_timing(
-            lyrics, document, transcript, vocals_path, metadata, config,
-            context=alignment_context, mixture_path=mixture_path,
-        )
-        if recovery_report["attempts"]:
-            provenance["local_timing_recovery"] = recovery_report
-            _save_lyrics_evidence(artifacts_dir, "timing_recovery.json", recovery_report)
-            if timing_transcript is not None:
-                _save_lyrics_evidence(artifacts_dir, "timing_recovery_transcription.json", timing_transcript)
 
     if lyrics is not None:
         desired = evidence.get("structure_lines") or document["lines"]
@@ -976,7 +603,6 @@ def _prepare_lyrics(
         if document is not None:
             desired = evidence.get("structure_lines") or document["lines"]
             lyrics, grouping = references.apply_reference_text(lyrics, desired)
-            lyrics, grouping = references.refine_estimated_timings(lyrics, grouping, acoustic_candidates)
             lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
             evidence["grouping"] = grouping
             provenance.update(
@@ -984,14 +610,6 @@ def _prepare_lyrics(
                 segmentation="reference",
                 word_timing="estimated" if grouping["estimated_words"] else "asr_reused",
             )
-            if grouping.get("acoustic_refined_words"):
-                provenance["timing_refinement"] = "ctc_with_asr_bounds"
-                if not grouping["estimated_words"]:
-                    provenance["word_timing"] = "generated"
-            if acoustic_candidates:
-                provenance["asr_anchor_check"] = references.alignment_anchor_check(
-                    lyrics, document["lines"], validation,
-                )
             validation["reference_not_applied"] = False
         if document is None:
             validation.update(
@@ -1007,27 +625,6 @@ def _prepare_lyrics(
                     for index, line in enumerate(lyrics["lines"])
                 ],
             )
-
-    if provenance.get("word_timing") != "provided":
-        boundary_check = _check_vocal_boundaries(vocals_path, lyrics["lines"])
-        provenance["vocal_boundaries"] = boundary_check
-        validation["vocal_boundaries"] = boundary_check
-        validation["needs_review"] |= boundary_check["status"] != "checked"
-        lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
-
-    if document is not None and provenance.get("word_timing") != "provided":
-        timing_validation = (references.compare_reference(document["lines"], timing_transcript)
-                             if timing_transcript else {"lines": []})
-        quality = _load_timing_module().assess_timing(
-            lyrics, document["lines"], timing_validation, normalize=references.normalized_units,
-            reference_calibration=provenance.get("local_timing_recovery", {}).get("initial"),
-        )
-        provenance["timing_quality"] = quality
-        validation["timing_quality"] = quality
-        validation["needs_review"] |= quality["status"] != "checked"
-        _save_lyrics_evidence(artifacts_dir, "timing_quality.json", quality)
-        if quality["status"] == "conflict":
-            LOGGER.warning("Unresolved timing conflicts: %s", quality["regions"])
 
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
@@ -1856,9 +1453,8 @@ def _is_alignment_healthy(
 def _group_lines_into_macro_sections(
     tokenized_lines: list[tuple[dict[str, Any], list[dict[str, Any]]]],
     gap_threshold_sec: float = 6.0,
-    max_duration_sec: float = 30.0,
 ) -> list[list[tuple[dict[str, Any], list[dict[str, Any]]]]]:
-    """Bound recovery even when LRC ends equal the next onset and reveal no silence."""
+    """Partition lyric lines into macro-sections bounded by long musical gaps/solos."""
     if not tokenized_lines:
         return []
 
@@ -1878,10 +1474,7 @@ def _group_lines_into_macro_sections(
             else curr_start_sec + 4.0
         )
         gap = next_start_sec - curr_raw_end
-        section_start_sec = float(current_section[0][0].get("start_ms", 0)) / 1000
-        if next_start_sec > curr_start_sec and (
-            gap >= gap_threshold_sec or next_start_sec - section_start_sec >= max_duration_sec
-        ):
+        if gap >= gap_threshold_sec and next_start_sec > curr_start_sec:
             sections.append(current_section)
             current_section = [tokenized_lines[i + 1]]
         else:
@@ -1952,12 +1545,8 @@ def _align_tokenized_lines(
             if token.get("isBackground"):
                 word["isBackground"] = True
             words.append(word)
-        text = raw_line["text"]
-        if text.count("(") != text.count(")"):
-            # Cross-line grouping is represented by word roles, not dangling display punctuation.
-            text = "".join(word["text"] for word in words)
         output_line = {
-            "text": text if character_alignment else " ".join(text.split()),
+            "text": raw_line["text"] if character_alignment else " ".join(raw_line["text"].split()),
             "words": words,
             "start_ms": min(word["start_ms"] for word in words),
             "end_ms": max(word["end_ms"] for word in words),
@@ -1976,16 +1565,18 @@ def _align_known_lyrics(
     *,
     provenance: dict[str, Any] | None = None,
     recovery_only: bool = False,
-    context: AlignmentContext | None = None,
-    anchor_validation: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    import torch
     from ctc_forced_aligner import (
         generate_emissions,
         get_alignments,
         get_spans,
+        load_alignment_model,
+        load_audio,
         postprocess_results,
         preprocess_text,
     )
+    from huggingface_hub import snapshot_download
 
     raw_lines = document.get("lines")
     if not isinstance(raw_lines, list):
@@ -1994,18 +1585,29 @@ def _align_known_lyrics(
     if provenance is not None:
         provenance.update(language=language, strategy="global_ctc")
     character_alignment = language in {"chi", "jpn"}
-    tokenized_lines = _alignment_document_tokens(raw_lines, character_alignment=character_alignment)
-    for _, tokens in tokenized_lines:
-        for token in tokens:
-            token["alignment_units"] = _alignment_units(token["text"], language)
+    tokenized_lines: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for line in raw_lines:
+        if not isinstance(line, dict) or not isinstance(line.get("text"), str):
+            continue
+        tokens = _alignment_line_tokens(line, character_alignment=character_alignment)
+        if tokens:
+            for token in tokens:
+                token["alignment_units"] = _alignment_units(token["text"], language)
+            tokenized_lines.append((line, tokens))
     flat_tokens = [token for _, tokens in tokenized_lines for token in tokens]
     alignment_units = [unit for token in flat_tokens for unit in token["alignment_units"]]
     if not alignment_units:
         raise ValueError("Known lyrics do not contain words")
 
-    if context is not None and context.vocals_path != vocals_path:
-        raise ValueError("Alignment context belongs to a different vocal stem")
-    model, tokenizer, waveform = (context or AlignmentContext(vocals_path)).load()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    model_path = snapshot_download(
+        repo_id=CTC_ALIGNER_MODEL,
+        revision=CTC_ALIGNER_MODEL_REVISION,
+        cache_dir=WORK_DIR / "models",
+    )
+    model, tokenizer = load_alignment_model(device, model_path=model_path, dtype=dtype)
+    waveform = load_audio(str(vocals_path), model.dtype, model.device)
 
     has_line_timestamps = any(
         isinstance(raw_line.get("start_ms"), int | float) and raw_line["start_ms"] >= 0
@@ -2016,6 +1618,7 @@ def _align_known_lyrics(
     raw_lines_for_check = [line for line, _ in tokenized_lines]
     output_lines: list[dict[str, Any]] = []
 
+    # --- Tier 1: Global Continuous MMS CTC Alignment (Quality-First) ---
     global_succeeded = False
     if not recovery_only:
         try:
@@ -2047,19 +1650,18 @@ def _align_known_lyrics(
                 provenance["fallback_reason"] = str(error)
             LOGGER.warning("Global continuous CTC alignment failed: %s", error)
 
+    # --- Tier 2: Anchor-Guided Macro-Section Alignment (Recovery for long instrumental solos) ---
     if not global_succeeded:
-        if has_line_timestamps or anchor_validation is not None:
+        if has_line_timestamps:
             LOGGER.info("Attempting Tier 2 anchor-guided macro-section alignment")
-            sample_rate = 16000
-            total_samples = waveform.shape[-1]
-            audio_duration_sec = total_samples / sample_rate
             sections = (
-                _asr_recovery_sections(tokenized_lines, raw_lines, anchor_validation, round(audio_duration_sec * 1000))
-                if anchor_validation is not None
-                else [[line] for line in tokenized_lines]
+                [[line] for line in tokenized_lines]
                 if recovery_only
                 else _group_lines_into_macro_sections(tokenized_lines, gap_threshold_sec=6.0)
             )
+            sample_rate = 16000
+            total_samples = waveform.shape[-1]
+            audio_duration_sec = total_samples / sample_rate
             macro_output_lines = []
             try:
                 for section in sections:
@@ -2198,9 +1800,7 @@ def _transcript_to_lyrics(transcript: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _transcribe(
-    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any], *, vad_filter: bool = True,
-) -> dict[str, Any]:
+def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     import torch
     from faster_whisper import WhisperModel
 
@@ -2221,7 +1821,7 @@ def _transcribe(
         language=language,
         beam_size=5,
         word_timestamps=True,
-        vad_filter=vad_filter,
+        vad_filter=True,
         vad_parameters={
             "threshold": 0.25,
             "min_silence_duration_ms": 500,
