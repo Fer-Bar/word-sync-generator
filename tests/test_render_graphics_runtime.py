@@ -71,9 +71,10 @@ Dialogue: 0,0:00:02.30,0:00:03.00,Default,,0,0,0,,Lyrics
         karaoke_job._render_existing_job({"mode": "both", "theme": theme, "archive_path": str(tmp_path / "result.zip")})
     output = tmp_path / "remote/render_result"
     with zipfile.ZipFile(tmp_path / "result.zip") as archive:
+        assert "background.mp4" not in archive.namelist()
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
         assert {
             "background.png",
-            "background.mp4",
             "Song_lyrics.mp4",
             "Song_karaoke.mp4",
             "render-settings.json",

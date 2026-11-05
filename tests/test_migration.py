@@ -28,9 +28,8 @@ def raw_job(tmp_path):
     return path, document
 
 
-def test_migration_backs_up_original_and_is_idempotent(raw_job):
+def test_migration_is_atomic_and_idempotent(raw_job):
     path, original = raw_job
-    original_bytes = path.read_bytes()
     assert migrate_job(path.parent)
     doc = json.loads(path.read_text())
     assert doc["schema_version"] == 2
@@ -39,13 +38,11 @@ def test_migration_backs_up_original_and_is_idempotent(raw_job):
     assert doc["source"] == original["source"]
     assert doc["media"] == original["media"]
     assert doc["intro"] == {"enabled": True, "duration": 5}
-    backups = list((path.parent / "backups").glob("*.json"))
-    assert len(backups) == 1
-    assert backups[0].read_bytes() == original_bytes
+    assert not (path.parent / "backups").exists()
     updated = path.read_bytes()
     assert not migrate_job(path.parent)
     assert path.read_bytes() == updated
-    assert list((path.parent / "backups").glob("*.json")) == backups
+    assert not (path.parent / "backups").exists()
 
 
 def test_migration_preserves_custom_cosmic_and_disabled_flags(raw_job):

@@ -96,6 +96,7 @@ def test_job_bundle_and_remote_render_share_generator(tmp_path, monkeypatch):
 def test_video_background_loops_under_lyrics_without_dimming_twice(tmp_path, watermark):
     logo = tmp_path / "logo.png"
     logo.touch()
+    (tmp_path / "loop.mp4").touch()
     config = {
         "video": {"width": 160, "height": 90, "fps": 12},
         "background": {"kind": "video", "value": str(tmp_path / "loop.mp4")},

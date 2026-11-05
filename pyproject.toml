@@ -1,6 +1,7 @@
 [project]
-name = "karaoke-video-generator"
+name = "lyrics-generator"
 version = "0.1.0"
+license = "Apache-2.0"
 description = "Generate karaoke and lyrics videos on Google Colab"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +14,7 @@ dependencies = [
     "imageio-ffmpeg>=0.6.0",
     "playwright>=1.55,<2",
     "lyricsgenius>=3.7,<4",
+    "yt-dlp[default]>=2026.10.26",
 ]
 
 [project.scripts]

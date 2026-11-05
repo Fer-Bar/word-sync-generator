@@ -32,6 +32,13 @@ def test_v2_normalization_is_idempotent_and_does_not_mutate_input(document):
     assert validate_job_document(normalized) == normalized
 
 
+@pytest.mark.parametrize("field,value", [("width", 1919), ("height", 1079), ("fps", 121)])
+def test_video_settings_rejected_before_encoding(document, field, value):
+    document["video"][field] = value
+    with pytest.raises(ValueError, match=f"video.{field}"):
+        validate_job_document(document)
+
+
 @pytest.mark.parametrize("opacity, expected", [(None, 0.38), (0, 0), (0.7, 0.7)])
 def test_v1_migration_preserves_rendered_opacity_not_ignored_style(document, opacity, expected, tmp_path):
     document["schema_version"] = 1

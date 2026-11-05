@@ -101,6 +101,22 @@ def test_original_gradient_glow_and_wobble_are_deterministic(transcript, browser
             assert later[0]["box"]["y"] < early[0]["box"]["y"] - 10
 
 
+def test_karaoke_limits_context_to_three_lines_during_scroll_and_seeking(browser_font):
+    transcript = {"segments": [
+        {"start": i * 2 + 1, "end": i * 2 + 2.8,
+         "words": [{"text": f"Line {i}", "start": i * 2 + 1, "end": i * 2 + 2.8}]}
+        for i in range(7)
+    ]}
+    scene = build_browser_scene(transcript, {"width": 640, "height": 360, "fps": 24},
+                                {"font_size": 20, "margin_h": 40}, "karaoke")
+    with browser_scene(scene, browser_font) as page:
+        for instant in (5.5, 6.66, 6.9, 7.2, 11.5, 5.5):
+            page.evaluate("t=>window.renderFrame(t)", instant)
+            visible = page.evaluate("""() => Array.from(document.querySelectorAll('#mount *'))
+                .filter(element=>element.style.visibility==='visible').length""")
+            assert visible == 3
+
+
 @pytest.mark.parametrize("mode", ["lyrics", "karaoke"])
 @pytest.mark.parametrize("line_count", [1, 8])
 def test_lines_stay_centered_including_scaled_pages(browser_font, mode, line_count):
@@ -267,3 +283,165 @@ def test_dark_ink_reaches_actual_browser(transcript, browser_font):
         visible = pixels[:, :, 3] > 150
         assert visible.any()
         assert pixels[:, :, :3][visible].mean() < 80
+
+
+def test_karaoke_white_to_yellow_wipe_and_gray_preview_survive_seeking(transcript, browser_font):
+    style = {"font_size": 40, "margin_h": 40,
+             "lyrics_colors": {"active": "#FFD34D", "inactive": "#E8E8E8"}}
+    scene = build_browser_scene(transcript, {"width": 640, "height": 360, "fps": 24}, style, "karaoke")
+    assert scene["inactive_color"] == "#E8E8E8"
+    assert build_browser_scene(transcript, scene, style, "lyrics")["inactive_color"] is None
+    with browser_scene(scene, browser_font) as page:
+        frames = []
+        yellow_counts = []
+        for instant in (.9, 1.3, 1.8, 2.6, 1.3):
+            page.evaluate("t=>window.renderFrame(t)", instant)
+            pixels = np.array(Image.open(io.BytesIO(page.screenshot(omit_background=True))).convert("RGBA"))
+            frames.append(pixels)
+            opaque = pixels[..., 3] > 150
+            yellow = opaque & (pixels[..., 0] > 240) & (pixels[..., 1] > 180) & (pixels[..., 2] < 120)
+            yellow_counts.append(int(yellow.sum()))
+            if instant == 1.3:
+                white = opaque & (pixels[..., :3].min(axis=2) > 215)
+                assert white.sum() > 30
+                words = page.evaluate("window.lyricsDiagnostics()")[0]["words"]
+                assert "drop-shadow" in words[0]["glow"]
+                assert words[0]["transform"] != "matrix(1, 0, 0, 1, 0, 0)"
+                colors = page.evaluate("""() => Array.from(document.querySelectorAll('#mount *'))
+                    .filter(element=>element.style.visibility==='visible')
+                    .map(element=>getComputedStyle(element).getPropertyValue('--blyrics-lyric-active-color').trim())""")
+                assert colors == ['#FFD34D', '#A8A8A8']
+        assert yellow_counts[0] == 0
+        assert yellow_counts[2] > yellow_counts[1] > 30
+        assert np.array_equal(frames[1], frames[-1])
+
+
+def test_sung_karaoke_line_keeps_yellow_across_scroll_boundary(transcript, browser_font):
+    scene = build_browser_scene(transcript, {"width": 640, "height": 360, "fps": 24},
+                                {"font_size": 40, "margin_h": 40,
+                                 "lyrics_colors": {"active": "#FFD34D", "inactive": "#E8E8E8"}}, "karaoke")
+    with browser_scene(scene, browser_font) as page:
+        snapshots = []
+        # The next line becomes selected at 2.05, before its first word starts at 2.4.
+        for instant in (2.04, 2.06, 2.4, 2.7, 1.3, 2.06):
+            page.evaluate("t=>window.renderFrame(t)", instant)
+            line = page.evaluate("window.lyricsDiagnostics()")[0]
+            assert all("255, 211, 77" in word["gradient"] for word in line["words"])
+            pixels = np.array(Image.open(io.BytesIO(page.screenshot(omit_background=True))).convert("RGBA"))
+            snapshots.append(pixels)
+            if instant >= 2:
+                box = line["box"]
+                region = pixels[max(0, int(box["y"])):int(box["bottom"]),
+                                max(0, int(box["x"])):int(box["right"])]
+                colored = region[region[..., 3] > 20, :3]
+                assert len(colored) > 50
+                assert (colored[:, 0].astype(float) - colored[:, 2]).mean() > 100
+        assert np.array_equal(snapshots[1], snapshots[-1])
+
+
+def test_completed_line_stays_yellow_after_engine_removes_highlight(browser_font):
+    transcript = {"segments": [
+        {"words": [{"text": "Finished", "start": 1, "end": 2}]},
+        {"words": [{"text": "Following", "start": 3, "end": 10}]},
+    ]}
+    scene = build_browser_scene(transcript, {"width": 640, "height": 360, "fps": 24},
+                                {"font_size": 40, "margin_h": 40,
+                                 "lyrics_colors": {"active": "#FFD34D", "inactive": "#E8E8E8"}}, "karaoke")
+    with browser_scene(scene, browser_font) as page:
+        frames = []
+        completed_frames = []
+        for instant in (1.5, 2.1, 3.2, 4.5, 7, 9, 1.5, 7):
+            page.evaluate("t=>window.renderFrame(t)", instant)
+            first = page.evaluate("window.lyricsDiagnostics()")[0]
+            pixels = np.array(Image.open(io.BytesIO(page.screenshot(omit_background=True))).convert("RGBA"))
+            frames.append(pixels)
+            if instant >= 2:
+                box = first["box"]
+                region = pixels[max(0, int(box["y"])):int(box["bottom"]),
+                                max(0, int(box["x"])):int(box["right"])]
+                colored = region[region[..., 3] > 20, :3]
+                assert len(colored) > 50
+                assert (colored[:, 0].astype(float) - colored[:, 2]).mean() > 100
+            if instant == 7:
+                assert first["words"][0]["animations"] == []
+                completed_frames.append(region.copy())
+        assert np.array_equal(frames[0], frames[6])
+        assert np.array_equal(*completed_frames)
+
+
+@pytest.mark.parametrize("mode", ["lyrics", "karaoke"])
+def test_blank_frame_reuse_matches_every_original_frame(browser_font, mode):
+    from karaoke_app.browser_lyrics import _write_browser_frames
+
+    transcript = {"segments": [
+        {"start": 1, "end": 1.6, "words": [{"text": "First", "start": 1, "end": 1.6}]},
+        {"start": 4, "end": 4.6, "words": [{"text": "Next", "start": 4, "end": 4.6}]},
+    ]}
+    scene = build_browser_scene(transcript, {"width": 320, "height": 180, "fps": 6},
+                                {"font_size": 30, "margin_h": 20}, mode)
+    expected = []
+    with browser_scene(scene, browser_font) as page:
+        for index in range(36):
+            page.evaluate("t=>window.renderFrame(t)", index / 6)
+            expected.append(np.array(Image.open(io.BytesIO(page.screenshot(omit_background=True))).convert("RGBA")))
+
+    class Frames:
+        def __init__(self):
+            self.index = 0
+
+        def write(self, png):
+            actual = np.array(Image.open(io.BytesIO(png)).convert("RGBA"))
+            assert np.array_equal(actual, expected[self.index]), f"Frame {self.index} differs"
+            self.index += 1
+
+    frames, metrics = Frames(), {}
+    with browser_scene(scene, browser_font) as page:
+        _write_browser_frames(page, scene, frames, duration=6, metrics=metrics)
+    assert frames.index == 36
+    assert metrics["reused_blank_frames"] >= 6
+
+
+@pytest.mark.parametrize("mode", ["lyrics", "karaoke"])
+def test_direct_composition_matches_lossless_mov_path(tmp_path, browser_font, mode):
+    from colab import karaoke_job
+    from karaoke_app.browser_lyrics import _encode_browser_video_sync
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    audio_path = tmp_path / "audio.wav"
+    with wave.open(str(audio_path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\0\0" * 8000 * 3)
+    transcript = {"segments": [{"start": 1, "end": 2, "words": [
+        {"text": "First ", "start": 1, "end": 1.5}, {"text": "second", "start": 1.5, "end": 2}]}]}
+    video = {"width": 320, "height": 180, "fps": 6}
+    scene = build_browser_scene(transcript, video, {"font_size": 30, "margin_h": 20}, mode)
+    overlay = render_browser_overlay(scene, browser_font, tmp_path / "overlay.mov", duration=3, ffmpeg=ffmpeg)
+    logo = tmp_path / "logo.png"
+    Image.new("RGBA", (30, 20), (255, 0, 0, 128)).save(logo)
+    intro = tmp_path / "intro.png"
+    Image.new("RGBA", (320, 180), (0, 180, 255, 100)).save(intro)
+    config = {"video": video, "background": {"kind": "solid", "value": "#182030"},
+              "watermark": {"path": str(logo)}, "intro_card": {"path": str(intro), "start": 0, "end": .6},
+              "lyrics_overlay": str(overlay)}
+
+    def execute(command):
+        return subprocess.run([ffmpeg, "-v", "error", *command[1:]], check=True, capture_output=True)
+
+    def write_frames(command, duration):
+        _encode_browser_video_sync(scene, browser_font, [ffmpeg, "-v", "error", *command[1:]], duration=duration)
+
+    baseline, streaming = tmp_path / "baseline.mp4", tmp_path / "streaming.mp4"
+    with patch.object(karaoke_job, "_probe_duration", return_value=3), \
+         patch.object(karaoke_job, "_nvenc_available", return_value=False), \
+         patch.object(karaoke_job, "_run", side_effect=execute):
+        karaoke_job._render_video(audio_path, baseline, config)
+        karaoke_job._render_video(audio_path, streaming, {**config, "lyrics_overlay": "pipe:0"},
+                                  frame_writer=write_frames)
+    decoded = []
+    for path in (baseline, streaming):
+        decoded.append(subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb24",
+                                       "-"], check=True, capture_output=True).stdout)
+    assert len(decoded[0]) == 18 * 320 * 180 * 3
+    assert decoded[0] == decoded[1]

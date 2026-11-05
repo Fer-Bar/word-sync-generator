@@ -5,7 +5,6 @@ build/
 dist/
 wheels/
 *.egg-info
-.python-version
 # Virtual environments
 .venv
 .env
@@ -26,3 +25,23 @@ outputs/
 frontend/node_modules/
 frontend/.astro/
 *:Zone.Identifier
+
+# Private inputs, reports and artwork
+inputs/
+reports/
+logos/*
+!logos/banner.png
+!logos/principal_logo.png
+!logos/thumbnail.png
+references/
+.env.*
+!.env.template
+*cookies*.txt
+*.pem
+*.key
+credentials*.json
+service-account*.json
+
+# Failed preparation artifacts, including custom output directories
+*.recovery/
+*.checkpoint.zip

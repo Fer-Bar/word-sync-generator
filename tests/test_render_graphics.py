@@ -10,6 +10,7 @@ from PIL import Image
 from colab import karaoke_job
 from karaoke_app.cli import _create_render_bundle
 from karaoke_app.cosmic_background import CosmicBackground
+from karaoke_app.job_document import validate_job_document
 from karaoke_app.render_graphics import (
     background_frame,
     generate_render_graphics,
@@ -180,3 +181,60 @@ def test_watermark_keeps_its_top_left_position_during_intro(tmp_path):
     assert "[bg][wm]overlay=x=main_w*0.05:y=main_h*0.05[v_wm]" in filters
     assert "not(between" not in filters
     assert command.count(str(logo)) == 1
+
+
+def test_thumbnail_configuration_survives_normalization(document):
+    document.update({"schema_version": 2, "thumbnail": {"time": 3, "align": "end"}})
+    document["media"].update({"vocals_audio": "audio.wav", "lyrics": "lyrics.yaml"})
+    normalized = validate_job_document(document)
+    assert normalized["thumbnail"] == {"time": 3, "align": "end"}
+    assert validate_job_document(normalized) == normalized
+
+
+@pytest.mark.parametrize("config", [
+    {"time": -1}, {"time": True}, {"time": float("nan")}, {"time": "3"}, {"align": "right"},
+])
+def test_invalid_thumbnail_configuration(document, config):
+    document.update({"schema_version": 2, "thumbnail": config})
+    document["media"].update({"vocals_audio": "audio.wav", "lyrics": "lyrics.yaml"})
+    with pytest.raises(ValueError, match="thumbnail"):
+        validate_job_document(document)
+
+
+def test_thumbnail_time_and_alignment_do_not_change_intro(document, tmp_path):
+    from karaoke_app.thumbnail import create_title_overlay
+
+    document["thumbnail"] = {"time": 3, "align": "end"}
+    frames = [Image.new("RGB", (640, 360), color) for color in ("red", "blue")]
+    with patch("karaoke_app.render_graphics.background_frame", side_effect=frames) as sample:
+        generate_render_graphics(tmp_path, document, ("lyrics",), tmp_path,
+                                 {"segments": [{"words": [{"start": 10}]}]})
+    assert sample.call_args_list[1].kwargs == {"time": 3}
+    expected_intro = create_title_overlay("ALRIGHT", "Ashes to Amber", mode="lyrics", size=(640, 360))
+    expected_title = create_title_overlay("ALRIGHT", "Ashes to Amber", mode="lyrics", size=(640, 360), align="end")
+    expected_thumbnail = Image.alpha_composite(frames[1].convert("RGBA"), expected_title).convert("RGB")
+    expected_thumbnail = expected_thumbnail.resize((1280, 720), Image.Resampling.LANCZOS)
+    with Image.open(tmp_path / "intro/intro_lyrics.png") as intro:
+        assert np.array_equal(intro, expected_intro)
+    with Image.open(tmp_path / "thumbnails/thumbnail_lyrics.png") as thumbnail:
+        assert np.array_equal(thumbnail, expected_thumbnail)
+
+
+def test_video_thumbnail_samples_requested_frame(document, tmp_path):
+    import subprocess
+
+    import imageio_ffmpeg
+
+    subprocess.run([
+        imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i",
+        "color=c=red:s=320x180:r=24:d=0.5", "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=24:d=0.5",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-pix_fmt", "yuv420p",
+        str(tmp_path / "scene.mp4"),
+    ], check=True, capture_output=True)
+    document["background"] = {"kind": "video", "path": "scene.mp4"}
+    first = background_frame(tmp_path, document).getpixel((0, 0))
+    selected = background_frame(tmp_path, document, time=0.75).getpixel((0, 0))
+    assert first[0] > 240 and first[2] < 10
+    assert selected[2] > 240 and selected[0] < 10
+    with pytest.raises(ValueError, match="No background frame"):
+        background_frame(tmp_path, document, time=2)

@@ -461,7 +461,6 @@ def _build_teleprompter_dialogues(
         end_cs = max(_to_centiseconds(w["end"]) for w in words)
         seg_timings.append((start_cs, end_cs))
 
-    # Precalculate synchronized transition windows between segment i and i+1
     # trans_info[i] = (has_conn, trans_start_cs, trans_end_cs, duration_cs)
     trans_info: list[tuple[bool, int, int, int]] = []
     for i in range(num_segments - 1):
@@ -470,7 +469,6 @@ def _build_teleprompter_dialogues(
         gap_cs = next_start - curr_end
 
         if gap_cs >= max_gap_cs:
-            # Long pause / silence: disconnected transition
             trans_info.append((False, 0, 0, nominal_slide_cs))
         else:
             if gap_cs >= nominal_slide_cs:
@@ -493,7 +491,6 @@ def _build_teleprompter_dialogues(
     for i, seg in enumerate(valid_segments):
         start_cs, end_cs = seg_timings[i]
 
-        # Check incoming connection (from i-1 to i)
         if i > 0 and trans_info[i - 1][0]:
             has_prev_conn = True
             _, entry_start, _, entry_dur = trans_info[i - 1]
@@ -502,7 +499,6 @@ def _build_teleprompter_dialogues(
             entry_dur = nominal_slide_cs
             entry_start = max(0, start_cs - nominal_slide_cs)
 
-        # Check outgoing connection (from i to i+1)
         if i < num_segments - 1 and trans_info[i][0]:
             has_next_conn = True
             _, exit_start, _, exit_dur = trans_info[i]

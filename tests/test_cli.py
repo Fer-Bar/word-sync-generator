@@ -206,6 +206,14 @@ class SourceReliabilityTests(unittest.TestCase):
         self.args = cli.build_parser().parse_args(
             ["https://youtube.com/watch?v=test", "--no-logo", "--no-cookies", "--output-dir", str(self.root)]
         )
+        audio = self.root / "download.webm"
+        audio.write_bytes(b"audio")
+        downloader = patch(
+            "karaoke_app.youtube_source.download_youtube",
+            return_value=(audio, {"title": "Song", "artist": "Artist", "webpage_url": self.args.source}),
+        )
+        self.downloader = downloader.start()
+        self.addCleanup(downloader.stop)
         self.status = {"status": "completed"}
         self.commands = []
         self.exec_code = 0
@@ -219,11 +227,26 @@ class SourceReliabilityTests(unittest.TestCase):
         runner.start()
         self.addCleanup(runner.stop)
 
+    def test_download_failure_does_not_provision_colab(self):
+        self.downloader.side_effect = RuntimeError("local download failed")
+        with self.assertRaisesRegex(RuntimeError, "local download failed"):
+            cli.run_job(self.args)
+        self.assertEqual(self.commands, [])
+
+    def test_youtube_is_uploaded_with_metadata(self):
+        cli.run_job(self.args)
+        self.assertEqual(self.payload["source"]["kind"], "file")
+        self.assertEqual(self.payload["source"]["metadata"]["webpage_url"], self.args.source)
+        self.assertIn("karaoke_source.webm", self.source_bundle_members)
+
     def run_command(self, command, *, check=True, timeout=None):
         self.commands.append((command, timeout))
         operation = command[2]
         if operation == "upload" and command[-1] == str(cli.REMOTE_JOB):
             self.payload = json.loads(Path(command[-2]).read_text())
+        if operation == "upload" and command[-1] == str(cli.REMOTE_SOURCE_BUNDLE):
+            with zipfile.ZipFile(command[-2]) as archive:
+                self.source_bundle_members = archive.namelist()
         if operation == "exec":
             if self.exec_code == -1:
                 raise subprocess.TimeoutExpired(command, timeout)
@@ -301,8 +324,11 @@ class SourceReliabilityTests(unittest.TestCase):
         self.assertEqual(self.payload["lyrics"]["text_path"], str(cli.REMOTE_LYRICS_TEXT))
         self.assertEqual(self.payload["lyrics"]["genius_url"], self.args.genius_url)
         uploads = [command[-1] for command, _ in self.commands if command[2] == "upload"]
-        self.assertIn(str(cli.REMOTE_LYRICS_TEXT), uploads)
-        self.assertIn(str(cli.REMOTE_REFERENCES_MODULE), uploads)
+        self.assertIn(str(cli.REMOTE_SOURCE_BUNDLE), uploads)
+        self.assertIn(cli.REMOTE_LYRICS_TEXT.name, self.source_bundle_members)
+        self.assertIn(cli.REMOTE_REFERENCES_MODULE.name, self.source_bundle_members)
+        self.assertNotIn("karaoke_cookies.txt", self.source_bundle_members)
+        self.assertNotIn(".hf_token", self.source_bundle_members)
 
     def test_force_whisper_rejects_reference_before_provisioning(self) -> None:
         self.args.no_lrclib = True
@@ -310,6 +336,26 @@ class SourceReliabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "forces Whisper"):
             cli.run_job(self.args)
         self.assertFalse(self.commands)
+
+    def test_local_genius_is_uploaded_before_remote_alignment(self) -> None:
+        self.args.title = "Song"
+        self.args.artist = "Artist"
+        reference = {
+            "source": "genius", "original_text": "first verse", "lines": [{"text": "first verse"}],
+            "metadata": {"title": "Song", "artist": "Artist"}, "url": "https://genius.com/Artist-song-lyrics",
+        }
+
+        def fetch(options, metadata, pipeline_path):
+            self.assertFalse(self.commands)
+            self.assertEqual(metadata, {"title": "Song", "artist": "Artist"})
+            return reference
+
+        with patch("karaoke_app.lyric_references.prefetch_genius_reference", side_effect=fetch):
+            cli.run_job(self.args)
+        self.assertIn(cli.REMOTE_GENIUS_REFERENCE.name, self.source_bundle_members)
+        self.assertEqual(self.payload["lyrics"]["genius_reference_path"], str(cli.REMOTE_GENIUS_REFERENCE))
+        self.assertIsNone(self.payload["lyrics"]["text_path"])
+        self.assertFalse(self.payload["lyrics"]["disable_lrclib"])
 
     def test_invalid_reference_url_does_not_provision_colab(self) -> None:
         self.args.genius_url = "https://example.com/song-lyrics"
@@ -353,6 +399,25 @@ class SourceReliabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "upload failed; recovery"):
                 cli.run_job(self.args)
         self.assertTrue(self.manifest()["session_stopped"])
+
+    def test_cancellation_stops_session_and_preserves_interrupt(self) -> None:
+        for operation in ("new", "upload", "exec", "download"):
+            with self.subTest(operation=operation):
+                self.commands.clear()
+
+                def cancel(command, cancelled_operation=operation, **kwargs):
+                    if command[2] == cancelled_operation:
+                        raise KeyboardInterrupt
+                    return self.run_command(command, **kwargs)
+
+                with patch.object(cli, "_run", side_effect=cancel), self.assertRaises(KeyboardInterrupt):
+                    cli.run_job(self.args)
+                operations = [command[2] for command, _ in self.commands]
+                self.assertEqual(operations[-1], "stop")
+                self.assertEqual(operations.count("stop"), 1)
+                manifests = list(self.root.glob("*.recovery/recovery.json"))
+                self.assertTrue(manifests)
+                self.assertTrue(all(json.loads(path.read_text())["session_stopped"] for path in manifests))
 
     def test_extraction_failure_keeps_completed_download(self) -> None:
         with patch.object(cli, "_extract_archive", side_effect=OSError("disk full")):
@@ -533,7 +598,13 @@ class JobDocumentWatermarkTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             job_dir = Path(temp_dir)
-            resolved = resolve_watermark_path(job_dir, "logos/banner.png")
+            project_dir = job_dir / "project"
+            logo = project_dir / "logos" / "banner.png"
+            logo.parent.mkdir(parents=True)
+            Image.new("RGBA", (100, 30), "red").save(logo)
+            with patch("karaoke_app.job_document.PROJECT_ROOT", project_dir):
+                resolved = resolve_watermark_path(job_dir, "logos/banner.png")
+            self.assertEqual(resolved, logo)
             self.assertTrue(resolved.is_file())
             self.assertEqual(resolved.name, "banner.png")
 

@@ -1,6 +1,10 @@
 ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@11855d1de76af2b490dd2e8e2db2661805ae90a0
 demucs==4.1.0
 faster-whisper==1.2.1
+# Faster Whisper 1.2.1 passes metadata_errors to av.open(), removed in PyAV 19.
+av>=11,<19
+nvidia-cublas-cu12>=12,<13
+nvidia-cudnn-cu12>=9,<10
 lyricsgenius==3.12.2
 huggingface-hub>=0.34.0
 num2words>=0.5.14,<0.6
@@ -8,4 +12,3 @@ PyYAML>=6.0.2
 yt-dlp==2026.8.19
 pillow>=10.0.0
 numpy>=2.0
-playwright==1.62.0

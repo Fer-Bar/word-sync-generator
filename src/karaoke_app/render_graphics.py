@@ -38,8 +38,8 @@ def graphic_logo(job_dir: Path, document: dict[str, Any]) -> Path | None:
     return reference if reference.is_file() else None
 
 
-def background_frame(job_dir: Path, document: dict[str, Any]) -> Image.Image:
-    """Render time zero with the same dimensions, seed and dimming as the video."""
+def background_frame(job_dir: Path, document: dict[str, Any], *, time: float = 0) -> Image.Image:
+    """Sample a background with the same dimensions, seed and dimming as the video."""
     video, background = document["video"], document["background"]
     size = (video["width"], video["height"])
     config = document.get("intro") or {}
@@ -51,17 +51,19 @@ def background_frame(job_dir: Path, document: dict[str, Any]) -> Image.Image:
     if background["kind"] == "cosmic":
         from karaoke_app.cosmic_background import CosmicBackground
 
-        return CosmicBackground(background, *size).frame(0)
+        return CosmicBackground(background, *size).frame(time)
     if background["kind"] == "solid":
         return Image.new("RGB", size, background["color"])
     path = resolve_job_asset(job_dir, background["path"], "background")
     source = path
     if background["kind"] == "video":
         result = subprocess.run(
-            [imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", str(path),
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-ss", str(time), "-i", str(path),
              "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
             check=True, capture_output=True,
         )
+        if not result.stdout:
+            raise ValueError(f"No background frame at {time} seconds: {path}")
         source = io.BytesIO(result.stdout)
     with Image.open(source) as image:
         crop_right = background.get("crop_right", 0)
@@ -109,6 +111,11 @@ def generate_render_graphics(
     frame = background_frame(job_dir, document)
     destination.mkdir(parents=True, exist_ok=True)
     frame.save(destination / "background.png")
+    thumbnail_config = document.get("thumbnail") or {}
+    thumbnail_frame = (
+        background_frame(job_dir, document, time=thumbnail_config["time"])
+        if thumbnail_config.get("time", 0) else frame
+    )
     timing = intro_timing(document, transcript)
     for mode in modes:
         overlay = create_title_overlay(
@@ -116,12 +123,21 @@ def generate_render_graphics(
             graphic_style=config.get("graphic_style", "default"), title_layout=config.get("title_layout", "stacked"),
             graphic_palette=config.get("graphic_palette", "light")
         )
-        thumbnail = Image.alpha_composite(frame.convert("RGBA"), overlay)
+        thumbnail_align = thumbnail_config.get("align", config.get("align", "start"))
+        thumbnail_overlay = overlay
+        if thumbnail_align != config.get("align", "start"):
+            thumbnail_overlay = create_title_overlay(
+                title, artist, mode=mode, size=frame.size, align=thumbnail_align,
+                graphic_style=config.get("graphic_style", "default"),
+                title_layout=config.get("title_layout", "stacked"),
+                graphic_palette=config.get("graphic_palette", "light"),
+            )
+        thumbnail = Image.alpha_composite(thumbnail_frame.convert("RGBA"), thumbnail_overlay)
         if logo is not None:
             if fomo:
                 from karaoke_app.fomo import add_fomo_logo
 
-                add_fomo_logo(thumbnail, logo, align=config.get("align", "start"),
+                add_fomo_logo(thumbnail, logo, align=thumbnail_align,
                               palette=config.get("graphic_palette", "light"))
             else:
                 add_thumbnail_logo(thumbnail, logo)

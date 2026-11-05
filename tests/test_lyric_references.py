@@ -485,6 +485,27 @@ def test_insertion_without_silence_borrows_time_without_overlap():
     assert report["estimated_words"] >= 2
 
 
+def test_omitted_verse_uses_available_gap_instead_of_collapsing_at_chorus():
+    observed = transcript("intro noise chorus")
+    for word, (start, end) in zip(
+        observed["segments"][0]["words"], [(4.45, 6.43), (36.33, 36.65), (36.65, 37.0)], strict=True
+    ):
+        word.update(start=start, end=end)
+    original = job._transcript_to_lyrics(observed)
+    missing = "\n".join(" ".join(f"verse{i}word{j}" for j in range(10)) for i in range(12))
+    result, report = refs.apply_reference_text(original, refs.plain_lines(f"intro\n{missing}\nchorus"))
+    result = validate_lyrics_file(result, require_words=True)
+
+    assert result["lines"][1]["start_ms"] == 6430
+    assert result["lines"][-2]["end_ms"] == 36650
+    assert all(line["end_ms"] - line["start_ms"] > 2000 for line in result["lines"][1:-1])
+    for key in ("start_ms", "end_ms", "confidence"):
+        assert result["lines"][0]["words"][0][key] == original["lines"][0]["words"][0][key]
+    assert result["lines"][-1]["start_ms"] == 36650
+    assert report["estimated_words"] == 120
+    assert all("confidence" not in word for line in result["lines"][1:-1] for word in line["words"])
+
+
 @pytest.mark.parametrize("source", ["txt", "lrclib", "genius"])
 def test_bear_overrides_whisper_bird_even_when_ctc_fails(preparation, source):
     run, config, directory = preparation
@@ -567,3 +588,41 @@ def test_validate_lyrics_file_sanitizes_lines_and_words():
     assert validated["lines"][0]["text"] == "can't take him"
     assert validated["lines"][0]["words"][1]["text"] == "take "
     assert validated["plain"] == "can't take him"
+
+
+def test_wrapped_section_header_becomes_shared_agent():
+    lines = refs.plain_lines("Yeah\n[Verse 1: Drake,\nDon Toliver\n]\nSing this\n[Chorus]\n(oh yeah)")
+    assert lines == [
+        {"text": "Yeah"},
+        {"text": "Sing this", "agent": "Drake, Don Toliver"},
+        {"text": "(oh yeah)"},
+    ]
+
+
+@pytest.mark.parametrize("apply", [refs.apply_reference_text, refs.merge_reference_lines, refs.restore_structure])
+def test_reference_agents_reach_timed_words(apply):
+    original = timed_document()
+    desired = refs.plain_lines("[Verse 1: Drake]\nall I do is\n[Verse 2: Don Toliver]\nwin and not forgive.")
+    output = apply(original, desired)
+    result = output[0] if isinstance(output, tuple) else output
+    assert [line["agent"] for line in result["lines"]] == ["Drake", "Don Toliver"]
+    assert all(word["agent"] == line["agent"] for line in result["lines"] for word in line["words"])
+    assert [(w["start_ms"], w["end_ms"]) for line in result["lines"] for w in line["words"]] == [
+        (w["start_ms"], w["end_ms"]) for line in original["lines"] for w in line["words"]
+    ]
+    validate_lyrics_file(result)
+
+
+def test_reference_agent_applies_when_text_already_matches():
+    original = timed_document()
+    desired = [{"text": line["text"], "agent": "Drake"} for line in original["lines"]]
+    result, _ = refs.apply_reference_text(original, desired)
+    assert all(w["agent"] == "Drake" for line in result["lines"] for w in line["words"])
+
+
+def test_saved_reference_keeps_section_headers(tmp_path):
+    text = "[Verse 1: Drake,\nDon Toliver\n]\nSing this"
+    job._save_lyrics_evidence(tmp_path, "lyrics_reference.json", {
+        "original_text": text, "lines": refs.plain_lines(text),
+    })
+    assert refs.plain_lines((tmp_path / "reference.txt").read_text()) == refs.plain_lines(text)

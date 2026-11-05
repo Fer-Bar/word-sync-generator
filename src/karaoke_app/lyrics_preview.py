@@ -1,4 +1,4 @@
-"""Local FFmpeg samples of the actual Plus subtitle renderer, with original audio."""
+"""Local video samples using the browser renderer and each mode's audio track."""
 
 import argparse
 import json

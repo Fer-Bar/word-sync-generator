@@ -9,6 +9,7 @@ import mimetypes
 import shutil
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -70,7 +71,8 @@ def build_browser_scene(transcript: dict[str, Any], video: dict[str, int], style
     return {"version": 1, "engine": "braccato-1.6.2", "mode": mode, "width": video["width"],
             "height": video["height"], "fps": video["fps"], "font_size": style["font_size"],
             "margin": margin_h, "margin_v": margin_v, "lyrics": lyrics, "groups": groups,
-            "ink_color": (style.get("lyrics_colors") or {}).get("active", "#FFFFFF")}
+            "ink_color": (style.get("lyrics_colors") or {}).get("active", "#FFFFFF"),
+            "inactive_color": (style.get("lyrics_colors") or {}).get("inactive") if mode == "karaoke" else None}
 
 
 @contextmanager
@@ -140,48 +142,14 @@ def _render_browser_overlay_sync(
         executable = imageio_ffmpeg.get_ffmpeg_exe()
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    count = max(1, math.ceil(duration * fps))
     with tempfile.TemporaryDirectory(prefix="lyrics-overlay-", dir=output.parent) as directory:
         destination = Path(directory) / "overlay.mov"
-        with browser_scene(scene, font, assets=assets) as page, tempfile.TemporaryFile() as errors:
-            command = [
-                executable,
-                "-nostdin",
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "image2pipe",
-                "-framerate",
-                str(fps),
-                "-vcodec",
-                "png",
-                "-i",
-                "pipe:0",
-                "-an",
-                "-c:v",
-                "qtrle",
-                "-pix_fmt",
-                "argb",
-                str(destination),
-            ]
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=errors)
-            try:
-                for index in range(count):
-                    page.evaluate("time => window.renderFrame(time)", start + index / fps)
-                    process.stdin.write(page.screenshot(omit_background=True, animations="allow"))
-                    if (index + 1) % max(1, count // 4) == 0:
-                        LOGGER.info("Braccato %s: %.0f%%", scene["mode"], (index + 1) * 100 / count)
-                process.stdin.close()
-                if process.wait() != 0:
-                    errors.seek(0)
-                    raise RuntimeError(f"Lyrics overlay encoding failed: {errors.read().decode(errors='replace')}")
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-                if process.stdin and not process.stdin.closed:
-                    process.stdin.close()
+        command = [
+            executable, "-nostdin", "-y", "-loglevel", "error",
+            "-f", "image2pipe", "-framerate", str(fps), "-vcodec", "png", "-i", "pipe:0",
+            "-an", "-c:v", "qtrle", "-pix_fmt", "argb", str(destination),
+        ]
+        _encode_browser_video_sync(scene, font, command, duration=duration, start=start, assets=assets)
         destination.replace(output)
     return output
 
@@ -226,3 +194,93 @@ def render_bundled_overlay(job_dir: Path, mode: str, output: Path, duration: flo
     scene = json.loads((job_dir / f"{mode}.scene.json").read_text(encoding="utf-8"))
     return render_browser_overlay(scene, job_dir / "fonts/Switzer-Semibold.otf", output,
                                   duration=duration, assets=job_dir / "browser_assets")
+
+
+def frame_has_lyrics(scene: dict, seconds: float) -> bool:
+    """Mirror the player's visibility windows, including page lead and exit tails."""
+    groups = scene["groups"]
+    if not groups or seconds < groups[0]["start"] - .35 or seconds > groups[-1]["end"] + .85:
+        return False
+    if scene["mode"] == "karaoke":
+        return True
+    selected = groups[0]
+    for group in groups:
+        if seconds >= group["start"] - .35:
+            selected = group
+    return seconds <= selected["end"] + .35
+
+
+def _write_browser_frames(page, scene, stream, *, duration, start=0, metrics=None):
+    fps = scene["fps"]
+    count = max(1, math.ceil(duration * fps))
+    blank = None
+    stats = metrics if metrics is not None else {}
+    stats.update(frames=count, captured_frames=0, reused_blank_frames=0,
+                 draw_seconds=0.0, screenshot_seconds=0.0, pipe_seconds=0.0)
+    for index in range(count):
+        instant = start + index / fps
+        visible = frame_has_lyrics(scene, instant)
+        if not visible and blank is not None:
+            png = blank
+            stats["reused_blank_frames"] += 1
+        else:
+            began = time.perf_counter()
+            page.evaluate("time => window.renderFrame(time)", instant)
+            stats["draw_seconds"] += time.perf_counter() - began
+            began = time.perf_counter()
+            png = page.screenshot(omit_background=True, animations="allow")
+            stats["screenshot_seconds"] += time.perf_counter() - began
+            stats["captured_frames"] += 1
+            if not visible:
+                blank = png
+        began = time.perf_counter()
+        stream.write(png)
+        stats["pipe_seconds"] += time.perf_counter() - began
+        if (index + 1) % max(1, count // 4) == 0:
+            LOGGER.info("Braccato %s: %.0f%%", scene["mode"], (index + 1) * 100 / count)
+
+
+def _encode_browser_video_sync(scene, font, command, *, duration, start=0, assets=ASSETS, metrics=None):
+    if not math.isfinite(duration) or duration <= 0 or not math.isfinite(start) or start < 0:
+        raise ValueError("Video duration must be positive and start non-negative")
+    if type(scene["fps"]) is not int or not 1 <= scene["fps"] <= 120:
+        raise ValueError("Video fps must be an integer between 1 and 120")
+    began = time.perf_counter()
+    with browser_scene(scene, font, assets=assets) as page, tempfile.TemporaryFile() as errors:
+        if metrics is not None:
+            metrics["browser_start_seconds"] = time.perf_counter() - began
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=errors, stdout=subprocess.DEVNULL)
+        try:
+            try:
+                _write_browser_frames(page, scene, process.stdin, duration=duration, start=start, metrics=metrics)
+                process.stdin.close()
+            except BrokenPipeError:
+                # FFmpeg may reject an encoder before consuming the first frame.
+                pass
+            began = time.perf_counter()
+            returncode = process.wait()
+            if metrics is not None:
+                metrics["encoder_drain_seconds"] = time.perf_counter() - began
+            if returncode != 0:
+                errors.seek(0)
+                details = errors.read().decode(errors="replace")
+                LOGGER.error("Video encoding failed: %s", details)
+                raise subprocess.CalledProcessError(process.returncode, command, stderr=details)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
+
+
+def encode_bundled_video(job_dir: Path, mode: str, command: list[str], duration: float, *, metrics=None) -> None:
+    """Stream transparent PNGs directly into the final compositor, without an intermediate MOV."""
+    scene = json.loads((job_dir / f"{mode}.scene.json").read_text(encoding="utf-8"))
+    kwargs = {"duration": duration, "assets": job_dir / "browser_assets", "metrics": metrics}
+    font = job_dir / "fonts/Switzer-Semibold.otf"
+    # Colab's notebook kernel already runs asyncio; Playwright owns its worker thread.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(_encode_browser_video_sync, scene, font, command, **kwargs).result()

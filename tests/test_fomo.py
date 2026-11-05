@@ -118,3 +118,27 @@ def test_xerox_is_repeatable_and_preserves_transparent_intro_margins():
     assert np.array_equal(pixels[:, :, 0], pixels[:, :, 1])
     assert pixels.std() > 2
     assert pixels.mean() > 245
+
+
+def test_fomo_dark_palette_inversion():
+    import numpy as np
+
+    from karaoke_app.fomo import fomo_paper
+
+    paper_clean = fomo_paper((1280, 720), xerox=False, palette="dark")
+    assert paper_clean.getpixel((0, 0)) == (0, 0, 0)
+
+    paper_xerox = fomo_paper((1280, 720), xerox=True, palette="dark")
+    pixels = np.array(paper_xerox)
+    assert np.array_equal(pixels[:, :, 0], pixels[:, :, 1])
+    assert pixels.mean() < 15
+    assert pixels.std() > 2
+
+    clean = create_title_overlay("FEAR OF MISSING OUT", "DRAKE", graphic_style="fomo",
+                                 graphic_palette="dark", size=(1280, 720), align="center")
+    textured = create_title_overlay("FEAR OF MISSING OUT", "DRAKE", graphic_style="fomo-xerox",
+                                    graphic_palette="dark", size=(1280, 720), align="center")
+    clean_pix = np.array(clean)
+    textured_pix = np.array(textured)
+    assert clean_pix[clean_pix[:, :, 3] > 200][:, :3].mean() > 235
+    assert textured_pix[textured_pix[:, :, 3] > 200][:, :3].mean() > 230

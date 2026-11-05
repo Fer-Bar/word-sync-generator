@@ -1,13 +1,17 @@
-import os
 import re
-import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from karaoke_app.lyric_references import sanitize_text
+try:
+    from karaoke_app.lyric_references import sanitize_text
+except ModuleNotFoundError as error:
+    if error.name != "karaoke_app":
+        raise
+    # Colab receives these services as standalone files, without the local package.
+    from karaoke_lyric_references import sanitize_text
 
 LYRICS_FILENAME = "lyrics.lyricsfile.yaml"
 
@@ -122,19 +126,6 @@ def dump_lyrics_file(value: Any, *, require_words: bool = True) -> str:
     """Serialize a normalized LyricsFile document."""
     document = validate_lyrics_file(value, require_words=require_words)
     return yaml.dump(document, Dumper=_IndentedSafeDumper, allow_unicode=True, sort_keys=False, width=120)
-
-
-def write_lyrics_file(path: Path, value: Any, *, require_words: bool = True) -> None:
-    """Atomically write a validated LyricsFile document."""
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as file:
-            file.write(dump_lyrics_file(value, require_words=require_words))
-            file.flush()
-            os.fsync(file.fileno())
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def lyrics_to_transcript(value: Any) -> dict[str, Any]:

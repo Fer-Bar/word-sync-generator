@@ -4,8 +4,7 @@ import importlib.util
 import json
 import shlex
 import shutil
-import uuid
-from datetime import UTC, datetime
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +24,7 @@ def _realign_hint(job_dir: Path, document: dict[str, Any]) -> str:
     artist = source.get("artist") or ""
     album = source.get("album") or ""
     origin = source.get("source_url") or "<URL-o-audio-local>"
-    parts = ["uv", "run", "karaoke", "source", origin, "--title", title]
+    parts = ["uv", "run", "karaoke", origin, "--title", title]
     if artist:
         parts.extend(["--artist", artist])
     if album:
@@ -36,7 +35,7 @@ def _realign_hint(job_dir: Path, document: dict[str, Any]) -> str:
 
 
 def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: str | None = None) -> dict[str, Any]:
-    """Apply saved or recovered reference text, backing up lyrics and timing diagnostics."""
+    """Apply saved or recovered reference text, rolling back changes if writing fails."""
     job_path = job_dir / "job.json"
     document = json.loads(job_path.read_text(encoding="utf-8"))
     preparation = document.get("preparation", {})
@@ -90,12 +89,12 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
     if not lyrics_path.is_relative_to(job_dir.resolve()):
         raise ValueError("Lyrics artifact must be inside the job directory")
     original = load_lyrics_file(lyrics_path)
-    if [line["text"] for line in original["lines"]] == [line["text"] for line in reference["lines"]]:
-        return {"status": "skipped", "reason": "reference_text_already_applied"}
     merged, grouping = apply_reference_text(original, reference["lines"])
+    serialized = dump_lyrics_file(merged)
+    if serialized == dump_lyrics_file(original):
+        return {"status": "skipped", "reason": "reference_text_already_applied"}
     text_summary = {"text_action": "reference_applied", "estimated_words": grouping["estimated_words"]}
     realign_command = _realign_hint(job_dir, document)
-    serialized = dump_lyrics_file(merged)
     transcript_path = job_dir / "transcription.json"
     speech = json.loads(transcript_path.read_text(encoding="utf-8")) if transcript_path.is_file() else None
     validation = compare_reference(reference["lines"], speech) if speech else {"needs_review": True, "lines": []}
@@ -138,7 +137,11 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
     payloads = {
         lyrics_path.relative_to(job_dir.resolve()).as_posix(): serialized,
         "lyrics.srt": generate_srt(merged),
-        "reference.txt": "\n".join(line["text"] for line in reference["lines"]) + "\n",
+        "reference.txt": (
+            saved_text.read_text(encoding="utf-8-sig")
+            if saved_text.is_file()
+            else reference.get("original_text") or "\n".join(line["text"] for line in reference["lines"]) + "\n"
+        ),
         **{
             name: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
             for name, value in (
@@ -149,29 +152,32 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
             )
         },
     }
-    backup = job_dir / f"lyrics-backup-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-    backup.mkdir()
-    existing = {name for name in payloads if (job_dir / name).is_file()}
-    for name in existing:
-        destination = backup / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(job_dir / name, destination)
-    try:
-        for name, content in payloads.items():
-            target = job_dir / name
-            temporary = target.with_name(f".{target.name}.repair")
-            temporary.write_text(content, encoding="utf-8")
-            temporary.replace(target)
-    except Exception:
-        for name in payloads:
-            if name in existing:
-                shutil.copy2(backup / name, job_dir / name)
-            else:
-                (job_dir / name).unlink(missing_ok=True)
-        raise
+    with tempfile.TemporaryDirectory(prefix="lyrics-repair-") as directory:
+        backup = Path(directory)
+        existing = {name for name in payloads if (job_dir / name).is_file()}
+        for name in existing:
+            destination = backup / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(job_dir / name, destination)
+        try:
+            for name, content in payloads.items():
+                target = job_dir / name
+                temporary = target.with_name(f".{target.name}.repair")
+                temporary.write_text(content, encoding="utf-8")
+                temporary.replace(target)
+        except Exception:
+            for name in payloads:
+                if name in existing:
+                    shutil.copy2(backup / name, job_dir / name)
+                else:
+                    (job_dir / name).unlink(missing_ok=True)
+            raise
+        finally:
+            for name in payloads:
+                target = job_dir / name
+                target.with_name(f".{target.name}.repair").unlink(missing_ok=True)
     return {
         "status": "repaired",
-        "backup": str(backup),
         "reused_word_timings": grouping["reused_word_timings"],
         "realign_hint": realign_command,
         **grouping,

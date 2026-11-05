@@ -1,7 +1,6 @@
-"""Idempotent upgrades of prepared job configuration, with recoverable backups."""
+"""Idempotent upgrades of prepared job configuration, with atomic writes."""
 
 import argparse
-import hashlib
 import json
 import logging
 import tempfile
@@ -34,7 +33,7 @@ def migrated_document(
 
 
 def migrate_job(job_dir: Path, *, theme: str = "auto", dry_run: bool = False) -> bool:
-    """Back up and atomically replace an outdated job.json; return whether it changes."""
+    """Atomically replace an outdated job.json; return whether it changes."""
     root = job_dir.expanduser().resolve()
     path = root / "job.json"
     original = path.read_bytes()
@@ -44,11 +43,6 @@ def migrate_job(job_dir: Path, *, theme: str = "auto", dry_run: bool = False) ->
         return False
     if dry_run:
         return True
-    backup = root / "backups" / f"job-{hashlib.sha256(original).hexdigest()[:12]}.json"
-    backup.parent.mkdir(exist_ok=True)
-    if backup.exists() and backup.read_bytes() != original:
-        raise ValueError(f"Backup collision: {backup}")
-    backup.write_bytes(original)
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -61,7 +55,7 @@ def migrate_job(job_dir: Path, *, theme: str = "auto", dry_run: bool = False) ->
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-    LOGGER.info("Updated %s (backup: %s)", path, backup)
+    LOGGER.info("Updated %s", path)
     return True
 
 

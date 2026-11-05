@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 from datetime import UTC, datetime
@@ -37,7 +38,9 @@ REMOTE_HF_TOKEN = Path("/content/.hf_token")
 REMOTE_LYRICS_MODULE = Path("/content/karaoke_lyrics_file.py")
 REMOTE_REFERENCES_MODULE = Path("/content/karaoke_lyric_references.py")
 REMOTE_LYRICS_TEXT = Path("/content/lyrics_reference.txt")
+REMOTE_GENIUS_REFERENCE = Path("/content/genius_reference.json")
 REMOTE_RENDER_JOB = Path("/content/karaoke_render_job.zip")
+REMOTE_SOURCE_BUNDLE = Path("/content/karaoke_source_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
@@ -167,18 +170,6 @@ def build_render_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_editor_parser() -> argparse.ArgumentParser:
-    """Build the local style editor parser."""
-    parser = argparse.ArgumentParser(
-        prog="karaoke editor",
-        description="Launch the local live style editor to customize fonts, colors, and layout before rendering.",
-    )
-    parser.add_argument("job_dir", type=Path, help="Path to prepared job directory")
-    parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
-    parser.add_argument("--no-browser", action="store_true", help="Do not open web browser automatically")
-    return parser
-
-
 def build_intro_parser() -> argparse.ArgumentParser:
     """Build the intro card generation parser."""
     parser = argparse.ArgumentParser(
@@ -247,7 +238,7 @@ def run_background(args: argparse.Namespace) -> Path:
 
 
 def main() -> int:
-    """Run preparation, style editor, intro generation, or final render orchestration."""
+    """Run preparation, intro generation, or final render orchestration."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
@@ -272,9 +263,6 @@ def main() -> int:
         elif sys.argv[1:2] == ["render"]:
             args = build_render_parser().parse_args(sys.argv[2:])
             render_colab(args)
-        elif sys.argv[1:2] == ["editor"]:
-            args = build_editor_parser().parse_args(sys.argv[2:])
-            launch_editor(args)
         elif sys.argv[1:2] == ["intro"]:
             args = build_intro_parser().parse_args(sys.argv[2:])
             run_intro(args)
@@ -290,15 +278,9 @@ def main() -> int:
     return 0
 
 
-def launch_editor(args: argparse.Namespace) -> None:
-    """Launch the local style editor."""
-    from karaoke_app.editor import run_editor_server
-
-    run_editor_server(args.job_dir, port=args.port, open_browser=not args.no_browser)
-
-
 def run_job(args: argparse.Namespace) -> Path:
     """Provision Colab, execute the media pipeline, and download its artifacts."""
+    began = time.perf_counter()
     width, height = (1920, 1080) if args.resolution == "1080p" else (1280, 720)
     visual_defaults = preparation_visuals({"width": width, "height": height, "fps": 24}, args)
     _validate_installation()
@@ -350,7 +332,7 @@ def run_job(args: argparse.Namespace) -> Path:
     session = job_id
     output_dir = args.output_dir.resolve() / job_id
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    session_created = False
+    session_requested = False
     recovery_dir = output_dir.with_name(f"{job_id}.recovery")
     recovery_dir.mkdir()
     recovery = {
@@ -366,6 +348,13 @@ def run_job(args: argparse.Namespace) -> Path:
 
     with tempfile.TemporaryDirectory(prefix="karaoke-") as temporary_directory:
         temporary_path = Path(temporary_directory)
+        from karaoke_app.youtube_source import download_youtube, is_youtube_url
+
+        source_metadata = None
+        if source_kind == "url" and is_youtube_url(source_value):
+            source_path, source_metadata = download_youtube(source_value, temporary_path / "youtube", cookies)
+            source_kind, source_value = "file", str(source_path)
+            cookies = None
         job_path = temporary_path / "job.json"
         archive_path = recovery_dir / "result.zip"
         status_path = recovery_dir / "status.json"
@@ -382,15 +371,16 @@ def run_job(args: argparse.Namespace) -> Path:
         if cookies:
             remote_cookies = "/content/karaoke_cookies.txt"
 
-        width, height = (1920, 1080) if args.resolution == "1080p" else (1280, 720)
         job = {
             "schema_version": 1,
             "operation": "prepare",
+            "source_bundle": str(REMOTE_SOURCE_BUNDLE),
             "job_id": job_id,
             "source": {
                 "kind": source_kind,
                 "value": remote_source,
                 "name": Path(source_value).stem if source_kind == "file" else None,
+                "metadata": source_metadata,
             },
             "cookies_path": remote_cookies,
             "background": {
@@ -429,29 +419,52 @@ def run_job(args: argparse.Namespace) -> Path:
         if hf_token:
             hf_token_path.write_text(hf_token, encoding="utf-8")
 
+        source_bundle = temporary_path / "source-job.zip"
+        resources = {
+            Path('/content/karaoke_pipeline.py'): COLAB_SCRIPT,
+            Path("/content/karaoke_ass.py"): ASS_MODULE,
+            REMOTE_LYRICS_MODULE: LYRICS_MODULE,
+            REMOTE_REFERENCES_MODULE: REFERENCES_MODULE,
+        }
+        if source_kind == "file":
+            resources[Path(remote_source)] = Path(source_value)
+        if background_image:
+            resources[Path(remote_background)] = background_image
+        if lyrics_text:
+            resources[REMOTE_LYRICS_TEXT] = lyrics_text
+        from dotenv import load_dotenv
+
+        from karaoke_app.lyric_references import prefetch_genius_reference
+
+        load_dotenv(PROJECT_ROOT / ".env", override=False)
+        local_reference = prefetch_genius_reference(
+            job["lyrics"], {"title": args.title, "artist": args.artist}, COLAB_SCRIPT,
+        )
+        if local_reference:
+            reference_path = temporary_path / "genius_reference.json"
+            reference_path.write_text(json.dumps(local_reference, ensure_ascii=False), encoding="utf-8")
+            resources[REMOTE_GENIUS_REFERENCE] = reference_path
+            job["lyrics"]["genius_reference_path"] = str(REMOTE_GENIUS_REFERENCE)
+            job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+            LOGGER.info("Local Genius fallback ready for acoustic alignment; LRCLIB keeps priority")
+        _create_source_bundle(resources, source_bundle)
+
         colab = ["colab", f"--auth={args.auth}"]
         try:
+            session_requested = True
             _run([*colab, "new", "--session", session, "--gpu", args.gpu])
-            session_created = True
             _upload(colab, session, job_path, REMOTE_JOB)
-            if source_kind == "file":
-                _upload(colab, session, Path(source_value), Path(remote_source))
-            if background_image:
-                _upload(colab, session, background_image, Path(remote_background))
+            _upload(colab, session, source_bundle, REMOTE_SOURCE_BUNDLE)
             if cookies:
                 _upload(colab, session, cookies, Path(remote_cookies))
             if hf_token:
                 _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
-            _upload(colab, session, ASS_MODULE, Path("/content/karaoke_ass.py"))
-            _upload(colab, session, LYRICS_MODULE, REMOTE_LYRICS_MODULE)
-            _upload(colab, session, REFERENCES_MODULE, REMOTE_REFERENCES_MODULE)
-            if lyrics_text:
-                _upload(colab, session, lyrics_text, REMOTE_LYRICS_TEXT)
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
             exec_error = None
             try:
                 exec_res = _run(
-                    [*colab, "exec", "--session", session, "--file", str(COLAB_SCRIPT), "--timeout", str(args.timeout)],
+                    [*colab, "exec", "--session", session, "--file",
+                     str(COLAB_SCRIPT.with_name("karaoke_launch.py")), "--timeout", str(args.timeout)],
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError) as failure:
@@ -495,19 +508,21 @@ def run_job(args: argparse.Namespace) -> Path:
                 succeeded = True
             except Exception as exc:
                 raise RuntimeError(f"{exc}; recovery manifest at {recovery_dir / 'recovery.json'}") from exc
-        except Exception as err:
+        except BaseException as err:
             if not succeeded:
-                if session_created:
+                if session_requested:
                     recovery["session_stopped"] = _stop_session(colab, session)
+                recovery["status"] = "cancelled" if isinstance(err, KeyboardInterrupt | SystemExit) else "failed"
+                recovery["error"] = f"{type(err).__name__}: {err}"
                 recovery["local_artifacts"] = [p.name for p in recovery_dir.iterdir()]
                 (recovery_dir / "recovery.json").write_text(json.dumps(recovery, indent=2), encoding="utf-8")
-                if not recovery.get("session_stopped", False) and session_created:
+                if not recovery.get("session_stopped", False) and session_requested:
                     raise RuntimeError("Session stop was not confirmed; session may still be running") from err
-                if not isinstance(err, RuntimeError):
+                if not isinstance(err, RuntimeError | KeyboardInterrupt | SystemExit):
                     raise RuntimeError(f"{err}; recovery manifest at {recovery_dir / 'recovery.json'}") from err
-                raise
+            raise
         finally:
-            if session_created and succeeded:
+            if session_requested and succeeded:
                 stopped = _stop_session(colab, session)
                 if not stopped:
                     recovery["session_stopped"] = False
@@ -535,16 +550,18 @@ def run_job(args: argparse.Namespace) -> Path:
                 "Local lyric reference recovery failed (%s); keeping prepared artifacts", type(error).__name__,
             )
 
+    _save_client_performance(output_dir, began, args.gpu)
     LOGGER.info("Artifacts saved to %s", output_dir)
-    LOGGER.info("To customize fonts, colors, and preview in real-time, run:")
-    LOGGER.info("uv run karaoke editor %s", output_dir)
     LOGGER.info("To render final videos on Colab, run:")
     LOGGER.info("uv run karaoke render %s", output_dir)
     return output_dir
 
 
 def render_colab(args: argparse.Namespace) -> Path:
-    """Validate lyrics locally and run only FFmpeg rendering on Colab."""
+    """Validate lyrics locally and render the prepared job on Colab."""
+    began = time.perf_counter()
+    if args.timeout <= 0:
+        raise ValueError("Timeout must be positive")
     from karaoke_app.ass import generate_ass
     from karaoke_app.branding import store_shared_logo
     from karaoke_app.job_document import load_job_document, resolve_job_asset
@@ -623,7 +640,7 @@ def render_colab(args: argparse.Namespace) -> Path:
     render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
     output_dir = root / "renders" / render_id
     session = f"render-{uuid.uuid4().hex[:10]}"
-    session_created = False
+    session_requested = False
 
     with tempfile.TemporaryDirectory(prefix="karaoke-render-") as temporary_directory:
         temporary = Path(temporary_directory)
@@ -655,8 +672,8 @@ def render_colab(args: argparse.Namespace) -> Path:
         )
         colab = ["colab", f"--auth={args.auth}"]
         try:
+            session_requested = True
             _run([*colab, "new", "--session", session, "--gpu", args.gpu])
-            session_created = True
             _upload(colab, session, config_path, REMOTE_JOB)
             _upload(colab, session, bundle_path, REMOTE_RENDER_JOB)
             _run(
@@ -671,11 +688,11 @@ def render_colab(args: argparse.Namespace) -> Path:
                     str(args.timeout),
                 ]
             )
-            _run([*colab, "download", "--session", session, str(REMOTE_STATUS), str(status_path)])
+            _download_with_retry(colab, session, REMOTE_STATUS, status_path)
             status = json.loads(status_path.read_text(encoding="utf-8"))
             if status.get("status") != "completed":
                 raise RuntimeError(f"Remote render failed: {status.get('error', 'unknown error')}")
-            _run([*colab, "download", "--session", session, str(REMOTE_ARCHIVE), str(archive_path)])
+            _download_with_retry(colab, session, REMOTE_ARCHIVE, archive_path)
             output_dir.parent.mkdir(parents=True, exist_ok=True)
             _extract_archive(archive_path, output_dir)
             output_subtitles = output_dir / "subtitles"
@@ -683,11 +700,32 @@ def render_colab(args: argparse.Namespace) -> Path:
             safe_title = _safe_filename(str(document.get("title") or "lyrics"))
             (output_subtitles / f"{safe_title}.srt").write_text(srt_content, encoding="utf-8")
         finally:
-            if session_created:
-                _run([*colab, "stop", "--session", session], check=False)
+            if session_requested and not _stop_session(colab, session):
+                raise RuntimeError(f"Session stop was not confirmed; stop {session} manually")
 
+    _save_client_performance(output_dir, began, args.gpu)
+    from karaoke_app.output_cleanup import prune_renders
+
+    try:
+        prune_renders(root)
+    except OSError as error:
+        LOGGER.warning("Render saved, but old renders could not be removed: %s", error)
     LOGGER.info("Rendered artifacts saved to %s", output_dir)
     return output_dir
+
+
+def _save_client_performance(output_dir: Path, began: float, gpu: str) -> None:
+    path = output_dir / "performance.json"
+    report = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    report.update(client_elapsed_seconds=time.perf_counter() - began, gpu_requested=gpu)
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+def _create_source_bundle(resources: dict[Path, Path], destination: Path) -> None:
+    """Batch non-secret source inputs into one upload, retaining remote filenames."""
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
+        for remote, local in resources.items():
+            archive.write(local, remote.relative_to("/content").as_posix())
 
 
 def _safe_filename(value: str) -> str:
@@ -782,7 +820,10 @@ def _create_render_bundle(
 def _validate_installation() -> None:
     if not shutil.which("colab"):
         raise OSError("The 'colab' executable is not available. Run 'uv sync --dev' to install project dependencies.")
-    if not all(path.is_file() for path in (COLAB_SCRIPT, COLAB_REQUIREMENTS, ASS_MODULE, LYRICS_MODULE)):
+    if not all(path.is_file() for path in (
+        COLAB_SCRIPT, COLAB_SCRIPT.with_name("karaoke_launch.py"), COLAB_REQUIREMENTS,
+        ASS_MODULE, LYRICS_MODULE, REFERENCES_MODULE,
+    )):
         raise OSError("Colab pipeline files are missing from the project")
 
 
@@ -897,7 +938,12 @@ def _run(
     command: list[str], *, check: bool = True, timeout: float | None = None
 ) -> subprocess.CompletedProcess[str]:
     LOGGER.info("Running %s", " ".join(command))
-    return subprocess.run(command, check=check, text=True, timeout=timeout)
+    began = time.perf_counter()
+    try:
+        return subprocess.run(command, check=check, text=True, timeout=timeout)
+    finally:
+        operation = command[2] if command[0] == "colab" and len(command) > 2 else command[0]
+        LOGGER.info("Command %s: %.2fs", operation, time.perf_counter() - began)
 
 
 if __name__ == "__main__":

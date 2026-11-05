@@ -2,7 +2,6 @@
 
 import json
 import shlex
-from pathlib import Path
 
 from colab import karaoke_job as job
 from karaoke_app import lyric_repair
@@ -106,6 +105,16 @@ def test_realign_hint_quotes_shell_arguments(tmp_path):
     assert args[args.index("--output-dir") + 1] == str(directory.parent)
 
 
+def test_realign_hint_is_accepted_by_preparation_parser(tmp_path):
+    from karaoke_app.cli import build_parser
+
+    url = "https://example.test/song"
+    hint = lyric_repair._realign_hint(tmp_path, {"source": {"title": "Song", "source_url": url}})
+    args = build_parser().parse_args(shlex.split(hint)[3:])
+    assert args.source == url
+    assert args.lyrics_text == tmp_path / "reference.txt"
+
+
 def test_saved_reference_repairs_already_grouped_job_without_provider(tmp_path, monkeypatch):
     pipeline, reference = _make_job(tmp_path, "I see a bird", "I see a bear")
     (tmp_path / "reference.txt").write_text("I see a bear\n")
@@ -114,14 +123,69 @@ def test_saved_reference_repairs_already_grouped_job_without_provider(tmp_path, 
     def no_provider(*args, **kwargs):
         raise AssertionError("Saved text must take precedence")
     monkeypatch.setattr(lyric_repair, "genius_reference", no_provider)
-    before = (tmp_path / "lyrics.lyricsfile.yaml").read_bytes()
     speech = (tmp_path / "transcription.json").read_bytes()
     result = lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)
     assert result["status"] == "repaired"
-    assert (Path(result["backup"]) / "lyrics.lyricsfile.yaml").read_bytes() == before
+    assert not list(tmp_path.glob("lyrics-backup-*"))
     assert (tmp_path / "transcription.json").read_bytes() == speech
     assert "bear" in (tmp_path / "lyrics.srt").read_text()
     alignment = json.loads((tmp_path / "alignment.json").read_text())
     assert alignment["text_source"] == "lrclib"
     assert alignment["words"][-1]["text"] == "bear"
     assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)["reason"] == "reference_text_already_applied"
+
+
+def test_repair_adds_agents_to_unchanged_text_and_preserves_headers(tmp_path):
+    from karaoke_app.lyrics_file import load_lyrics_file
+
+    pipeline, _ = _make_job(tmp_path, "Sing this", "Sing this")
+    text = "[Verse 1: Drake,\nDon Toliver\n]\nSing this\n"
+    (tmp_path / "reference.txt").write_text(text)
+    result = lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)
+    assert result["status"] == "repaired"
+    assert result["estimated_words"] == 0
+    assert (tmp_path / "reference.txt").read_text() == text
+    lyrics = load_lyrics_file(tmp_path / "lyrics.lyricsfile.yaml")
+    assert lyrics["lines"][0]["agent"] == "Drake, Don Toliver"
+    assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)["status"] == "skipped"
+
+
+def test_repair_adds_background_to_unchanged_text_once(tmp_path):
+    from karaoke_app.lyrics_file import load_lyrics_file
+
+    pipeline, _ = _make_job(tmp_path, "Sing (oh yeah)", "Sing (oh yeah)")
+    (tmp_path / "reference.txt").write_text("Sing (oh yeah)")
+    before = load_lyrics_file(tmp_path / "lyrics.lyricsfile.yaml")
+    result = lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)
+    assert result["status"] == "repaired"
+    assert result["estimated_words"] == 0
+    lyrics = load_lyrics_file(tmp_path / "lyrics.lyricsfile.yaml")
+    words = lyrics["lines"][0]["words"]
+    assert [bool(w.get("isBackground")) for w in words] == [False, True, True]
+    assert [(w["start_ms"], w["end_ms"]) for w in words] == [
+        (w["start_ms"], w["end_ms"]) for w in before["lines"][0]["words"]
+    ]
+    assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)["status"] == "skipped"
+
+
+def test_failed_repair_restores_original_files(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import pytest
+
+    pipeline, _ = _make_job(tmp_path, "I see a bird", "I see a bear")
+    (tmp_path / "reference.txt").write_text("I see a bear\n")
+    originals = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
+    replace = Path.replace
+
+    def fail_srt(self, target):
+        if self.name == ".lyrics.srt.repair":
+            raise OSError("disk full")
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_srt)
+    with pytest.raises(OSError, match="disk full"):
+        lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)
+    assert all((tmp_path / name).read_bytes() == data for name, data in originals.items())
+    assert not list(tmp_path.glob("lyrics-backup-*"))
+    assert not list(tmp_path.glob(".*.repair"))

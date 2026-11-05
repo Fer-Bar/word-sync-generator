@@ -37,7 +37,8 @@ def title_rows(title: str, layout: str) -> list[str]:
 
 
 def create_fomo_overlay(title: str, artist: str | None, *, size: tuple[int, int], align: str,
-                        layout: str = "stacked", title_font: Path | None = None, xerox: bool = False, palette: str = "light") -> Image.Image:
+                        layout: str = "stacked", title_font: Path | None = None,
+                        xerox: bool = False, palette: str = "light") -> Image.Image:
     """Fit title rows into a safe area with the artist above and room for branding below."""
     from karaoke_app.thumbnail import FONTS, _font, _text_mask
 
@@ -107,7 +108,10 @@ def apply_graphic_options(document: dict, *, graphic_style: str | None = None,
     import copy
 
     result = copy.deepcopy(document)
-    options = {"graphic_style": graphic_style, "title_layout": title_layout, "align": align, "graphic_palette": graphic_palette}
+    options = {
+        "graphic_style": graphic_style, "title_layout": title_layout,
+        "align": align, "graphic_palette": graphic_palette,
+    }
     choices = {"graphic_style": GRAPHIC_STYLES, "title_layout": TITLE_LAYOUTS, "align": ("start", "center", "end"),
                "graphic_palette": GRAPHIC_PALETTES}
     for key, value in options.items():
@@ -126,11 +130,16 @@ def apply_graphic_options(document: dict, *, graphic_style: str | None = None,
                               else "bottom_left", "scale": 0.06, "margin": 0.05})
         if not result.get("style"):
             apply_plus_typography(result)
-        result["style"].update({"primary_color": "#EEEEEE" if dark else "#111111", "highlight_color": "#888888" if dark else "#777777",
-                                "coros_color": "#555555", "outline_width": 0, "shadow_depth": 0,
-                                "shadow_opacity": 0, "agent_colors": {},
-                                "lyrics_colors": {"active": "#EEEEEE" if dark else "#111111",
-                                                  "inactive": "#888888" if dark else "#777777"}})
+        result["style"].update({
+            "primary_color": "#EEEEEE" if dark else "#111111",
+            "highlight_color": "#888888" if dark else "#777777",
+            "coros_color": "#555555", "outline_width": 0, "shadow_depth": 0,
+            "shadow_opacity": 0, "agent_colors": {},
+            "lyrics_colors": {
+                "active": "#EEEEEE" if dark else "#111111",
+                "inactive": "#888888" if dark else "#777777",
+            },
+        })
     return result
 
 

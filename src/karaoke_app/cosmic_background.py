@@ -88,6 +88,8 @@ class CosmicBackground:
         self.y, self.x = np.mgrid[0:field_height, 0:field_width].astype(np.float64)
         self.x = (self.x / field_width - 0.5) * width / height * self.config["scale"]
         self.y = (self.y / field_height - 0.5) * self.config["scale"]
+        if self.config["appearance"] == "fluid":
+            return
         self.grain_margin = math.ceil(self.config["speed"] * 24) + 2
         rng = np.random.default_rng(self.config["seed"])
         grain_size = (height + 2 * self.grain_margin, width + 2 * self.grain_margin)

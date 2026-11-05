@@ -21,7 +21,7 @@ def create_intro_card(
     """Save an unbranded RGBA title card; the renderer adds the video watermark."""
     overlay = create_title_overlay(title, artist, mode=mode, align=align, size=(width, height),
                                    graphic_style=graphic_style,
-            graphic_palette=graphic_palette, title_layout=title_layout, graphic_palette=graphic_palette)
+                                   graphic_palette=graphic_palette, title_layout=title_layout)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     overlay.save(output_path)
     return output_path

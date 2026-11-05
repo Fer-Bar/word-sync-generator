@@ -41,7 +41,7 @@ def test_background_override_preserves_custom_typography():
     assert document["background"]["kind"] == "solid"
 
 
-def test_configure_is_persistent_idempotent_and_backed_up(tmp_path):
+def test_configure_is_persistent_and_idempotent(tmp_path):
     document = {"schema_version": 2, "title": "Test", "video": VIDEO,
         "background": {"kind": "solid", "color": "#000000"}, "watermark": {"enabled": False},
         "media": {"original_audio": "a.wav", "instrumental_audio": "i.wav",
@@ -52,7 +52,7 @@ def test_configure_is_persistent_idempotent_and_backed_up(tmp_path):
     saved = load_job_document(tmp_path)
     assert saved["style"]["lyrics_effect"] == "word-synced"
     assert saved["background"]["appearance"] == "cosmic"
-    assert next((tmp_path / "backups").iterdir()).read_bytes() == original
+    assert not (tmp_path / "backups").exists()
     configure_job(tmp_path, background_style="cosmic-sand")
-    assert len(list((tmp_path / "backups").iterdir())) == 1
+    assert not (tmp_path / "backups").exists()
     assert apply_visual_options(saved) == saved

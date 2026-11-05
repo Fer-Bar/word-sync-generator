@@ -69,8 +69,7 @@ def configure_job(job_dir: Path, *, visual_style: str = "plus", background_style
                   cover: Path | None = None, graphic_style: str | None = None,
                   title_layout: str | None = None, align: str | None = None,
                   graphic_palette: str | None = None) -> Path:
-    """Save visual preferences atomically with a byte-for-byte backup of the previous job."""
-    import hashlib
+    """Save visual preferences atomically without retaining previous versions."""
     import json
     import tempfile
 
@@ -88,11 +87,6 @@ def configure_job(job_dir: Path, *, visual_style: str = "plus", background_style
                                                           graphic_palette=graphic_palette))
     if document == json.loads(original):
         return path
-    backup = root / "backups" / f"job-{hashlib.sha256(original).hexdigest()[:12]}.json"
-    backup.parent.mkdir(exist_ok=True)
-    if backup.exists() and backup.read_bytes() != original:
-        raise ValueError(f"Backup collision: {backup}")
-    backup.write_bytes(original)
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root, delete=False) as temporary:

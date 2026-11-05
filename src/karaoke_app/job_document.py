@@ -25,7 +25,7 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     """Validate durable rendering configuration and preserve extensible provenance."""
     validate_config_object(value, {
         "schema_version", "job_id", "title", "source", "alignment", "metadata", "preparation",
-        "media", "video", "background", "style", "lyrics_colors", "watermark", "intro",
+        "media", "video", "background", "style", "lyrics_colors", "watermark", "intro", "thumbnail",
     }, "job.json")
     version = value.get("schema_version")
     if type(version) is not int or version not in {1, 2}:
@@ -51,6 +51,11 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     for key in ("width", "height", "fps"):
         if type(video.get(key)) is not int or video[key] <= 0:
             raise ValueError(f"video.{key} must be a positive integer")
+    for key in ("width", "height"):
+        if video[key] % 2:
+            raise ValueError(f"video.{key} must be even for H.264 video")
+    if video["fps"] > 120:
+        raise ValueError("video.fps must not exceed 120")
     result["video"] = dict(video)
 
     background = value.get("background")
@@ -157,6 +162,16 @@ def validate_job_document(value: Any) -> dict[str, Any]:
         if "end" in intro and intro["end"] <= intro.get("start", 0):
             raise ValueError("intro.end must be greater than intro.start")
         result["intro"] = normalized_intro
+    if "thumbnail" in value:
+        thumbnail = validate_config_object(value["thumbnail"], {"time", "align"}, "thumbnail")
+        normalized_thumbnail = {}
+        if "time" in thumbnail:
+            normalized_thumbnail["time"] = validate_number(thumbnail["time"], "thumbnail.time", 0)
+        if "align" in thumbnail:
+            if thumbnail["align"] not in ("start", "center", "end"):
+                raise ValueError("thumbnail.align must be start, center or end")
+            normalized_thumbnail["align"] = thumbnail["align"]
+        result["thumbnail"] = normalized_thumbnail
     return result
 
 
