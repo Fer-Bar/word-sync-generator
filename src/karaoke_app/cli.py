@@ -26,6 +26,7 @@ COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
 ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
 LYRICS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyrics_file.py"
 REFERENCES_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyric_references.py"
+TIMING_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "timing_quality.py"
 COSMIC_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "cosmic_background.py"
 COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
@@ -36,6 +37,7 @@ REMOTE_STATUS = Path("/content/karaoke_status.json")
 REMOTE_HF_TOKEN = Path("/content/.hf_token")
 REMOTE_LYRICS_MODULE = Path("/content/karaoke_lyrics_file.py")
 REMOTE_REFERENCES_MODULE = Path("/content/karaoke_lyric_references.py")
+REMOTE_TIMING_MODULE = Path("/content/karaoke_timing_quality.py")
 REMOTE_LYRICS_TEXT = Path("/content/lyrics_reference.txt")
 REMOTE_RENDER_JOB = Path("/content/karaoke_render_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
@@ -114,6 +116,8 @@ def build_render_parser() -> argparse.ArgumentParser:
         description="Render corrected lyrics from a prepared job folder without repeating preparation.",
     )
     parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--accept-timing-review", action="store_true",
+                        help="Render after manually reviewing the reported severe timing conflicts")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
     parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
     parser.add_argument("--graphic-palette", choices=("light", "dark"))
@@ -445,6 +449,7 @@ def run_job(args: argparse.Namespace) -> Path:
             _upload(colab, session, ASS_MODULE, Path("/content/karaoke_ass.py"))
             _upload(colab, session, LYRICS_MODULE, REMOTE_LYRICS_MODULE)
             _upload(colab, session, REFERENCES_MODULE, REMOTE_REFERENCES_MODULE)
+            _upload(colab, session, TIMING_MODULE, REMOTE_TIMING_MODULE)
             if lyrics_text:
                 _upload(colab, session, lyrics_text, REMOTE_LYRICS_TEXT)
             _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
@@ -602,6 +607,12 @@ def render_colab(args: argparse.Namespace) -> Path:
 
     lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
     lyrics = load_lyrics_file(lyrics_path, require_words=True)
+    from karaoke_app.timing_quality import require_timing_review
+
+    require_timing_review(
+        lyrics, document.get("alignment", {}).get("timing_quality"),
+        reviewed=getattr(args, "accept_timing_review", False),
+    )
     transcript = lyrics_to_transcript(lyrics)
     srt_content = generate_srt(transcript)
 
@@ -782,7 +793,9 @@ def _create_render_bundle(
 def _validate_installation() -> None:
     if not shutil.which("colab"):
         raise OSError("The 'colab' executable is not available. Run 'uv sync --dev' to install project dependencies.")
-    if not all(path.is_file() for path in (COLAB_SCRIPT, COLAB_REQUIREMENTS, ASS_MODULE, LYRICS_MODULE)):
+    if not all(path.is_file() for path in (
+        COLAB_SCRIPT, COLAB_REQUIREMENTS, ASS_MODULE, LYRICS_MODULE, REFERENCES_MODULE, TIMING_MODULE,
+    )):
         raise OSError("Colab pipeline files are missing from the project")
 
 
