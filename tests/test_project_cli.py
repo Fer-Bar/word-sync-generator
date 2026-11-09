@@ -325,3 +325,31 @@ def test_terminal_video_section_accepts_a_relative_asset_and_saves(project, vide
     assert load_job_document(project)["background"] == {
         "kind": "video", "path": "background.mp4", "overlay_opacity": 0.2, "crop_right": 0.25,
     }
+
+
+def test_configured_thumbnail_matches_explicit_standalone_artwork(project):
+    import numpy as np
+    from PIL import Image
+
+    result = run_cli("configure", project, "--preset", "classic", "--title", "Synthetic Review",
+                     "--artist", "Example Artist", "--align", "start", "--thumbnail-align", "end", "--no-logo")
+    assert result.returncode == 0, result.stderr
+    before = (project / STATE_FILENAME).read_bytes()
+    result = run_cli("thumbnail", project, "--mode", "lyrics", "--width", "640")
+    assert result.returncode == 0, result.stderr
+    # The independent command supplies the same visible settings explicitly. It
+    # must also work without a private reference image or any project document.
+    result = run_cli("thumbnail", "--title", "Synthetic Review", "--artist", "Example Artist",
+                     "--align", "end", "--no-logo", "--mode", "lyrics", "--width", "640",
+                     "--output-dir", project / "standalone")
+    assert result.returncode == 0, result.stderr
+    with Image.open(project / "thumbnails/thumbnail_lyrics.png") as inherited, Image.open(
+        project / "standalone/thumbnail_lyrics.png"
+    ) as explicit:
+        assert inherited.size == (640, 360)
+        assert inherited.tobytes() == explicit.tobytes()
+        assert inherited.getpixel((0, 0)) == (11, 16, 32)
+        pixels = np.asarray(inherited)
+        ink_y, ink_x = np.where((pixels > 220).all(axis=2))
+        assert len(ink_y) > 1000 and ink_x.mean() > inherited.width / 2
+    assert (project / STATE_FILENAME).read_bytes() == before

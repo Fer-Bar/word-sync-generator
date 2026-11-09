@@ -69,7 +69,7 @@ uv run karaoke thumbnail outputs/PROYECTO --mode lyrics --align end
 uv run karaoke intro outputs/PROYECTO --mode lyrics
 ```
 
-`render` genera miniaturas y las intros habilitadas. La intro dura hasta cinco segundos
+`render` genera miniaturas y las intros habilitadas. Por defecto, la intro dura hasta cinco segundos
 por defecto y termina antes de la primera voz; si no hay espacio, se omite. Desactivarla
 no desactiva las miniaturas. `--intro-start` establece el comienzo; elige una duración
 o un final absoluto, no ambos en el mismo comando. Guardar una duración sustituye
@@ -78,8 +78,12 @@ el final anterior y viceversa. La primera voz sigue limitando la intro.
 `--align start|center|end` alinea título y artista, no las letras cantadas.
 `--thumbnail-time` selecciona el instante del fondo de la miniatura; el valor inicial
 es cero. Para un video, debe quedar antes de su final. `--thumbnail-align` permite
-alinear la miniatura sin cambiar la intro. Las miniaturas y tarjetas locales no necesitan Colab. Repetir sus comandos
-reemplaza los PNG correspondientes; usa `thumbnail --output-dir` para conservar variantes.
+alinear la miniatura sin cambiar la intro. `thumbnail PROYECTO` hereda el fondo,
+artista, alineación, instante y logo guardados; sus opciones explícitas los reemplazan
+solo para esa ejecución. Sin proyecto ni `--background`, usa un fondo sólido oscuro.
+
+Las miniaturas y tarjetas locales no necesitan Colab. Repetir sus comandos reemplaza
+los PNG correspondientes; usa `thumbnail --output-dir` para conservar variantes.
 
 ## Logo
 
