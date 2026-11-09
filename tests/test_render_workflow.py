@@ -147,3 +147,59 @@ def test_installer_reports_real_process_output(exit_code):
         result = job._run_installer(command, label="Fixture")
         assert result.returncode == 0
         assert result.stdout.strip() == "installed"
+
+
+def test_configured_graphic_colors_survive_reload_and_real_render(prepared_project, tmp_path, monkeypatch, media_tools):
+    from PIL import Image
+
+    from karaoke_app.job_document import STATE_FILENAME
+    from karaoke_app.render_graphics import background_frame
+    from karaoke_app.visual_config import resolve_options
+
+    logo = prepared_project / "logo.png"
+    Image.new("RGBA", (64, 16), "black").save(logo)
+    command = [sys.executable, "-m", "karaoke_app.cli"]
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    subprocess.run([*command, "configure", str(prepared_project), "--graphic-style", "fomo",
+                    "--lyrics-active-color", "#00FF00", "--lyrics-inactive-color", "#0000FF",
+                    "--logo", str(logo), "--logo-position", "top_right", "--logo-scale", "0.2"],
+                   capture_output=True, text=True, check=True, env=environment)
+    saved = load_job_document(prepared_project)
+    document, _ = resolve_options(prepared_project, {}, document=saved)
+    colors = {"active": "#00FF00", "inactive": "#0000FF"}
+    assert document["style"]["lyrics_colors"] == colors
+    assert document["watermark"] == saved["watermark"]
+    # Editing a different section must not silently reapply the graphic preset.
+    subprocess.run([*command, "configure", str(prepared_project), "--title-layout", "wide", "--align", "end",
+                    "--background-color", "#123456"],
+                   capture_output=True, text=True, check=True, env=environment)
+    document, _ = resolve_options(prepared_project, {})
+    assert document["style"]["lyrics_colors"] == colors
+    assert document["watermark"]["position"] == "top_right"
+    assert document["watermark"]["scale"] == .2
+    # This graphic style uses a fixed paper background in both local graphics
+    # and final video, including after changing unrelated background options.
+    assert document["background"] == {"kind": "solid", "color": "#FFFFFF"}
+    assert background_frame(prepared_project, document).getpixel((0, 0)) == (255, 255, 255)
+    before = (prepared_project / STATE_FILENAME).read_bytes()
+    transcript = lyrics_to_transcript(load_lyrics_file(prepared_project / "lyrics.yaml"))
+    subtitles = generate_ass(transcript, document["video"], style=StyleConfig.from_dict(document["style"]),
+                             mode="karaoke")
+    bundle, result = tmp_path / "configured.zip", tmp_path / "rendered.zip"
+    _create_render_bundle(prepared_project, document, "karaoke", {"karaoke": subtitles}, bundle, transcript=transcript)
+    monkeypatch.setattr(job, "WORK_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(job, "RENDER_JOB_PATH", bundle)
+    monkeypatch.setattr(job, "_ensure_system_fonts", lambda: None)
+    monkeypatch.setattr(job, "_ensure_bebas_font", lambda: None)
+    job._render_existing_job({"mode": "karaoke", "archive_path": str(result)})
+    extracted = tmp_path / "export"
+    with zipfile.ZipFile(result) as archive:
+        archive.extractall(extracted)
+    settings = json.loads((extracted / "render-settings.json").read_text())
+    assert settings["style"]["lyrics_colors"] == colors
+    pixels = decode_frame(extracted / "Song_karaoke.mp4", .375)
+    assert (pixels[0, 0] > 245).all()
+    red, green, blue = np.moveaxis(pixels, 2, 0)
+    assert np.count_nonzero((green > 150) & (red < 100) & (blue < 100)) > 15
+    assert np.count_nonzero((blue > 150) & (red < 100) & (green < 100)) > 15
+    assert (prepared_project / STATE_FILENAME).read_bytes() == before

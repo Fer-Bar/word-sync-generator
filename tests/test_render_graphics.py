@@ -129,7 +129,7 @@ def test_render_bundle_routes_both_modes_and_returns_graphics(document, tmp_path
         assert "thumbnails/thumbnail_karaoke.png" in result.namelist()
         assert result.read("intro/intro_lyrics.png") != result.read("intro/intro_karaoke.png")
     with zipfile.ZipFile(bundle) as packed:
-        assert json.loads(packed.read("job.json"))["intro"]["end"] == pytest.approx(3.2)
+        assert json.loads(packed.read(".karaoke/project.json"))["intro"]["end"] == pytest.approx(3.2)
 
 
 def test_disabled_intro_still_generates_thumbnail(document, tmp_path):

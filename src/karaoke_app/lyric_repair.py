@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from karaoke_app.job_document import STATE_FILENAME
 from karaoke_app.lyric_references import (
     apply_reference_text,
     compare_reference,
@@ -36,7 +37,7 @@ def _realign_hint(job_dir: Path, document: dict[str, Any]) -> str:
 
 def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: str | None = None) -> dict[str, Any]:
     """Apply saved or recovered reference text, rolling back changes if writing fails."""
-    job_path = job_dir / "job.json"
+    job_path = job_dir / STATE_FILENAME
     document = json.loads(job_path.read_text(encoding="utf-8"))
     preparation = document.get("preparation", {})
     if preparation.get("disable_lrclib"):
@@ -146,7 +147,7 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
             name: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
             for name, value in (
                 ("alignment.json", alignment),
-                ("job.json", document),
+                (STATE_FILENAME, document),
                 ("lyrics_reference.json", provenance),
                 ("lyrics_validation.json", validation),
             )

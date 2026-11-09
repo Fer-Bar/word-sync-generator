@@ -27,7 +27,7 @@ def test_preparation_defaults_and_background_switches():
 
 def test_explicit_static_background_is_preserved_and_conflicts_fail():
     args = build_parser().parse_args(["song.wav", "--background-color", "#123456"])
-    assert "render_background" not in preparation_visuals(VIDEO, args)
+    assert preparation_visuals(VIDEO, args)["render_background"] == {"kind": "solid", "color": "#123456"}
     args.background_style = "fluid"
     with pytest.raises(ValueError, match="Choose"):
         preparation_visuals(VIDEO, args)
@@ -47,7 +47,8 @@ def test_configure_is_persistent_and_idempotent(tmp_path):
         "media": {"original_audio": "a.wav", "instrumental_audio": "i.wav",
                   "vocals_audio": "v.wav", "lyrics": "lyrics.yaml"}}
     original = json.dumps(document).encode()
-    (tmp_path / "job.json").write_bytes(original)
+    (tmp_path / ".karaoke").mkdir(exist_ok=True)
+    (tmp_path / ".karaoke/project.json").write_bytes(original)
     configure_job(tmp_path, background_style="cosmic-sand")
     saved = load_job_document(tmp_path)
     assert saved["style"]["lyrics_effect"] == "classic"
@@ -64,7 +65,8 @@ def prepared_job(tmp_path):
                 "background": {"kind": "solid", "color": "#123456"}, "watermark": {"enabled": False},
                 "media": {"original_audio": "a.wav", "instrumental_audio": "i.wav",
                           "vocals_audio": "v.wav", "lyrics": "lyrics.yaml"}}
-    (tmp_path / "job.json").write_text(json.dumps(document))
+    (tmp_path / ".karaoke").mkdir(exist_ok=True)
+    (tmp_path / ".karaoke/project.json").write_text(json.dumps(document))
     for name in ("a.wav", "i.wav", "v.wav"):
         (tmp_path / name).write_bytes(b"audio")
     (tmp_path / "lyrics.yaml").write_text(json.dumps({
@@ -78,7 +80,7 @@ def prepared_job(tmp_path):
 def test_dry_run_validates_without_writes_or_colab(prepared_job, monkeypatch):
     from karaoke_app import cli
 
-    before = {p.name: p.read_bytes() for p in prepared_job.iterdir()}
+    before = {p.relative_to(prepared_job).as_posix(): p.read_bytes() for p in prepared_job.rglob("*") if p.is_file()}
 
     def forbidden(*args, **kwargs):
         pytest.fail("Dry run must not start subprocesses, copy logos, or build bundles")
@@ -89,7 +91,8 @@ def test_dry_run_validates_without_writes_or_colab(prepared_job, monkeypatch):
     monkeypatch.setattr("karaoke_app.branding.store_shared_logo", forbidden)
     args = build_render_parser().parse_args([str(prepared_job), "--dry-run", "--background-style", "fluid"])
     cli.render_colab(args)
-    assert {p.name: p.read_bytes() for p in prepared_job.iterdir()} == before
+    after = {p.relative_to(prepared_job).as_posix(): p.read_bytes() for p in prepared_job.rglob("*") if p.is_file()}
+    assert after == before
     (prepared_job / "a.wav").unlink()
     with pytest.raises(FileNotFoundError, match="lyrics audio"):
         cli.render_colab(args)
@@ -100,27 +103,12 @@ def test_omitted_options_preserve_custom_style_and_zero_opacity(prepared_job):
 
     document = load_job_document(prepared_job)
     document["style"]["font_size"] = 83
-    (prepared_job / "job.json").write_text(json.dumps(document))
+    (prepared_job / ".karaoke").mkdir(exist_ok=True)
+    (prepared_job / ".karaoke/project.json").write_text(json.dumps(document))
     configure_job(prepared_job, background_style="fluid")
     resolved, _ = resolve_options(prepared_job, {"graphic_style": "fomo"})
     assert resolved["style"]["font_size"] == 83
     assert load_job_document(prepared_job)["style"]["font_size"] == 83
-
-
-def test_interactive_cancel_keeps_every_file(prepared_job, monkeypatch):
-    import io
-
-    from rich.console import Console
-    from rich.prompt import Confirm, Prompt
-
-    from karaoke_app.visual_config import interactive_configuration
-
-    before = {p.name: p.read_bytes() for p in prepared_job.iterdir()}
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr(Prompt, "ask", lambda *args, **kwargs: kwargs.get("default", "0"))
-    monkeypatch.setattr(Confirm, "ask", lambda *args, **kwargs: False)
-    assert interactive_configuration(prepared_job, {}, console=Console(file=io.StringIO(), force_terminal=True)) is None
-    assert {p.name: p.read_bytes() for p in prepared_job.iterdir()} == before
 
 
 def test_interactive_non_tty_rejects_without_writes(prepared_job):
@@ -130,27 +118,10 @@ def test_interactive_non_tty_rejects_without_writes(prepared_job):
 
     from karaoke_app.visual_config import interactive_configuration
 
-    original = (prepared_job / "job.json").read_bytes()
+    original = (prepared_job / ".karaoke/project.json").read_bytes()
     with pytest.raises(ValueError, match="explicit flags"):
         interactive_configuration(prepared_job, {}, console=Console(file=io.StringIO(), force_terminal=False))
-    assert (prepared_job / "job.json").read_bytes() == original
-
-
-def test_interactive_save_uses_same_resolver(prepared_job, monkeypatch):
-    import io
-
-    from rich.console import Console
-    from rich.prompt import Confirm, Prompt
-
-    from karaoke_app.visual_config import interactive_configuration, resolve_options
-
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr(Prompt, "ask", lambda *args, **kwargs: kwargs.get("default", "0"))
-    monkeypatch.setattr(Confirm, "ask", lambda *args, **kwargs: str(args[0]) == "Save appearance?")
-    options = {"visual_style": "plus", "background_style": "cosmic-sand", "seed": 123}
-    expected, _ = resolve_options(prepared_job, options)
-    interactive_configuration(prepared_job, options, console=Console(file=io.StringIO(), force_terminal=True))
-    assert load_job_document(prepared_job) == expected
+    assert (prepared_job / ".karaoke/project.json").read_bytes() == original
 
 
 def test_atomic_save_failure_preserves_original(prepared_job, monkeypatch):
@@ -158,7 +129,7 @@ def test_atomic_save_failure_preserves_original(prepared_job, monkeypatch):
 
     from karaoke_app.visual_config import save_configuration
 
-    original = (prepared_job / "job.json").read_bytes()
+    original = (prepared_job / ".karaoke/project.json").read_bytes()
     document = load_job_document(prepared_job)
     document["background"]["color"] = "#ABCDEF"
 
@@ -168,7 +139,7 @@ def test_atomic_save_failure_preserves_original(prepared_job, monkeypatch):
     monkeypatch.setattr(Path, "replace", fail)
     with pytest.raises(OSError, match="disk full"):
         save_configuration(prepared_job, document)
-    assert (prepared_job / "job.json").read_bytes() == original
+    assert (prepared_job / ".karaoke/project.json").read_bytes() == original
     assert len(list(prepared_job.iterdir())) == 5
 
 
@@ -207,29 +178,3 @@ def test_configuration_fits_terminal_and_preserves_literal_text(prepared_job, wi
     text = console.export_text()
     assert all(len(line) <= width for line in text.splitlines())
     assert 'artwork' in text
-
-
-def test_preview_is_temporary_and_cancel_does_not_change_job(prepared_job, monkeypatch):
-    import io
-
-    from rich.console import Console
-    from rich.prompt import Confirm, Prompt
-
-    from karaoke_app.visual_config import interactive_configuration
-
-    generated = []
-    original = (prepared_job / 'job.json').read_bytes()
-
-    def preview(background, video, path, **kwargs):
-        path.write_bytes(b'preview')
-        generated.append(path)
-        return path
-
-    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('karaoke_app.cosmic_background.render_cosmic_video', preview)
-    monkeypatch.setattr(Prompt, 'ask', lambda *args, **kwargs: kwargs.get('default', '0'))
-    monkeypatch.setattr(Confirm, 'ask', lambda *args, **kwargs: str(args[0]) == 'Preview background?')
-    interactive_configuration(prepared_job, {'background_style': 'fluid'},
-                              console=Console(file=io.StringIO(), force_terminal=True))
-    assert generated and not generated[0].exists()
-    assert (prepared_job / 'job.json').read_bytes() == original

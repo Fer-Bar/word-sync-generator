@@ -37,7 +37,8 @@ def _make_job(tmp_path, asr_text, reference_text):
         "preparation": {},
         "media": {"lyrics": "lyrics.lyricsfile.yaml"},
     }
-    (tmp_path / "job.json").write_text(json.dumps(document), encoding="utf-8")
+    (tmp_path / ".karaoke").mkdir(exist_ok=True)
+    (tmp_path / ".karaoke/project.json").write_text(json.dumps(document), encoding="utf-8")
     (tmp_path / "alignment.json").write_text(json.dumps({"segmentation": "heuristic"}), encoding="utf-8")
     pipeline = tmp_path / "pipeline.py"
     pipeline.write_text(

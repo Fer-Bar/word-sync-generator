@@ -21,9 +21,9 @@ from dotenv import dotenv_values
 from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
 from karaoke_app.themes import THEMES
 from karaoke_app.upload_diagnostics import upload_failure_message, upload_size, warn_large_upload
-from karaoke_app.visual_config import BACKGROUND_STYLES, VISUAL_STYLES, preparation_visuals
+from karaoke_app.visual_config import BACKGROUND_STYLES, PRESETS, VISUAL_STYLES, preparation_visuals
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger("karaoke_app.cli")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
 ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
@@ -52,7 +52,10 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
     groups = {
         "Appearance · typography, background and palette": {
             "visual_style", "background_style", "background_image", "background_color", "cover", "theme",
-            "seed", "graphic_style", "graphic_palette", "title_layout", "align", "resolution", "mode",
+            "seed", "graphic_style", "graphic_palette", "title_layout", "align", "resolution", "mode", "preset",
+            "fps", "title", "artist", "font_size", "lyrics_active_color", "lyrics_inactive_color",
+            "intro", "intro_duration", "intro_start", "intro_end", "thumbnail_time", "thumbnail_align",
+            "background_video", "background_overlay_opacity", "background_crop_right",
         },
         "Watermark": {"logo", "no_logo", "logo_position", "logo_scale", "logo_opacity"},
         "Colab and output": {"gpu", "auth", "timeout", "output_dir", "verbose"},
@@ -63,7 +66,8 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
             if action.dest in names:
                 parser._optionals._group_actions.remove(action)
                 group._group_actions.append(action)
-    parser.epilog = ("Commands: source, configure, render, background, preview, thumbnail, intro, cleanup, migrate. "
+    parser.epilog = ("Commands: source, configure, status, validate, render, background, "
+        "preview, thumbnail, intro, cleanup. "
         "Save appearance: karaoke configure JOB --visual-style plus --background-style fluid. "
         "Render saved settings: karaoke render JOB. Preview background: karaoke background JOB."
     )
@@ -72,7 +76,7 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the preparation command parser."""
     parser = argparse.ArgumentParser(description="Prepare karaoke audio and lyrics on Google Colab.",
-        epilog="Commands: source, configure, render, background, preview, thumbnail, intro, cleanup, migrate.")
+        epilog="Commands: source, configure, status, validate, render, background, preview, thumbnail, intro, cleanup.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--title", help="Track title override used for LRCLIB matching")
@@ -86,10 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demucs-model", default="htdemucs_ft", help="Demucs separation model")
     parser.add_argument("--background-image", type=Path, help="Local image used as the video background")
     parser.add_argument("--background-color", help="Solid RGB background color")
-    parser.add_argument("--visual-style", choices=VISUAL_STYLES, default="plus")
+    parser.add_argument("--visual-style", choices=VISUAL_STYLES, default=None)
     parser.add_argument("--background-style", choices=BACKGROUND_STYLES,
-                        help="Procedural background saved in job.json (default: fluid)")
+                        help="Procedural background saved for this project (default: fluid)")
     parser.add_argument("--cover", type=Path, help="Local artwork used for the procedural palette")
+    parser.add_argument("--preset", choices=PRESETS, help="Appearance preset; explicit options override it")
     parser.add_argument("--resolution", choices=("1080p", "720p"), default="1080p")
     parser.add_argument("--cookies", type=Path, default=DEFAULT_COOKIES, help="Netscape cookies file for yt-dlp")
     parser.add_argument("--no-cookies", action="store_true", help="Do not upload or use a cookies file")
@@ -145,7 +150,11 @@ def build_render_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("job_dir", type=Path)
     parser.add_argument("--dry-run", action="store_true", help="Validate and show settings without starting Colab")
-    parser.add_argument("--background-image", type=Path, help="Background image inside the job folder")
+    parser.add_argument("--background-image", type=Path, help="Background image inside the project folder")
+    parser.add_argument("--background-video", type=Path, help="Looping background video inside the project folder")
+    parser.add_argument("--background-overlay-opacity", type=float, help="Dark overlay opacity (0–1)")
+    parser.add_argument("--background-crop-right", type=float,
+                        help="Fraction to crop from the right of an image/video (0–0.5)")
     parser.add_argument("--background-color", help="Solid RGB background color")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
     parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
@@ -157,7 +166,22 @@ def build_render_parser() -> argparse.ArgumentParser:
     parser.add_argument("--background-style", choices=BACKGROUND_STYLES, help="Override the saved background type")
     parser.add_argument("--cover", type=Path, help="Artwork palette for a procedural background")
     parser.add_argument("--seed", type=int, help="Reproducible cosmic background seed")
-    parser.add_argument("--mode", choices=("both", "karaoke", "lyrics"), default="both")
+    parser.add_argument("--preset", choices=PRESETS, help="Appearance preset; explicit options override it")
+    parser.add_argument("--title", help="Display title")
+    parser.add_argument("--artist", help="Display artist")
+    parser.add_argument("--resolution", choices=("1080p", "720p"), help="Video size")
+    parser.add_argument("--fps", type=int, help="Frames per second (1–120)")
+    parser.add_argument("--font-size", type=int, help="Lyric font size in pixels")
+    parser.add_argument("--lyrics-active-color", help="Active lyric color, #RRGGBB")
+    parser.add_argument("--lyrics-inactive-color", help="Inactive lyric color, #RRGGBB")
+    parser.add_argument("--intro", action=argparse.BooleanOptionalAction, default=None,
+                        help="Enable/disable title intro")
+    parser.add_argument("--intro-duration", type=float, help="Intro duration in seconds; exclusive with --intro-end")
+    parser.add_argument("--intro-start", type=float, help="Intro start time in seconds (at least zero)")
+    parser.add_argument("--intro-end", type=float, help="Intro end time in seconds; exclusive with --intro-duration")
+    parser.add_argument("--thumbnail-time", type=float, help="Background time for the thumbnail, in seconds")
+    parser.add_argument("--thumbnail-align", choices=("start", "center", "end"), help="Independent thumbnail alignment")
+    parser.add_argument("--mode", choices=("both", "karaoke", "lyrics"), help="Default: saved project mode")
     parser.add_argument(
         "--logo",
         "--watermark",
@@ -234,7 +258,7 @@ def run_intro(args: argparse.Namespace) -> Path:
 def build_background_parser() -> argparse.ArgumentParser:
     """Build the standalone procedural background preview parser."""
     parser = argparse.ArgumentParser(prog="karaoke background", description="Preview a cosmic background locally.")
-    parser.add_argument("config", type=Path, help="Job directory, job.json, or standalone background JSON")
+    parser.add_argument("config", type=Path, help="Project directory or standalone background JSON")
     parser.add_argument("--output", type=Path, default=Path("background-preview.mp4"))
     parser.add_argument("--duration", type=float, help="Seconds to preview (default: one complete loop)")
     parser.add_argument("--start", type=float, default=0, help="Starting time in the background animation")
@@ -250,7 +274,9 @@ def run_background(args: argparse.Namespace) -> Path:
 
     config_path = args.config.expanduser().resolve()
     if config_path.is_dir():
-        config_path /= "job.json"
+        from karaoke_app.job_document import STATE_FILENAME
+
+        config_path /= STATE_FILENAME
     document = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise ValueError("Background configuration must be a JSON object")
@@ -278,14 +304,15 @@ def show_commands() -> None:
     table = Table(title="Karaoke", show_header=False, box=None)
     for command, description in (
         ("source URL or FILE", "Prepare audio and timed lyrics"),
-        ("configure JOB --interactive", "Choose and save appearance"),
+        ("configure PROJECT", "Edit sections, presets and output settings"),
+        ("status PROJECT", "Show saved settings and available exports"),
+        ("validate PROJECT", "Check files and lyrics before rendering"),
         ("render JOB --dry-run", "Validate files and review settings"),
         ("render JOB", "Render videos on Colab"),
         ("background JOB", "Preview the animated background"),
         ("preview JOB", "Preview timed lyrics locally"),
         ("thumbnail JOB / intro JOB", "Generate artwork"),
         ("cleanup JOB", "Inspect exports; move selected renders to recoverable trash"),
-        ("migrate", "Update existing job formats"),
     ):
         table.add_row(command, description)
     console.print(table)
@@ -302,7 +329,7 @@ def main() -> int:
         sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
     log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
                                  "--help" not in sys.argv and "-h" not in sys.argv and
-                                 sys.argv[1:2] != ["cleanup"])
+                                 sys.argv[1:2] not in (["status"], ["validate"], ["cleanup"]))
     if sys.argv[1:2] == ["source"]:
         del sys.argv[1]
 
@@ -319,10 +346,10 @@ def main() -> int:
             from karaoke_app.output_cleanup import run_cleanup
 
             run_cleanup(sys.argv[2:])
-        elif sys.argv[1:2] == ["migrate"]:
-            from karaoke_app.migration import run_migration
+        elif sys.argv[1:2] in (["status"], ["validate"]):
+            from karaoke_app.project_status import run_project_status
 
-            run_migration(sys.argv[2:])
+            run_project_status(sys.argv[1], sys.argv[2:])
         elif sys.argv[1:2] == ["thumbnail"]:
             from karaoke_app.thumbnail import run_thumbnail
 
@@ -687,6 +714,7 @@ def render_colab(args: argparse.Namespace) -> Path:
 
     root = args.job_dir.expanduser().resolve()
     document, selected_theme = resolve_options(root, vars(args))
+    args.mode = args.mode or document["render"]["mode"]
     show_appearance(document)
     from karaoke_app.srt import generate_srt
 
@@ -826,7 +854,7 @@ def _create_render_bundle(
     transcript: dict[str, Any] | None = None,
     srt_content: str | None = None,
 ) -> None:
-    from karaoke_app.job_document import resolve_job_asset, resolve_watermark_path
+    from karaoke_app.job_document import STATE_FILENAME, resolve_job_asset, resolve_watermark_path
     from karaoke_app.render_graphics import generate_render_graphics
 
     media = document["media"]
@@ -863,7 +891,7 @@ def _create_render_bundle(
                                              "overlay_opacity": 0}
         bundle_document["intro"] = timing or {"enabled": False}
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
-            archive.writestr("job.json", json.dumps(bundle_document, ensure_ascii=False, indent=2) + "\n")
+            archive.writestr(STATE_FILENAME, json.dumps(bundle_document, ensure_ascii=False, indent=2) + "\n")
             if background.get("kind") == "cosmic":
                 if not COSMIC_MODULE.is_file():
                     raise FileNotFoundError(f"Missing cosmic background generator module: {COSMIC_MODULE}")

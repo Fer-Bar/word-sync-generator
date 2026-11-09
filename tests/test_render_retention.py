@@ -12,6 +12,8 @@ from pathlib import Path
 import imageio_ffmpeg
 import pytest
 
+from karaoke_app.job_document import STATE_FILENAME
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -30,7 +32,9 @@ def rendering_project(tmp_path):
         "background": {"kind": "solid", "color": "#000000"},
         "watermark": {"enabled": False}, "intro": {"enabled": False},
     }
-    (project / "job.json").write_text(json.dumps(document))
+    state = project / STATE_FILENAME
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(document))
     (project / "lyrics.yaml").write_text(textwrap.dedent('''\
         version: "1.0"
         metadata:
