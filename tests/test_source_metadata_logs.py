@@ -23,7 +23,7 @@ def test_missing_youtube_metadata_is_explained(tmp_path, monkeypatch, caplog, ov
         return SimpleNamespace(stdout=f"{audio}\n", stderr="")
 
     monkeypatch.setattr(job, "_run", download)
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         _, metadata = job._acquire_source({
             "source": {"kind": "url", "value": "https://www.youtube.com/watch?v=example"}, "lyrics": overrides,
         })

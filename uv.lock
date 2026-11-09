@@ -712,6 +712,7 @@ dependencies = [
     { name = "playwright" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "rich" },
     { name = "yt-dlp", extra = ["default"] },
 ]
 
@@ -732,6 +733,7 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.55,<2" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "yt-dlp", extras = ["default"], specifier = ">=2026.10.26" },
 ]
 

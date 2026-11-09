@@ -45,3 +45,6 @@ service-account*.json
 # Failed preparation artifacts, including custom output directories
 *.recovery/
 *.checkpoint.zip
+
+# Per-run diagnostic logs
+.karaoke/

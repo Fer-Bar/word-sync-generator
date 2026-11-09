@@ -171,7 +171,7 @@ def render_browser_overlay(
         loop = None
 
     if loop is not None and loop.is_running():
-        LOGGER.info("Active asyncio loop detected; dispatching Playwright rendering to worker thread.")
+        LOGGER.debug("Active asyncio loop detected; dispatching Playwright rendering to worker thread.")
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(
                 _render_browser_overlay_sync,
@@ -214,6 +214,7 @@ def _write_browser_frames(page, scene, stream, *, duration, start=0, metrics=Non
     fps = scene["fps"]
     count = max(1, math.ceil(duration * fps))
     blank = None
+    last_progress = time.perf_counter()
     stats = metrics if metrics is not None else {}
     stats.update(frames=count, captured_frames=0, reused_blank_frames=0,
                  draw_seconds=0.0, screenshot_seconds=0.0, pipe_seconds=0.0)
@@ -236,8 +237,14 @@ def _write_browser_frames(page, scene, stream, *, duration, start=0, metrics=Non
         began = time.perf_counter()
         stream.write(png)
         stats["pipe_seconds"] += time.perf_counter() - began
-        if (index + 1) % max(1, count // 4) == 0:
-            LOGGER.info("Braccato %s: %.0f%%", scene["mode"], (index + 1) * 100 / count)
+        now = time.perf_counter()
+        if index == 0 or now - last_progress >= .5 or index + 1 == count:
+            last_progress = now
+            LOGGER.info("Frame progress", extra={"user_event": {"kind": "stage", "id": "frames",
+                "parent": f"render_{scene['mode']}",
+                "label": f"Drawing {scene['mode']} frames", "completed": index + 1, "total": count,
+                "detail": f"{index + 1:,}/{count:,} frames",
+                "reset": index == 0, "state": "done" if index + 1 == count else "running"}})
 
 
 def _encode_browser_video_sync(scene, font, command, *, duration, start=0, assets=ASSETS, metrics=None):
@@ -258,13 +265,19 @@ def _encode_browser_video_sync(scene, font, command, *, duration, start=0, asset
                 # FFmpeg may reject an encoder before consuming the first frame.
                 pass
             began = time.perf_counter()
+            LOGGER.info("Finalizing video", extra={"user_event": {"kind": "stage", "id": "encoder_drain",
+                "parent": f"render_{scene['mode']}",
+                "label": f"Finalizing {scene['mode']} video"}})
             returncode = process.wait()
+            LOGGER.info("Encoder finished", extra={"user_event": {"kind": "stage", "id": "encoder_drain",
+                "parent": f"render_{scene['mode']}",
+                "label": f"Finalizing {scene['mode']} video", "state": "done" if returncode == 0 else "stopped"}})
             if metrics is not None:
                 metrics["encoder_drain_seconds"] = time.perf_counter() - began
             if returncode != 0:
                 errors.seek(0)
                 details = errors.read().decode(errors="replace")
-                LOGGER.error("Video encoding failed: %s", details)
+                LOGGER.debug("Video encoding failed: %s", details)
                 raise subprocess.CalledProcessError(process.returncode, command, stderr=details)
         finally:
             if process.poll() is None:

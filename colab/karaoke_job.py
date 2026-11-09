@@ -35,9 +35,43 @@ PAGE_TAIL_SECONDS = 0.35
 PAGE_FADE_MILLISECONDS = 150
 
 
+
+class EventHandler(logging.Handler):
+    """Forward explicit progress events from standalone uploaded modules."""
+
+    def emit(self, record):
+        event = getattr(record, "user_event", None)
+        if event is not None:
+            sys.stdout.write("KARAOKE_EVENT " + json.dumps({"version": 1, **event}, ensure_ascii=True) + "\n")
+            sys.stdout.flush()
+
+
+def _event(label, *, stage=None, **fields):
+    if stage == "runtime":
+        fields.setdefault("parent", "colab_setup")
+    event = ({"kind": "stage", "id": stage, "label": label} if stage else
+             {"kind": "message", "message": label})
+    LOGGER.info(label, extra={"user_event": {**event, **fields}})
+
+def configure_runtime_logging() -> None:
+    """Enable progress even when a notebook kernel has configured logging already."""
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    # basicConfig is a no-op in an initialized notebook. Preserve its handlers, but
+    # allow INFO events from this pipeline and its dynamically loaded renderers.
+    root.setLevel(logging.DEBUG)
+    LOGGER.setLevel(logging.DEBUG)
+    for handler in list(root.handlers):
+        if isinstance(handler, EventHandler):
+            root.removeHandler(handler)
+            handler.close()
+    root.addHandler(EventHandler())
+
+
 def main() -> None:
     """Generate karaoke artifacts inside a Colab runtime."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_runtime_logging()
+    _event("Preparing runtime", stage="runtime")
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     _require_commands("ffmpeg", "ffprobe")
@@ -56,7 +90,13 @@ def main() -> None:
     if lookup_enabled and lyrics_config.get("lrclib_id") is not None:
         record = _fetch_lrclib({}, config)
     source_path, metadata = _timed_call(performance, "acquisition", _acquire_source, config)
-    LOGGER.info(
+    LOGGER.info("Resolved metadata", extra={"user_event": {"kind": "metadata", "values": {
+        "Song": metadata.get("track") or metadata.get("title"), "Artist": metadata.get("artist"),
+    }}})
+    if not metadata.get("artist"):
+        _event("Artist unknown. Use --artist to improve lyric matching.", kind="warning")
+    _event("Preparing runtime", stage="runtime", state="done")
+    LOGGER.debug(
         "Source metadata: title=%r track=%r artist=%r album=%r duration=%r language=%r uploader=%r",
         metadata.get("title"), metadata.get("track"), metadata.get("artist"), metadata.get("album"),
         metadata.get("duration"), metadata.get("language"), metadata.get("uploader"),
@@ -169,7 +209,7 @@ def main() -> None:
 
     _write_performance(output_dir, performance)
     _create_archive(output_dir, Path(config["archive_path"]))
-    LOGGER.info("Pipeline completed: %s", config["archive_path"])
+    LOGGER.debug("Pipeline completed: %s", config["archive_path"])
 
 
 class LyricsPreparationError(RuntimeError):
@@ -185,8 +225,10 @@ def _render_existing_job(config: dict[str, Any]) -> None:
         raise FileNotFoundError("Missing uploaded render job")
     job_dir = WORK_DIR / "render_job"
     job_dir.mkdir(parents=True, exist_ok=True)
+    _event("Opening render project", stage="runtime")
     _extract_archive(RENDER_JOB_PATH, job_dir)
     document = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    _event("Opening render project", stage="runtime", state="done")
     performance = {"stages": [], "modes": {}, "video": document["video"], "cpu_count": os.cpu_count()}
     requested_mode = config["mode"]
     modes = ("karaoke", "lyrics") if requested_mode == "both" else (requested_mode,)
@@ -423,7 +465,7 @@ def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         details = download_result.stderr.strip() or download_result.stdout.strip() or "no filepath reported"
         raise RuntimeError(f"yt-dlp did not produce a usable audio file: {details}")
     lyrics_options = config.get("lyrics", {})
-    LOGGER.info(
+    LOGGER.debug(
         "YouTube metadata: title=%r track=%r artist=%r creator=%r uploader=%r",
         raw_metadata.get("title"), raw_metadata.get("track"), raw_metadata.get("artist"),
         raw_metadata.get("creator"), raw_metadata.get("uploader"),
@@ -470,11 +512,11 @@ def _resolve_song_identity(raw: dict[str, Any], overrides: dict[str, Any]) -> di
         if known_artist and known_artist == right_artist.casefold():
             inferred_artist, inferred_track = right, left
         elif known_artist and known_artist != left_artist.casefold():
-            LOGGER.info("Title inference skipped: video title conflicts with supplied artist=%r", artist)
+            LOGGER.debug("Title inference skipped: video title conflicts with supplied artist=%r", artist)
         elif known_track and known_track == left.casefold():
             inferred_artist, inferred_track = right, left
         elif known_track and known_track != _split_featured_artist(right)[0].casefold():
-            LOGGER.info("Title inference skipped: video title conflicts with supplied track=%r", track)
+            LOGGER.debug("Title inference skipped: video title conflicts with supplied track=%r", track)
         else:
             inferred_artist, inferred_track = left, right
     elif len(parts) == 1:
@@ -489,18 +531,18 @@ def _resolve_song_identity(raw: dict[str, Any], overrides: dict[str, Any]) -> di
             inferred_artist = f"{inferred_artist} feat. {featured}"
         if not artist:
             artist = inferred_artist
-            LOGGER.info("Artist inferred from video title/Topic channel: %r", artist)
+            LOGGER.debug("Artist inferred from video title/Topic channel: %r", artist)
         if not track:
             track = inferred_track
-            LOGGER.info("Song name inferred from video title: %r", track)
+            LOGGER.debug("Song name inferred from video title: %r", track)
     if not track:
         track = video_title
-        LOGGER.info("Song name unavailable: no track or unambiguous title inference; using video title=%r. "
+        LOGGER.debug("Song name unavailable: no track or unambiguous title inference; using video title=%r. "
                     "Use --title to specify the song name.", video_title)
     if not artist:
-        LOGGER.info("Artist unavailable: no artist/creator or unambiguous title inference; uploader=%r. "
+        LOGGER.debug("Artist unavailable: no artist/creator or unambiguous title inference; uploader=%r. "
                     "Use --artist to specify the artist.", raw.get("uploader"))
-    LOGGER.info("Resolved song: track=%r artist=%r", track, artist)
+    LOGGER.debug("Resolved song: track=%r artist=%r", track, artist)
     return {"title": track, "track": track, "artist": artist, "video_title": video_title}
 
 
@@ -526,7 +568,7 @@ def _ensure_deno() -> None:
     if shutil.which("deno"):
         return
     installer = Path("/tmp/install-deno.sh")
-    LOGGER.info("Installing the Deno runtime required by yt-dlp")
+    LOGGER.debug("Installing the Deno runtime required by yt-dlp")
     urllib.request.urlretrieve("https://deno.land/install.sh", installer)
     _run(["sh", str(installer)])
     deno_bin = Path.home() / ".deno" / "bin"
@@ -558,7 +600,7 @@ def _prepare_mixture(source_path: Path) -> Path:
 
 def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
     separated_dir = WORK_DIR / "separated"
-    LOGGER.info("Separating vocals and instrumental with Demucs (%s)...", model_name)
+    LOGGER.debug("Separating vocals and instrumental with Demucs (%s)...", model_name)
     _run(
         [
             sys.executable,
@@ -579,11 +621,19 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
     instrumental_path = track_dir / "no_vocals.wav"
     if not vocals_path.is_file() or not instrumental_path.is_file():
         raise RuntimeError("Demucs did not produce the expected vocal stems")
-    LOGGER.info("Demucs separation completed: vocals and instrumental ready")
+    LOGGER.debug("Demucs separation completed: vocals and instrumental ready")
     return vocals_path, instrumental_path
 
 
 def _timed_call(performance, stage, function, *args, **kwargs):
+    labels = {"reference_lookup": "Finding lyrics", "demucs": "Separating vocals and instrumental",
+              "whisper": "Transcribing and checking lyrics", "ctc_alignment": "Aligning lyrics",
+              "ctc_recovery": "Aligning lyrics", "background": "Generating background",
+              "install_browser": "Preparing renderer", "render_karaoke": "Rendering karaoke video",
+              "render_lyrics": "Rendering lyrics video"}
+    label = labels.get(stage)
+    if label:
+        _event(label, stage=stage)
     began = time.perf_counter()
     succeeded = False
     try:
@@ -592,9 +642,11 @@ def _timed_call(performance, stage, function, *args, **kwargs):
         return result
     finally:
         elapsed = time.perf_counter() - began
+        if label:
+            _event(label, stage=stage, state="done" if succeeded else "stopped", elapsed=elapsed)
         if performance is not None:
             performance["stages"].append({"stage": stage, "seconds": elapsed, "succeeded": succeeded})
-        LOGGER.info("Stage %s: %.2fs", stage, elapsed)
+        LOGGER.debug("Stage %s: %.2fs", stage, elapsed)
 
 
 def _write_performance(output_dir, performance):
@@ -615,8 +667,12 @@ def _prepare_reference(metadata, config, record):
         except LyricsProviderUnavailable as error:
             attempt = {"source": "lrclib", "status": "unavailable", "error": str(error)}
             record = None
-            LOGGER.warning("LRCLIB unavailable; trying remaining reference sources: %s", error)
+            LOGGER.debug("LRCLIB unavailable; trying remaining reference sources: %s", error)
     document, evidence = _resolve_reference(metadata, config, record)
+    if document is None:
+        _event("No usable lyric reference. Using speech transcription.")
+    else:
+        _event(f"Lyrics found: {evidence['source'].upper()} · {len(document['lines'])} lines")
     if attempt is not None:
         evidence.setdefault("attempts", []).insert(0, attempt)
     return record, (document, evidence)
@@ -656,7 +712,7 @@ def _prepare_lyrics(
         if document is None:
             raise
         validation["error"] = str(error)
-        LOGGER.warning("Independent Whisper validation unavailable: %s", error)
+        LOGGER.debug("Independent Whisper validation unavailable: %s", error)
     if document is not None:
         document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
         document["metadata"]["language"] = (
@@ -696,7 +752,7 @@ def _prepare_lyrics(
                 )
         except (AssertionError, KeyError, RuntimeError, ValueError) as error:
             fallback_reason = str(error)
-            LOGGER.warning("Reference alignment failed; trying independent ASR anchors: %s", error)
+            LOGGER.debug("Reference alignment failed; trying independent ASR anchors: %s", error)
             recovery = references.anchored_document(document, validation)
             partial_anchors = recovery is None and sum("anchor" in line for line in validation["lines"]) >= 2
             if recovery is not None or partial_anchors:
@@ -806,7 +862,7 @@ def _prepare_lyrics(
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
     if validation["needs_review"]:
-        LOGGER.info("Lyrics diagnostics saved to lyrics_validation.json (reference: %s)", evidence["source"])
+        LOGGER.debug("Lyrics diagnostics saved to lyrics_validation.json (reference: %s)", evidence["source"])
     words = []
     for line_idx, line in enumerate(lyrics["lines"]):
         for word_idx, word in enumerate(line.get("words", [])):
@@ -867,7 +923,7 @@ def _check_vocal_boundaries(vocals_path: Path, lines: list[dict[str, Any]]) -> d
             rms = np.append(rms, np.sqrt(np.mean(tail * tail)))
         return _trim_quiet_word_tails(lines, rms)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
-        LOGGER.warning("Vocal boundary check unavailable: %s", error)
+        LOGGER.debug("Vocal boundary check unavailable: %s", error)
         return {"status": "unavailable", "reason": str(error), "corrections": []}
 
 
@@ -1213,7 +1269,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             raise RuntimeError(f"LRCLIB id {forced_id} returned an invalid record")
         if not _usable_lrclib_record(value):
             raise RuntimeError(f"LRCLIB id {forced_id} does not contain usable lyrics")
-        LOGGER.info("Using requested LRCLIB id %s: %s", value.get("id"), value.get("trackName"))
+        LOGGER.debug("Using requested LRCLIB id %s: %s", value.get("id"), value.get("trackName"))
         return value
 
     track = str(metadata.get("track") or metadata["title"])
@@ -1222,7 +1278,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     duration = metadata.get("duration")
     duration_str = str(round(float(duration))) if duration else ""
     primary_artist = _primary_artist(artist)
-    LOGGER.info(
+    LOGGER.debug(
         "Searching LRCLIB: track=%r artist=%r primary_artist=%r album=%r duration=%r",
         track, artist, primary_artist, album, duration,
     )
@@ -1236,7 +1292,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             t1_params["duration"] = duration_str
         if album:
             t1_params["album_name"] = str(album)
-        LOGGER.info(
+        LOGGER.debug(
             "LRCLIB GET Tier 1 track=%r artist=%r album=%r duration=%r",
             track,
             artist,
@@ -1249,7 +1305,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.info("LRCLIB selected id=%s score=%.2f via get-exact", value.get("id"), score)
+                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-exact", value.get("id"), score)
                 return value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 1 failed: %s", error)
@@ -1261,7 +1317,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         }
         if duration_str:
             t2_params["duration"] = duration_str
-        LOGGER.info(
+        LOGGER.debug(
             "LRCLIB GET Tier 2 (without album) track=%r artist=%r duration=%r",
             track,
             artist,
@@ -1273,7 +1329,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.info("LRCLIB selected id=%s score=%.2f via get-without-album", value.get("id"), score)
+                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-without-album", value.get("id"), score)
                 return value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 2 failed: %s", error)
@@ -1285,7 +1341,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         }
         if duration_str:
             t3_params["duration"] = duration_str
-        LOGGER.info(
+        LOGGER.debug(
             "LRCLIB GET Tier 3 (primary artist) track=%r artist=%r duration=%r",
             track,
             primary_artist,
@@ -1297,7 +1353,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.info("LRCLIB selected id=%s score=%.2f via get-primary-artist", value.get("id"), score)
+                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-primary-artist", value.get("id"), score)
                 return value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 3 failed: %s", error)
@@ -1316,14 +1372,14 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             search_queries.append({"track_name": track, "artist_name": artist})
 
     for params in search_queries:
-        LOGGER.info("LRCLIB SEARCH structured: %s", params)
+        LOGGER.debug("LRCLIB SEARCH structured: %s", params)
         try:
             results = _lrclib_request(f"/search?{urllib.parse.urlencode(params)}")
         except OSError as error:
             LOGGER.debug("LRCLIB SEARCH structured %s failed: %s", params, error)
             continue
         if isinstance(results, list):
-            LOGGER.info("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
+            LOGGER.debug("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
             for record in results:
                 if isinstance(record, dict) and isinstance(record.get("id"), int):
                     candidates_by_id.setdefault(record["id"], record)
@@ -1333,14 +1389,14 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             for c in candidates_by_id.values()
             if _lrclib_candidate_is_safe(c, track=track, artist=artist, duration=duration)
         ]
-        LOGGER.info("LRCLIB structured search: %d safe candidates", len(safe_candidates))
+        LOGGER.debug("LRCLIB structured search: %d safe candidates", len(safe_candidates))
         if safe_candidates:
             selected = max(
                 safe_candidates,
                 key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
             )
             score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
-            LOGGER.info("LRCLIB selected id=%s score=%.2f via structured-search", selected.get("id"), score)
+            LOGGER.debug("LRCLIB selected id=%s score=%.2f via structured-search", selected.get("id"), score)
             return selected
 
     q_queries: list[str] = []
@@ -1354,14 +1410,14 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     q_queries = list(dict.fromkeys(q_queries))
 
     for query in q_queries:
-        LOGGER.info("LRCLIB SEARCH q=%r", query)
+        LOGGER.debug("LRCLIB SEARCH q=%r", query)
         try:
             results = _lrclib_request(f"/search?{urllib.parse.urlencode({'q': query})}")
         except OSError as error:
             LOGGER.debug("LRCLIB SEARCH q=%r failed: %s", query, error)
             continue
         if isinstance(results, list):
-            LOGGER.info("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
+            LOGGER.debug("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
             for record in results:
                 if isinstance(record, dict) and isinstance(record.get("id"), int):
                     candidates_by_id.setdefault(record["id"], record)
@@ -1371,17 +1427,17 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             for c in candidates_by_id.values()
             if _lrclib_candidate_is_safe(c, track=track, artist=artist, duration=duration)
         ]
-        LOGGER.info("LRCLIB q-search: %d safe candidates", len(safe_candidates))
+        LOGGER.debug("LRCLIB q-search: %d safe candidates", len(safe_candidates))
         if safe_candidates:
             selected = max(
                 safe_candidates,
                 key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
             )
             score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
-            LOGGER.info("LRCLIB selected id=%s score=%.2f via q-search", selected.get("id"), score)
+            LOGGER.debug("LRCLIB selected id=%s score=%.2f via q-search", selected.get("id"), score)
             return selected
 
-    LOGGER.info("No safe LRCLIB match found; using Faster Whisper")
+    LOGGER.debug("No safe LRCLIB match found")
     return None
 
 
@@ -1420,7 +1476,7 @@ def _lrclib_request(path: str, max_retries: int = 2) -> Any:
                         retry_seconds = min(max(float(retry_after_header), 0.5), 10.0)
                     except (TypeError, ValueError):
                         retry_seconds = 1.0
-                LOGGER.warning(
+                LOGGER.debug(
                     "LRCLIB rate limited (429); sleeping %.1fs (attempt %d/%d)",
                     retry_seconds,
                     attempts,
@@ -1486,7 +1542,7 @@ def _lyrics_document_from_record(
             if isinstance(loaded, dict):
                 document = loaded
         except yaml.YAMLError as error:
-            LOGGER.warning("LRCLIB returned invalid LyricsFile YAML: %s", error)
+            LOGGER.debug("LRCLIB returned invalid LyricsFile YAML: %s", error)
 
         if document is not None:
             raw_lines = document.get("lines")
@@ -1513,7 +1569,7 @@ def _lyrics_document_from_record(
                 if language:
                     document["metadata"].setdefault("language", language)
                 return document
-            LOGGER.info("LRCLIB lyricsfile has no usable lines, trying syncedLyrics/plainLyrics")
+            LOGGER.debug("LRCLIB lyricsfile has no usable lines, trying syncedLyrics/plainLyrics")
 
     synced_source = record.get("syncedLyrics")
     if isinstance(synced_source, str) and synced_source.strip():
@@ -1672,13 +1728,13 @@ def _is_alignment_healthy(
         avg_conf = sum(w.get("confidence", 0.0) for w in words) / max(1, word_count)
 
         if word_count >= 3 and avg_word_dur_ms < 50 and avg_conf < 0.05:
-            LOGGER.warning("Alignment anomaly: line squashed into <50ms/word with low confidence (%.3f)", avg_conf)
+            LOGGER.debug("Alignment anomaly: line squashed into <50ms/word with low confidence (%.3f)", avg_conf)
             return False
 
         if avg_word_dur_ms < 85 and avg_conf < 0.15:
             squashed_consecutive += 1
             if squashed_consecutive >= 2:
-                LOGGER.warning(
+                LOGGER.debug(
                     "Alignment anomaly: consecutive squashed lines with low confidence (<85ms/word, %.3f)",
                     avg_conf,
                 )
@@ -1698,7 +1754,7 @@ def _is_alignment_healthy(
             avg_conf = sum(w.get("confidence", 0.0) for w in words) / max(1, len(words)) if words else 0.0
 
             if drift_sec > 30.0:
-                LOGGER.warning(
+                LOGGER.debug(
                     "Alignment anomaly: catastrophic drift (%.1fs) on line %r",
                     drift_sec,
                     out_line.get("text"),
@@ -1706,7 +1762,7 @@ def _is_alignment_healthy(
                 return False
 
             if drift_sec > 12.0 and avg_conf < 0.20:
-                LOGGER.warning(
+                LOGGER.debug(
                     "Alignment anomaly: drift (%.1fs) with low confidence (%.3f) on line %r",
                     drift_sec,
                     avg_conf,
@@ -1717,7 +1773,7 @@ def _is_alignment_healthy(
             if drift_sec > 15.0:
                 severe_drift_count += 1
                 if severe_drift_count >= 2:
-                    LOGGER.warning("Alignment anomaly: multiple lines (>2) drifting >15s from reference")
+                    LOGGER.debug("Alignment anomaly: multiple lines (>2) drifting >15s from reference")
                     return False
 
     return True
@@ -1957,19 +2013,19 @@ def _align_known_lyrics(
             if _is_alignment_healthy(candidate_lines, raw_lines_for_check):
                 output_lines = candidate_lines
                 global_succeeded = True
-                LOGGER.info("Global continuous CTC alignment succeeded with healthy metrics")
+                LOGGER.debug("Global continuous CTC alignment succeeded with healthy metrics")
             else:
-                LOGGER.warning("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
+                LOGGER.debug("Global continuous CTC alignment detected as anomalous (trellis drift/collapse)")
                 if provenance is not None:
                     provenance["fallback_reason"] = "global_alignment_failed_health_checks"
         except Exception as error:
             if provenance is not None:
                 provenance["fallback_reason"] = str(error)
-            LOGGER.warning("Global continuous CTC alignment failed: %s", error)
+            LOGGER.debug("Global continuous CTC alignment failed: %s", error)
 
     if not global_succeeded:
         if has_line_timestamps or anchor_validation is not None:
-            LOGGER.info("Attempting Tier 2 anchor-guided macro-section alignment")
+            LOGGER.debug("Attempting Tier 2 anchor-guided macro-section alignment")
             sample_rate = 16000
             total_samples = waveform.shape[-1]
             audio_duration_sec = total_samples / sample_rate
@@ -2023,11 +2079,11 @@ def _align_known_lyrics(
                     output_lines = macro_output_lines
                     if provenance is not None:
                         provenance["strategy"] = "macro_section_ctc"
-                    LOGGER.info("Tier 2 macro-section alignment succeeded with healthy metrics")
+                    LOGGER.debug("Tier 2 macro-section alignment succeeded with healthy metrics")
                 else:
                     raise RuntimeError("Tier 2 macro-section alignment failed health checks")
             except Exception as error:
-                LOGGER.warning("Tier 2 macro-section alignment failed: %s", error)
+                LOGGER.debug("Tier 2 macro-section alignment failed: %s", error)
                 raise RuntimeError(f"Forced alignment failed health verification: {error}") from error
         else:
             raise RuntimeError("Global alignment unhealthy and no reference timestamps available for macro-sections")
@@ -2125,7 +2181,7 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
     if device == "cpu":
-        LOGGER.warning("CUDA is unavailable; transcription will run on CPU")
+        _event("GPU unavailable. Transcription will use the CPU and may take longer.", kind="warning")
 
     model = WhisperModel(
         config["whisper_model"],
@@ -2547,7 +2603,7 @@ def _render_video(
         if metrics is not None:
             metrics["encoder"] = options[1]
         if frame_writer is None:
-            _run(command)
+            _encode_progress(command, duration)
         else:
             frame_writer(command, duration)
 
@@ -2557,10 +2613,12 @@ def _render_video(
                 encode(["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "25", "-b:v", "0"])
                 return
             except subprocess.CalledProcessError:
-                LOGGER.warning("NVENC failed; restarting the render with libx264")
+                _event("GPU encoding failed. Restarting with CPU encoding; this may take longer.", kind="warning")
                 if metrics is not None:
                     metrics["nvenc_fallback"] = True
                 output_path.unlink(missing_ok=True)
+        else:
+            _event("GPU encoding unavailable. Using CPU encoding; this may take longer.", kind="warning")
         encode(["-c:v", "libx264", "-preset", "medium", "-crf", "25"])
     except BaseException:
         output_path.unlink(missing_ok=True)
@@ -2578,12 +2636,14 @@ def _nvenc_available() -> bool:
 
 
 def _create_archive(output_dir: Path, archive_path: Path) -> None:
+    _event("Packaging results", stage="package")
     import zipfile
 
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
         for path in sorted(output_dir.rglob("*")):
             if path.is_file():
                 archive.write(path, path.relative_to(output_dir).as_posix())
+    _event("Packaging results", stage="package", state="done")
 
 
 def _probe_duration(path: Path) -> float:
@@ -2630,14 +2690,12 @@ def _to_centiseconds(seconds: float) -> int:
 
 def _ensure_system_fonts() -> None:
     """Ensure typography packages such as Inter font are available in the runtime."""
-    if not shutil.which("apt-get"):
-        return
     if shutil.which("fc-match"):
         result = subprocess.run(["fc-match", "Inter:bold"], capture_output=True, text=True, check=False)
         if "inter" in result.stdout.lower():
             return
     try:
-        LOGGER.info("Installing system fonts (fonts-inter)...")
+        LOGGER.debug("Installing system fonts (fonts-inter)...")
         install_res = subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-inter"], check=False)
         if install_res.returncode != 0:
             subprocess.run(["apt-get", "update", "-qq"], check=False)
@@ -2645,7 +2703,12 @@ def _ensure_system_fonts() -> None:
         if shutil.which("fc-cache"):
             subprocess.run(["fc-cache", "-f"], check=False)
     except Exception as exc:
-        LOGGER.warning("Failed to ensure system fonts: %s", exc)
+        LOGGER.debug("Failed to ensure system fonts: %s", exc)
+    if shutil.which("fc-match"):
+        result = subprocess.run(["fc-match", "Inter:bold"], capture_output=True, text=True, check=False)
+        if "inter" in result.stdout.lower():
+            return
+    _event("Inter is unavailable. Some text may use a substitute font.", kind="warning")
 
 
 BEBAS_NEUE_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf"
@@ -2661,12 +2724,12 @@ def _ensure_bebas_font() -> None:
     installed = False
     if shutil.which("apt-get"):
         try:
-            LOGGER.info("Installing system fonts (fonts-bebas-neue)...")
+            LOGGER.debug("Installing system fonts (fonts-bebas-neue)...")
             install_res = subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-bebas-neue"], check=False)
             if install_res.returncode == 0:
                 installed = True
         except Exception as exc:
-            LOGGER.warning("apt-get install fonts-bebas-neue failed: %s", exc)
+            LOGGER.debug("apt-get install fonts-bebas-neue failed: %s", exc)
 
     if not installed:
         try:
@@ -2679,14 +2742,16 @@ def _ensure_bebas_font() -> None:
 
             font_path = font_dir / "BebasNeue-Regular.ttf"
             if not font_path.is_file():
-                LOGGER.info("Downloading Bebas Neue font from Google Fonts...")
+                LOGGER.debug("Downloading Bebas Neue font from Google Fonts...")
                 req = urllib.request.Request(BEBAS_NEUE_URL, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=15) as response:
                     font_path.write_bytes(response.read())
-                installed = True
+            installed = font_path.is_file()
         except Exception as exc:
-            LOGGER.warning("Failed to download Bebas Neue font: %s", exc)
+            LOGGER.debug("Failed to download Bebas Neue font: %s", exc)
 
+    if not installed:
+        _event("Bebas Neue is unavailable. Subtitles may use a substitute font.", kind="warning")
     if installed and shutil.which("fc-cache"):
         subprocess.run(["fc-cache", "-f"], check=False)
 
@@ -2694,8 +2759,37 @@ def _ensure_bebas_font() -> None:
 PLAYWRIGHT_PACKAGE = "playwright==1.62.0"
 
 
+
+def _encode_progress(command, duration):
+    """Measure encoded media time without parsing FFmpeg diagnostic messages."""
+    import tempfile
+
+    command = [command[0], "-nostats", "-progress", "pipe:1", *command[1:]]
+    _event("Encoding video", stage="encoding", total=duration, completed=0, reset=True)
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors, text=True)
+        try:
+            for line in process.stdout:
+                if line.startswith("out_time_us="):
+                    try:
+                        completed = min(duration, int(line.partition("=")[2]) / 1_000_000)
+                    except ValueError:
+                        continue
+                    _event("Encoding video", stage="encoding", total=duration, completed=completed)
+            if process.wait():
+                errors.seek(0)
+                details = errors.read()
+                LOGGER.debug("Encoder failed: %s", details)
+                raise subprocess.CalledProcessError(process.returncode, command, stderr=details)
+            _event("Encoding video", stage="encoding", state="done", total=duration, completed=duration)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+
 def _run(command: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
-    LOGGER.info("Running %s", " ".join(command))
+    LOGGER.debug("Running %s", " ".join(command))
     try:
         return subprocess.run(command, check=True, capture_output=capture_output, text=True)
     except subprocess.CalledProcessError as error:
@@ -2707,7 +2801,7 @@ def _run(command: list[str], *, capture_output: bool = False) -> subprocess.Comp
 
 def _run_installer(command: list[str], *, label: str = "Package") -> subprocess.CompletedProcess[str]:
     """Execute an installation command, capturing and reporting full output if it fails."""
-    LOGGER.info("Running installation: %s", " ".join(command))
+    LOGGER.debug("Running installation: %s", " ".join(command))
     try:
         return _run(command, capture_output=True)
     except Exception as error:
@@ -2719,7 +2813,7 @@ def _run_installer(command: list[str], *, label: str = "Package") -> subprocess.
 def _ensure_playwright() -> None:
     """Ensure the Playwright Python package and Chromium browser are installed."""
     if importlib.util.find_spec("playwright") is None:
-        LOGGER.info("Installing Playwright Python package...")
+        _event("Installing browser support", stage="renderer_setup", parent="install_browser")
         installer = (
             ["uv", "pip", "install", "--system", PLAYWRIGHT_PACKAGE]
             if shutil.which("uv")
@@ -2727,11 +2821,12 @@ def _ensure_playwright() -> None:
         )
         _run_installer(installer, label="Playwright Python package")
 
-    LOGGER.info("Installing Chromium and dependencies via Playwright...")
+    _event("Installing Chromium and fonts", stage="renderer_setup", parent="install_browser")
     _run_installer(
         [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
         label="Playwright Chromium and system dependencies",
     )
+    _event("Installing Chromium and fonts", stage="renderer_setup", state="done", parent="install_browser")
 
 
 def _require_commands(*commands: str) -> None:
@@ -2740,12 +2835,23 @@ def _require_commands(*commands: str) -> None:
         raise RuntimeError(f"Missing required commands: {', '.join(missing)}")
 
 
+
+def _failure_description(error):
+    """Expose the cause of a failed tool without embedding its command or traceback."""
+    if isinstance(error, subprocess.CalledProcessError):
+        lines = (error.stderr or error.stdout or "").splitlines()
+        useful = [line.strip() for line in lines if re.search(r"error|failed|invalid|not found", line, re.I)]
+        return useful[-1][:400] if useful else f"External command failed (exit {error.returncode})"
+    return f"{type(error).__name__}: {str(error).splitlines()[0] if str(error) else 'Operation failed'}"[:500]
+
 def _run_with_status() -> None:
     STATUS_PATH.unlink(missing_ok=True)
     try:
         main()
     except Exception as error:
-        status = {"status": "failed", "error": str(error)}
+        description = _failure_description(error)
+        _event(description, kind="failure")
+        status = {"status": "failed", "error": str(error), "error_summary": description}
         if isinstance(error, LyricsPreparationError):
             status["recovery_archive_path"] = str(error.recovery_archive_path)
             status["stage"] = "lyrics"

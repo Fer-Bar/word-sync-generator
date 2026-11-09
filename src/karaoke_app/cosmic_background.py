@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -191,7 +192,7 @@ def render_cosmic_video(
     destination = destination.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     frame_count = max(1, round(duration * fps))
-    LOGGER.info("Generating cosmic background: %s (%s frames)", destination, frame_count)
+    LOGGER.debug("Generating cosmic background: %s (%s frames)", destination, frame_count)
     with tempfile.TemporaryDirectory(prefix="cosmic-", dir=destination.parent) as temporary:
         output = Path(temporary) / "background.mp4"
         command = [
@@ -203,12 +204,19 @@ def render_cosmic_video(
         with tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=errors)
             try:
+                last_progress = time.perf_counter()
                 for frame in range(frame_count):
                     # Exactly one temporal period even when duration * fps is fractional.
                     seconds = start + frame * duration / frame_count
                     process.stdin.write(renderer.frame(seconds).tobytes())
-                    if (frame + 1) % max(1, frame_count // 4) == 0:
-                        LOGGER.info("Cosmic background: %.0f%%", (frame + 1) / frame_count * 100)
+                    now = time.perf_counter()
+                    if frame == 0 or now - last_progress >= .5 or frame + 1 == frame_count:
+                        last_progress = now
+                        LOGGER.info("Background progress", extra={"user_event": {"kind": "stage",
+                            "id": "background_frames", "parent": "background", "label": "Drawing background frames",
+                            "completed": frame + 1, "total": frame_count,
+                            "detail": f"{frame + 1:,}/{frame_count:,} frames",
+                            "state": "done" if frame + 1 == frame_count else "running"}})
                 process.stdin.close()
                 if process.wait() != 0:
                     errors.seek(0)

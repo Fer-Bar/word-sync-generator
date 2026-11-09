@@ -18,7 +18,7 @@ from colab.karaoke_job import _resolve_song_identity
     ('Artista - Canción (Audio Oficial)', 'Artista', 'Canción'),
 ])
 def test_infers_common_music_titles(title, artist, track, caplog):
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         result = _resolve_song_identity({'title': title, 'uploader': 'Some channel'}, {})
     assert result == {'title': track, 'track': track, 'artist': artist, 'video_title': title}
     assert 'inferred' in caplog.text

@@ -426,7 +426,7 @@ def test_direct_composition_matches_lossless_mov_path(tmp_path, browser_font, mo
               "watermark": {"path": str(logo)}, "intro_card": {"path": str(intro), "start": 0, "end": .6},
               "lyrics_overlay": str(overlay)}
 
-    def execute(command):
+    def execute(command, duration):
         return subprocess.run([ffmpeg, "-v", "error", *command[1:]], check=True, capture_output=True)
 
     def write_frames(command, duration):
@@ -435,7 +435,7 @@ def test_direct_composition_matches_lossless_mov_path(tmp_path, browser_font, mo
     baseline, streaming = tmp_path / "baseline.mp4", tmp_path / "streaming.mp4"
     with patch.object(karaoke_job, "_probe_duration", return_value=3), \
          patch.object(karaoke_job, "_nvenc_available", return_value=False), \
-         patch.object(karaoke_job, "_run", side_effect=execute):
+         patch.object(karaoke_job, "_encode_progress", side_effect=execute):
         karaoke_job._render_video(audio_path, baseline, config)
         karaoke_job._render_video(audio_path, streaming, {**config, "lyrics_overlay": "pipe:0"},
                                   frame_writer=write_frames)

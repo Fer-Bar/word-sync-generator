@@ -188,3 +188,65 @@ La recuperación experimental probada con Jessie Reyez fue revertida tras regres
 observadas en otras canciones. Se conserva la lógica de alineación anterior a ese
 experimento. Los resultados requieren revisión: las pruebas automáticas no certifican
 precisión acústica. Véase la [auditoría del desfase](docs/alignment-audit-20261105.md).
+
+### Console progress and appearance options
+
+Prepare, choose an appearance, validate, and render:
+
+```sh
+uv run karaoke source "https://www.youtube.com/watch?v=VIDEO_ID" --language es
+uv run karaoke configure outputs/JOB_ID --interactive
+uv run karaoke render outputs/JOB_ID --dry-run
+uv run karaoke render outputs/JOB_ID
+```
+
+The interface is in English. `source` shows video metadata before the audio download
+finishes, then download progress, lyric source, preparation stages, and output paths.
+The existing `uv run karaoke URL` syntax still works. Artist and channel are shown
+separately; missing song metadata can be supplied with `--title` and `--artist`.
+
+`configure --interactive` starts from saved settings. Enter keeps the current value;
+the final confirmation saves `job.json` atomically. Cancelling or pressing Ctrl+C
+leaves the job unchanged. Procedural backgrounds can be previewed in a temporary
+three-second video before saving. Open the displayed path while the assistant is
+waiting; the preview is removed when you continue. Background image files must be
+inside the job folder; logo and artwork palette paths may point to external files.
+
+Flags remain available for scripts:
+
+```sh
+uv run karaoke configure outputs/JOB_ID --visual-style plus --background-style fluid
+uv run karaoke configure outputs/JOB_ID --background-color '#123456'
+uv run karaoke render outputs/JOB_ID --mode lyrics --background-style cosmic-sand --seed 42
+```
+
+Omitted options preserve saved settings. `configure` persists overrides; `render`
+applies them to that run only. `render --dry-run` validates required assets and timed
+lyrics, and displays the resolved appearance without writing files or starting Colab.
+It does not check GPU availability, authentication, or remote dependencies.
+`configure --help` and `render --help` group appearance and watermark options.
+
+Console output reports meaningful stages and outcomes, not provider queries,
+candidate lists, installation commands, or alignment internals. Download percentages
+use byte counts; encoding and frame progress use measured work. Other stages show
+activity and elapsed time. On Colab, the startup indicator is replaced by the actual
+stage: opening the project, generating the background, installing browser support,
+drawing frames, finalizing the video, and packaging results. Frame progress includes
+completed/total counts. If no stage update arrives for 60 seconds, the CLI reports
+that silence and the last known stage; it does not claim that work is still advancing.
+In an interactive terminal, the active stage and counters update in place. Completed
+stages leave one summary with their duration. `Colab ready` includes connection,
+uploads, and pipeline startup; sub-second stages show `<1s`. Nested frame/install steps do not leave
+redundant start/done lines. When output is redirected, stage changes, rate-limited
+percentage milestones, and results are printed. `NO_COLOR=1` disables colors. Interactive configuration requires a terminal.
+
+Recoverable provider attempts stay in diagnostics. Remaining lyric validation issues
+are summarized after local recovery, with the report path. GPU fallbacks, missing fonts,
+and a session that could not be stopped remain visible because they affect the result
+or require action. OAuth authorization URLs and code prompts remain available.
+
+Each execution keeps redacted diagnostics in `.karaoke/logs/` (excluded from Git).
+Errors show the operation and the underlying exception or tool error, then point to
+the full log. Known Colab session-limit errors include a suggested action.
+`--verbose` also displays technical details live. These
+logs are local and are not automatically deleted. Help and dry runs do not create logs.

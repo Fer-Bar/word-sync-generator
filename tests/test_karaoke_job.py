@@ -923,7 +923,7 @@ class AlignKnownLyricsTests(unittest.TestCase):
 
 
 class RenderVideoTests(unittest.TestCase):
-    @patch("colab.karaoke_job._run")
+    @patch("colab.karaoke_job._encode_progress")
     @patch("colab.karaoke_job._nvenc_available", return_value=False)
     @patch("colab.karaoke_job._probe_duration", return_value=120.0)
     def test_render_video_without_ass_omits_video_filter(
@@ -944,7 +944,7 @@ class RenderVideoTests(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("-vf", cmd)
 
-    @patch("colab.karaoke_job._run")
+    @patch("colab.karaoke_job._encode_progress")
     @patch("colab.karaoke_job._nvenc_available", return_value=False)
     @patch("colab.karaoke_job._probe_duration", return_value=120.0)
     def test_render_video_with_ass_includes_ass_filter(

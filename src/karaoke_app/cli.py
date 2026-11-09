@@ -18,8 +18,9 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
-from karaoke_app.themes import THEMES, apply_render_theme
-from karaoke_app.visual_config import BACKGROUND_STYLES, VISUAL_STYLES, apply_visual_options, preparation_visuals
+from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
+from karaoke_app.themes import THEMES
+from karaoke_app.visual_config import BACKGROUND_STYLES, VISUAL_STYLES, preparation_visuals
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -44,9 +45,33 @@ REMOTE_SOURCE_BUNDLE = Path("/content/karaoke_source_job.zip")
 COLOR_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
 
+def organize_help(parser: argparse.ArgumentParser) -> None:
+    """Group related settings while preserving existing command options."""
+    parser.add_argument("--verbose", action="store_true", help="Show detailed process output for troubleshooting")
+    groups = {
+        "Appearance · typography, background and palette": {
+            "visual_style", "background_style", "background_image", "background_color", "cover", "theme",
+            "seed", "graphic_style", "graphic_palette", "title_layout", "align", "resolution", "mode",
+        },
+        "Watermark": {"logo", "no_logo", "logo_position", "logo_scale", "logo_opacity"},
+        "Colab and output": {"gpu", "auth", "timeout", "output_dir", "verbose"},
+    }
+    for title, names in groups.items():
+        group = parser.add_argument_group(title)
+        for action in list(parser._optionals._group_actions):
+            if action.dest in names:
+                parser._optionals._group_actions.remove(action)
+                group._group_actions.append(action)
+    parser.epilog = ("Commands: source, configure, render, background, preview, thumbnail, intro, migrate. "
+        "Save appearance: karaoke configure JOB --visual-style plus --background-style fluid. "
+        "Render saved settings: karaoke render JOB. Preview background: karaoke background JOB."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the preparation command parser."""
-    parser = argparse.ArgumentParser(description="Prepare a durable karaoke job on Google Colab.")
+    parser = argparse.ArgumentParser(description="Prepare karaoke audio and lyrics on Google Colab.",
+        epilog="Commands: source, configure, render, background, preview, thumbnail, intro, migrate.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--title", help="Track title override used for LRCLIB matching")
@@ -107,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
     parser.add_argument("--timeout", type=int, default=14_400, help="Remote execution timeout in seconds")
+    organize_help(parser)
     return parser
 
 
@@ -117,6 +143,9 @@ def build_render_parser() -> argparse.ArgumentParser:
         description="Render corrected lyrics from a prepared job folder without repeating preparation.",
     )
     parser.add_argument("job_dir", type=Path)
+    parser.add_argument("--dry-run", action="store_true", help="Validate and show settings without starting Colab")
+    parser.add_argument("--background-image", type=Path, help="Background image inside the job folder")
+    parser.add_argument("--background-color", help="Solid RGB background color")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
     parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
     parser.add_argument("--graphic-palette", choices=("light", "dark"))
@@ -167,6 +196,7 @@ def build_render_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
     parser.add_argument("--timeout", type=int, default=14_400)
+    organize_help(parser)
     return parser
 
 
@@ -237,9 +267,41 @@ def run_background(args: argparse.Namespace) -> Path:
     return result
 
 
+
+def show_commands() -> None:
+    """Show the main workflow without overwhelming it with source-only flags."""
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    table = Table(title="Karaoke", show_header=False, box=None)
+    for command, description in (
+        ("source URL or FILE", "Prepare audio and timed lyrics"),
+        ("configure JOB --interactive", "Choose and save appearance"),
+        ("render JOB --dry-run", "Validate files and review settings"),
+        ("render JOB", "Render videos on Colab"),
+        ("background JOB", "Preview the animated background"),
+        ("preview JOB", "Preview timed lyrics locally"),
+        ("thumbnail JOB / intro JOB", "Generate artwork"),
+        ("migrate", "Update existing job formats"),
+    ):
+        table.add_row(command, description)
+    console.print(table)
+    console.print("Use karaoke COMMAND --help for options.")
+    console.print('Example: uv run karaoke source "https://www.youtube.com/watch?v=VIDEO_ID"')
+
 def main() -> int:
     """Run preparation, intro generation, or final render orchestration."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if not sys.argv[1:] or sys.argv[1:] in (["--help"], ["-h"]):
+        show_commands()
+        return 0
+    verbose = "--verbose" in sys.argv[1:]
+    log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
+                                 "--help" not in sys.argv and "-h" not in sys.argv)
+    if verbose:
+        sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
+    if sys.argv[1:2] == ["source"]:
+        del sys.argv[1]
 
     try:
         if sys.argv[1:2] == ["configure"]:
@@ -272,9 +334,23 @@ def main() -> int:
     except KeyboardInterrupt:
         LOGGER.error("Interrupted")
         return 130
-    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
-        LOGGER.error("%s", error)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, EOFError) as error:
+        LOGGER.debug("Operation failed", exc_info=True)
+        if isinstance(error, ProcessFailure):
+            message = str(error)
+        elif isinstance(error, subprocess.CalledProcessError):
+            detail = failure_summary(error.stdout, error.stderr)
+            message = f"External process failed (exit {error.returncode}).\n{detail}"
+        else:
+            message = str(error).splitlines()[0][:400] or type(error).__name__
+        LOGGER.error("%s", message)
+        if log_path:
+            LOGGER.error("Diagnostics: %s", log_path)
         return 1
+    finally:
+        for handler in logging.getLogger().handlers:
+            if hasattr(handler, "progress"):
+                handler.close()
     return 0
 
 
@@ -323,7 +399,8 @@ def run_job(args: argparse.Namespace) -> Path:
 
     cookies = None if args.no_cookies else args.cookies.resolve()
     if cookies and not cookies.is_file():
-        LOGGER.warning("Cookies file not found; continuing without cookies: %s", cookies)
+        if args.cookies != DEFAULT_COOKIES:
+            LOGGER.warning("Requested cookies file not found; continuing without it: %s", cookies)
         cookies = None
     hf_token = _load_hf_token()
 
@@ -437,20 +514,29 @@ def run_job(args: argparse.Namespace) -> Path:
         from karaoke_app.lyric_references import prefetch_genius_reference
 
         load_dotenv(PROJECT_ROOT / ".env", override=False)
-        local_reference = prefetch_genius_reference(
-            job["lyrics"], {"title": args.title, "artist": args.artist}, COLAB_SCRIPT,
-        )
+        prefetch_visible = not args.no_lrclib and bool(args.title or args.artist or args.genius_url)
+        if prefetch_visible:
+            notify("Checking lyric references", stage="reference_prefetch")
+        try:
+            local_reference = prefetch_genius_reference(
+                job["lyrics"], {"title": args.title, "artist": args.artist}, COLAB_SCRIPT,
+            )
+        finally:
+            if prefetch_visible:
+                notify("Checking lyric references", stage="reference_prefetch", state="stopped")
         if local_reference:
             reference_path = temporary_path / "genius_reference.json"
             reference_path.write_text(json.dumps(local_reference, ensure_ascii=False), encoding="utf-8")
             resources[REMOTE_GENIUS_REFERENCE] = reference_path
             job["lyrics"]["genius_reference_path"] = str(REMOTE_GENIUS_REFERENCE)
             job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
-            LOGGER.info("Local Genius fallback ready for acoustic alignment; LRCLIB keeps priority")
+            LOGGER.debug("Local Genius fallback ready for acoustic alignment; LRCLIB keeps priority")
         _create_source_bundle(resources, source_bundle)
 
+        notify("Preparing render", stage="local_render", state="stopped")
         colab = ["colab", f"--auth={args.auth}"]
         try:
+            notify("Preparing Colab", stage="colab_setup")
             session_requested = True
             _run([*colab, "new", "--session", session, "--gpu", args.gpu])
             _upload(colab, session, job_path, REMOTE_JOB)
@@ -500,7 +586,8 @@ def run_job(args: argparse.Namespace) -> Path:
                     raise RuntimeError(f"Remote execution failed: {exec_error}") from exec_error
                 if status_error is not None:
                     raise status_error
-                err = status.get("error", f"exit code {exec_res.returncode if exec_res else 'unknown'}")
+                fallback = f"exit code {exec_res.returncode if exec_res else 'unknown'}"
+                err = status.get("error_summary") or status.get("error", fallback)
                 raise RuntimeError(f"{status.get('stage', 'remote')}: {err}")
             _download_with_retry(colab, session, REMOTE_ARCHIVE, archive_path)
             try:
@@ -537,9 +624,10 @@ def run_job(args: argparse.Namespace) -> Path:
         from karaoke_app.lyric_repair import repair_prepared_lyrics
 
         load_dotenv(PROJECT_ROOT / ".env", override=False)
+        notify("Checking prepared lyrics", stage="review")
         try:
             repair = repair_prepared_lyrics(output_dir, COLAB_SCRIPT, genius_url=args.genius_url)
-            LOGGER.info("Local lyric reference recovery: %s", repair)
+            LOGGER.debug("Local lyric reference recovery: %s", repair)
             if repair.get("estimated_words"):
                 LOGGER.info(
                     "Reference text applied; %s word timings estimated. Optional acoustic realignment: %s",
@@ -549,13 +637,34 @@ def run_job(args: argparse.Namespace) -> Path:
             LOGGER.warning(
                 "Local lyric reference recovery failed (%s); keeping prepared artifacts", type(error).__name__,
             )
+        finally:
+            notify("Checking prepared lyrics", stage="review", state="stopped")
 
+    _report_lyrics_review(output_dir)
     _save_client_performance(output_dir, began, args.gpu)
+    LOGGER.info("Completed in %.1fs", time.perf_counter() - began)
     LOGGER.info("Artifacts saved to %s", output_dir)
     LOGGER.info("To render final videos on Colab, run:")
     LOGGER.info("uv run karaoke render %s", output_dir)
     return output_dir
 
+
+
+def _report_lyrics_review(root: Path) -> None:
+    """Report unresolved review needs after all local recovery has finished."""
+    path = root / "lyrics_validation.json"
+    if not path.is_file():
+        LOGGER.warning("Lyrics validation unavailable. Review the prepared lyrics before rendering.")
+        return
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        LOGGER.warning("Lyrics validation unreadable. Review the prepared lyrics before rendering: %s", path)
+        return
+    if report.get("needs_review"):
+        count = sum(bool(line.get("needs_review")) for line in report.get("lines", []))
+        detail = f"{count} flagged line{'s' if count != 1 else ''}" if count else "validation incomplete"
+        LOGGER.warning("Lyrics need review (%s): %s", detail, path)
 
 def render_colab(args: argparse.Namespace) -> Path:
     """Validate lyrics locally and render the prepared job on Colab."""
@@ -563,62 +672,30 @@ def render_colab(args: argparse.Namespace) -> Path:
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
     from karaoke_app.ass import generate_ass
-    from karaoke_app.branding import store_shared_logo
-    from karaoke_app.job_document import load_job_document, resolve_job_asset
+    from karaoke_app.job_document import resolve_job_asset
     from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
     from karaoke_app.style import StyleConfig
+    from karaoke_app.visual_config import resolve_options, show_appearance
 
-    _validate_installation()
     root = args.job_dir.expanduser().resolve()
-    document, selected_theme = apply_render_theme(load_job_document(root), getattr(args, "theme", "job"))
-    document = apply_visual_options(
-        document, visual_style=getattr(args, "visual_style", None),
-        background_style=getattr(args, "background_style", None), cover=getattr(args, "cover", None),
-    )
-    if getattr(args, "seed", None) is not None:
-        document, _ = apply_render_theme(document, "job", args.seed)
-    LOGGER.info("Render theme: %s; background seed: %s", selected_theme, document["background"].get("seed", "n/a"))
-    if getattr(args, "no_logo", False):
-        document["watermark"] = {"enabled": False}
-    elif getattr(args, "logo", None):
-        logo_path = args.logo.resolve()
-        if not logo_path.is_file():
-            raise FileNotFoundError(f"Logo not found: {logo_path}")
-        document["watermark"] = {
-            "enabled": True,
-            "path": store_shared_logo(logo_path),
-            "position": getattr(args, "logo_position", None) or "top_left",
-            "scale": getattr(args, "logo_scale", None) or 0.18,
-            "margin": 0.05,
-            "opacity": 0.85,
-        }
-    watermark = document.get("watermark") or {"enabled": False}
-    if watermark.get("enabled", True):
-        from karaoke_app.job_document import resolve_watermark_path
-
-        watermark["path"] = store_shared_logo(resolve_watermark_path(root, watermark.get("path")))
-        for name in ("position", "scale", "opacity"):
-            override = getattr(args, f"logo_{name}", None)
-            if override is not None:
-                watermark[name] = override
-        document["watermark"] = watermark
-    from karaoke_app.fomo import apply_graphic_options
-    from karaoke_app.job_document import validate_job_document
+    document, selected_theme = resolve_options(root, vars(args))
+    show_appearance(document)
     from karaoke_app.srt import generate_srt
 
-    document = apply_graphic_options(document, graphic_style=getattr(args, "graphic_style", None),
-                                         graphic_palette=getattr(args, "graphic_palette", None),
-                                     title_layout=getattr(args, "title_layout", None),
-                                     align=getattr(args, "align", None))
-    if (document.get("watermark") or {}).get("enabled", False):
-        for name in ("position", "scale", "opacity"):
-            override = getattr(args, f"logo_{name}", None)
-            if override is not None:
-                document["watermark"][name] = override
-    document = validate_job_document(document)
+    modes = ("karaoke", "lyrics") if args.mode == "both" else (args.mode,)
+    for mode in modes:
+        key = "instrumental_audio" if mode == "karaoke" else "original_audio"
+        resolve_job_asset(root, document["media"][key], f"{mode} audio")
+    if document["background"]["kind"] in {"image", "video"}:
+        resolve_job_asset(root, document["background"]["path"], "background")
 
     lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
     lyrics = load_lyrics_file(lyrics_path, require_words=True)
+    if getattr(args, "dry_run", False):
+        LOGGER.info("Validation passed · mode: %s · no files changed; Colab not started", args.mode)
+        return root
+    _validate_installation()
+    notify("Preparing render", stage="local_render")
     transcript = lyrics_to_transcript(lyrics)
     srt_content = generate_srt(transcript)
 
@@ -670,8 +747,10 @@ def render_colab(args: argparse.Namespace) -> Path:
             ),
             encoding="utf-8",
         )
+        notify("Preparing render", stage="local_render", state="stopped")
         colab = ["colab", f"--auth={args.auth}"]
         try:
+            notify("Preparing Colab", stage="colab_setup")
             session_requested = True
             _run([*colab, "new", "--session", session, "--gpu", args.gpu])
             _upload(colab, session, config_path, REMOTE_JOB)
@@ -691,7 +770,8 @@ def render_colab(args: argparse.Namespace) -> Path:
             _download_with_retry(colab, session, REMOTE_STATUS, status_path)
             status = json.loads(status_path.read_text(encoding="utf-8"))
             if status.get("status") != "completed":
-                raise RuntimeError(f"Remote render failed: {status.get('error', 'unknown error')}")
+                detail = status.get("error_summary") or status.get("error", "unknown error")
+                raise RuntimeError(f"Remote render failed: {detail}")
             _download_with_retry(colab, session, REMOTE_ARCHIVE, archive_path)
             output_dir.parent.mkdir(parents=True, exist_ok=True)
             _extract_archive(archive_path, output_dir)
@@ -710,6 +790,7 @@ def render_colab(args: argparse.Namespace) -> Path:
         prune_renders(root)
     except OSError as error:
         LOGGER.warning("Render saved, but old renders could not be removed: %s", error)
+    LOGGER.info("Completed in %.1fs", time.perf_counter() - began)
     LOGGER.info("Rendered artifacts saved to %s", output_dir)
     return output_dir
 
@@ -917,7 +998,7 @@ def _download_with_retry(colab: list[str], session: str, remote: Path, local: Pa
             if result.returncode == 0 and partial.is_file():
                 partial.replace(local)
                 return
-            error = f"exit code {result.returncode}"
+            error = f"exit code {result.returncode}: {failure_summary(result.stdout, result.stderr)}"
         except (OSError, subprocess.SubprocessError) as failure:
             error = str(failure)
     raise RuntimeError(f"Could not download {remote} after 3 attempts: {error}")
@@ -929,7 +1010,7 @@ def _stop_session(colab: list[str], session: str) -> bool:
         if result.returncode == 0:
             return True
     except (OSError, subprocess.SubprocessError) as error:
-        LOGGER.error("Could not stop session %s: %s", session, error)
+        LOGGER.debug("Could not stop session %s: %s", session, error)
     LOGGER.error("Session %s may still be running; stop it manually", session)
     return False
 
@@ -937,13 +1018,7 @@ def _stop_session(colab: list[str], session: str) -> bool:
 def _run(
     command: list[str], *, check: bool = True, timeout: float | None = None
 ) -> subprocess.CompletedProcess[str]:
-    LOGGER.info("Running %s", " ".join(command))
-    began = time.perf_counter()
-    try:
-        return subprocess.run(command, check=check, text=True, timeout=timeout)
-    finally:
-        operation = command[2] if command[0] == "colab" and len(command) > 2 else command[0]
-        LOGGER.info("Command %s: %.2fs", operation, time.perf_counter() - began)
+    return run_process(command, check=check, timeout=timeout)
 
 
 if __name__ == "__main__":

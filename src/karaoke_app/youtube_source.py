@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from karaoke_app.terminal import failure_summary, notify, stream_process
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -26,24 +28,59 @@ def download_youtube(url: str, directory: Path, cookies: Path | None = None) -> 
         sys.executable, "-m", "yt_dlp", "--no-config", "--no-playlist",
         "--remote-components", "ejs:github", "--js-runtimes", "deno",
         "--write-info-json", "-f", "bestaudio/best", "--output", str(directory / "source.%(ext)s"),
-        "--print", "after_move:filepath", "--no-simulate",
+        "--print", "before_dl:KARAOKE_VIDEO %(.{title,artist,uploader,duration})j",
+        "--print", "after_move:KARAOKE_FILE %(filepath)j", "--no-simulate", "--newline", "--progress",
+        "--progress-delta", "0.5", "--progress-template", "download:KARAOKE_DOWNLOAD %(progress)j",
     ]
-    LOGGER.info("Downloading YouTube audio locally before starting Colab")
+    notify("Finding YouTube video", stage="youtube")
+    downloaded = []
+
+    def on_line(line):
+        prefix, _, payload = line.strip().partition(" ")
+        if prefix not in {"KARAOKE_VIDEO", "KARAOKE_DOWNLOAD", "KARAOKE_FILE"}:
+            return
+        try:
+            value = json.loads(payload)
+        except ValueError:
+            return
+        if prefix == "KARAOKE_FILE" and isinstance(value, str):
+            downloaded.append(Path(value))
+        elif prefix == "KARAOKE_VIDEO" and isinstance(value, dict):
+            values = {"Video": value.get("title"), "Artist": value.get("artist"),
+                      "Channel": value.get("uploader")}
+            duration = value.get("duration")
+            if isinstance(duration, (int, float)):
+                values["Duration"] = f"{int(duration) // 60}:{int(duration) % 60:02d}"
+            LOGGER.info("Video found", extra={"user_event": {"kind": "metadata", "values": values}})
+            notify("Finding YouTube video", stage="youtube", state="done")
+        elif prefix == "KARAOKE_DOWNLOAD" and isinstance(value, dict):
+            speed, eta = value.get("speed"), value.get("eta")
+            details = []
+            if isinstance(speed, (int, float)):
+                details.append(f"{speed / 1024 ** 2:.1f} MB/s")
+            if isinstance(eta, (int, float)):
+                details.append(f"{int(eta)}s left")
+            notify("Downloading audio", stage="download_audio", completed=value.get("downloaded_bytes", 0),
+                   total=value.get("total_bytes") or value.get("total_bytes_estimate"),
+                   detail=" · ".join(details), unit="bytes")
+
     try:
-        result = subprocess.run([*command, url], capture_output=True, text=True, timeout=600)
+        result = stream_process([*command, url], timeout=600, on_line=on_line)
         if result.returncode and cookies:
-            LOGGER.info("Anonymous YouTube download failed; retrying locally with cookies")
-            result = subprocess.run(
-                [*command, "--cookies", str(cookies), url], capture_output=True, text=True, timeout=600,
-            )
+            notify("Download attempt failed. Retrying with local cookies.")
+            notify("Downloading audio", stage="download_audio", reset=True)
+            result = stream_process([*command, "--cookies", str(cookies), url], timeout=600, on_line=on_line)
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError("Local YouTube download timed out; no Colab session started") from error
+        raise RuntimeError("YouTube download timed out; no Colab session started. Retry the source command.") from error
     if result.returncode:
-        raise RuntimeError(f"Local YouTube download failed; no Colab session started:\n{result.stderr.strip()}")
-    lines = result.stdout.strip().splitlines()
-    path = Path(lines[-1]) if lines else directory / "missing"
+        cause = failure_summary(result.stdout, result.stderr)
+        raise RuntimeError(f"YouTube download failed; no Colab session started. {cause}")
+    path = downloaded[-1] if downloaded else directory / "missing"
     if not path.is_file() or not path.stat().st_size:
         raise RuntimeError("YouTube did not produce a usable local audio file")
     raw = json.loads(path.with_suffix(".info.json").read_text(encoding="utf-8"))
+    notify("Downloading audio", stage="download_audio", state="done",
+           completed=path.stat().st_size, total=path.stat().st_size)
+    notify(f"Audio ready · {path.stat().st_size / 1024 ** 2:.1f} MB")
     keys = ("title", "track", "artist", "creator", "uploader", "album", "language", "duration", "webpage_url")
     return path, {key: raw.get(key) for key in keys}

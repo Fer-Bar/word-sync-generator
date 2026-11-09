@@ -173,7 +173,7 @@ def test_watermark_keeps_its_top_left_position_during_intro(tmp_path):
     with (
         patch.object(karaoke_job, "_probe_duration", return_value=10),
         patch.object(karaoke_job, "_nvenc_available", return_value=False),
-        patch.object(karaoke_job, "_run") as run,
+        patch.object(karaoke_job, "_encode_progress") as run,
     ):
         karaoke_job._render_video(tmp_path / "audio.wav", tmp_path / "video.mp4", config)
     command = run.call_args.args[0]

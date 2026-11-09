@@ -15,6 +15,7 @@ dependencies = [
     "playwright>=1.55,<2",
     "lyricsgenius>=3.7,<4",
     "yt-dlp[default]>=2026.10.26",
+    "rich>=15.0.0",
 ]
 
 [project.scripts]

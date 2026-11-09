@@ -283,7 +283,7 @@ def genius_reference(
     track = metadata.get("track") or metadata.get("title") or ""
     artist = metadata.get("artist")
     if not track or not artist:
-        LOGGER.info("Genius search skipped: missing track or artist (track=%r artist=%r)", track, artist)
+        LOGGER.debug("Genius search skipped: missing track or artist (track=%r artist=%r)", track, artist)
         return None
     if url:
         url = validate_genius_url(url)
@@ -295,7 +295,7 @@ def genius_reference(
     else:
         response = PublicAPI.search_songs(client, f"{track} {artist}", per_page=10)
         sections = response.get("sections", [])
-    LOGGER.info("Genius search: track=%r artist=%r", track, artist)
+    LOGGER.debug("Genius search: track=%r artist=%r", track, artist)
     candidates = []
     seen_hits = 0
     for section in sections:
@@ -308,7 +308,7 @@ def genius_reference(
                 "plainLyrics": "metadata check",
             }
             if not candidate_is_safe(candidate, track=track, artist=artist, duration=None):
-                LOGGER.info(
+                LOGGER.debug(
                     "Genius candidate rejected by metadata check: title=%r artist=%r id=%r",
                     candidate["trackName"], candidate["artistName"], song.get("id"),
                 )
@@ -318,19 +318,19 @@ def genius_reference(
                 continue
             if song.get("id") not in {item.get("id") for item in candidates}:
                 candidates.append(song)
-    LOGGER.info("Genius search returned %d hits; %d safe unique matches", seen_hits, len(candidates))
+    LOGGER.debug("Genius search returned %d hits; %d safe unique matches", seen_hits, len(candidates))
     if len(candidates) != 1:
-        LOGGER.info("Genius reference unavailable: expected one unambiguous match, got %d", len(candidates))
+        LOGGER.debug("Genius reference unavailable: expected one unambiguous match, got %d", len(candidates))
         return None
     song = candidates[0]
     song_url = validate_genius_url(song["url"])
-    LOGGER.info("Genius selected id=%s title=%r artist=%r url=%s", song.get("id"), song.get("title"),
+    LOGGER.debug("Genius selected id=%s title=%r artist=%r url=%s", song.get("id"), song.get("title"),
                 (song.get("primary_artist") or {}).get("name"), song_url)
     text = client.lyrics(song_url=song_url, remove_section_headers=False)
     if not text or not plain_lines(text):
-        LOGGER.info("Genius selected match returned no usable lyrics: id=%s", song.get("id"))
+        LOGGER.debug("Genius selected match returned no usable lyrics: id=%s", song.get("id"))
         return None
-    LOGGER.info("Genius lyrics retrieved: id=%s lines=%d", song.get("id"), len(plain_lines(text)))
+    LOGGER.debug("Genius lyrics retrieved: id=%s lines=%d", song.get("id"), len(plain_lines(text)))
     return {
         "source": "genius",
         "id": song.get("id"),
@@ -353,7 +353,7 @@ def resolve_reference(
     """Resolve explicit TXT, LRCLIB, then Genius; keep failures and source evidence."""
     evidence: dict[str, Any] = {"attempts": []}
     if options.get("disable_lrclib"):
-        LOGGER.info("Lyric references disabled; using Whisper")
+        LOGGER.debug("Lyric references disabled; using Whisper")
         evidence["source"] = "whisper"
         return None, evidence
     if options.get("text_path"):
@@ -365,7 +365,7 @@ def resolve_reference(
         evidence.update(source="txt", filename=path.name, original_text=text, lines=lines)
         return {"version": "1.0", "metadata": dict(metadata), "lines": lines}, evidence
     if record:
-        LOGGER.info("Resolving LRCLIB record: id=%r track=%r artist=%r", record.get("id"),
+        LOGGER.debug("Resolving LRCLIB record: id=%r track=%r artist=%r", record.get("id"),
                     record.get("trackName"), record.get("artistName"))
         evidence["lrclib_record"] = record
         try:
@@ -387,7 +387,7 @@ def resolve_reference(
                     evidence["lines"] = copy.deepcopy(desired)
             return document, evidence
         except (ValueError, KeyError, TypeError) as error:
-            LOGGER.warning("LRCLIB record %r could not be converted to lyrics: %s", record.get("id"), error)
+            LOGGER.debug("LRCLIB record %r could not be converted to lyrics: %s", record.get("id"), error)
             evidence["attempts"].append({"source": "lrclib", "error": str(error)})
     if options.get("genius_reference_path"):
         try:
@@ -406,7 +406,7 @@ def resolve_reference(
             candidate_is_safe=candidate_is_safe,
         )
         if reference:
-            LOGGER.info("Using Genius lyric reference: id=%r title=%r artist=%r", reference.get("id"),
+            LOGGER.debug("Using Genius lyric reference: id=%r title=%r artist=%r", reference.get("id"),
                         (reference.get("metadata") or {}).get("title"), (reference.get("metadata") or {}).get("artist"))
             evidence.update(reference)
             return {"version": "1.0", "metadata": dict(metadata), "lines": reference["lines"]}, evidence
@@ -415,7 +415,7 @@ def resolve_reference(
         # A provider failure must not discard the already acquired audio.
         evidence["attempts"].append({"source": "genius", "error": f"{type(error).__name__}: {error}"[:2000]})
     evidence["source"] = "whisper"
-    LOGGER.info("No usable LRCLIB or Genius reference; using Whisper")
+    LOGGER.debug("No usable LRCLIB or Genius reference; using Whisper")
     return None, evidence
 
 
@@ -464,7 +464,7 @@ def prefetch_genius_reference(
             metadata, url=options.get("genius_url"), candidate_is_safe=pipeline._lrclib_candidate_is_safe,
         )
     except Exception as error:
-        LOGGER.info("Local Genius prefetch unavailable (%s); remote resolution remains enabled", type(error).__name__)
+        LOGGER.debug("Local Genius prefetch unavailable (%s); remote resolution remains enabled", type(error).__name__)
         return None
 
 

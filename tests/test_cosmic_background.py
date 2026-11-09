@@ -106,7 +106,7 @@ def test_video_background_loops_under_lyrics_without_dimming_twice(tmp_path, wat
     with (
         patch.object(karaoke_job, "_probe_duration", return_value=30),
         patch.object(karaoke_job, "_nvenc_available", return_value=False),
-        patch.object(karaoke_job, "_run") as run,
+        patch.object(karaoke_job, "_encode_progress") as run,
     ):
         karaoke_job._render_video(tmp_path / "audio.wav", tmp_path / "out.mp4", config, tmp_path / "lyrics.ass")
     command = run.call_args.args[0]
@@ -160,13 +160,13 @@ def test_real_final_composition_repeats_background_under_subtitles_and_logo(tmp_
     )
     output = tmp_path / "final.mp4"
 
-    def run_local(command):
+    def run_local(command, duration):
         return subprocess.run([ffmpeg, *command[1:]], check=True, capture_output=True)
 
     with (
         patch.object(karaoke_job, "_probe_duration", return_value=1),
         patch.object(karaoke_job, "_nvenc_available", return_value=False),
-        patch.object(karaoke_job, "_run", side_effect=run_local),
+        patch.object(karaoke_job, "_encode_progress", side_effect=run_local),
     ):
         karaoke_job._render_video(audio, output, {
             "video": video, "background": {"kind": "video", "value": str(loop)},
