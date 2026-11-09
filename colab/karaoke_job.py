@@ -59,12 +59,13 @@ def _event(label, *, stage=None, **fields):
 
 def configure_runtime_logging() -> None:
     """Enable progress even when a notebook kernel has configured logging already."""
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+    level = os.environ.get("KARAOKE_RUNTIME_LOG_LEVEL", "DEBUG").upper()
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
     root = logging.getLogger()
     # basicConfig is a no-op in an initialized notebook. Preserve its handlers, but
     # allow INFO events from this pipeline and its dynamically loaded renderers.
-    root.setLevel(logging.DEBUG)
-    LOGGER.setLevel(logging.DEBUG)
+    root.setLevel(level)
+    LOGGER.setLevel(level)
     for handler in list(root.handlers):
         if isinstance(handler, EventHandler):
             root.removeHandler(handler)
@@ -550,69 +551,17 @@ def _acquire_source(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     }
 
 
-def _clean_music_title(value: str) -> str:
-    """Remove presentation labels while retaining remix, live and other edition markers."""
-    label = r"(?:official\s+(?:music\s+)?(?:audio|video|lyric\s+video)|lyrics?|audio\s+oficial|video\s+oficial)"
-    value = re.sub(rf"\s*[\[(]\s*{label}\s*[\])]", "", value, flags=re.IGNORECASE)
-    return value.strip().strip('"“”').strip()
-
-
-def _split_featured_artist(value: str) -> tuple[str, str | None]:
-    match = re.search(r"\s+[\[(]?(?:feat\.?|ft\.?|featuring)\s+(.+?)\s*[\])]?$", value, re.IGNORECASE)
-    if match:
-        return value[:match.start()].strip(), match.group(1).strip()
-    return value, None
-
-
 def _resolve_song_identity(raw: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Resolve musical identity with explicit values before conservative title inference."""
-    video_title = raw.get("title") or "karaoke"
-    track = overrides.get("title") or raw.get("track")
-    artist = overrides.get("artist") or raw.get("artist") or raw.get("creator")
-    title = _clean_music_title(video_title)
-    parts = re.split(r"\s+[-–—|]\s+", title)
-    inferred_artist = inferred_track = None
-    if len(parts) == 2 and all(parts):
-        left, right = parts
-        left_artist, _ = _split_featured_artist(left)
-        right_artist, _ = _split_featured_artist(right)
-        known_artist = str(artist).casefold() if artist else None
-        known_track = _clean_music_title(str(track)).casefold() if track else None
-        if known_artist and known_artist == right_artist.casefold():
-            inferred_artist, inferred_track = right, left
-        elif known_artist and known_artist != left_artist.casefold():
-            LOGGER.debug("Title inference skipped: video title conflicts with supplied artist=%r", artist)
-        elif known_track and known_track == left.casefold():
-            inferred_artist, inferred_track = right, left
-        elif known_track and known_track != _split_featured_artist(right)[0].casefold():
-            LOGGER.debug("Title inference skipped: video title conflicts with supplied track=%r", track)
-        else:
-            inferred_artist, inferred_track = left, right
-    elif len(parts) == 1:
-        uploader = raw.get("uploader") or ""
-        topic = re.fullmatch(r"(.+) - Topic", uploader, flags=re.IGNORECASE)
-        if artist or topic:
-            inferred_artist = artist or topic.group(1)
-            inferred_track = title
-    if inferred_track:
-        inferred_track, featured = _split_featured_artist(inferred_track)
-        if featured:
-            inferred_artist = f"{inferred_artist} feat. {featured}"
-        if not artist:
-            artist = inferred_artist
-            LOGGER.debug("Artist inferred from video title/Topic channel: %r", artist)
-        if not track:
-            track = inferred_track
-            LOGGER.debug("Song name inferred from video title: %r", track)
-    if not track:
-        track = video_title
-        LOGGER.debug("Song name unavailable: no track or unambiguous title inference; using video title=%r. "
-                    "Use --title to specify the song name.", video_title)
-    if not artist:
-        LOGGER.debug("Artist unavailable: no artist/creator or unambiguous title inference; uploader=%r. "
-                    "Use --artist to specify the artist.", raw.get("uploader"))
-    LOGGER.debug("Resolved song: track=%r artist=%r", track, artist)
-    return {"title": track, "track": track, "artist": artist, "video_title": video_title}
+    """Use the same identity service from either an uploaded bundle or installed wheel."""
+    uploaded = WORK_DIR / "inputs" / "karaoke_song_identity.py"
+    if uploaded.is_file():
+        spec = importlib.util.spec_from_file_location("karaoke_song_identity", uploaded)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        from karaoke_app import song_identity as module
+
+    return module.resolve_song_identity(raw, overrides, logger=LOGGER)
 
 
 def _yt_dlp_base(config: dict[str, Any]) -> list[str]:

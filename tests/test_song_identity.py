@@ -53,3 +53,20 @@ def test_conflicting_artist_does_not_infer_track():
     result = _resolve_song_identity({'title': 'Other - Song', 'artist': 'Real'}, {})
     assert result['artist'] == 'Real'
     assert result['track'] == 'Other - Song'
+
+
+def test_uploaded_identity_service_matches_installed_service(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+
+    from colab import karaoke_job
+    from karaoke_app import song_identity
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    shutil.copyfile(Path(song_identity.__file__), inputs / "karaoke_song_identity.py")
+    monkeypatch.setattr(karaoke_job, "WORK_DIR", tmp_path)
+    raw = {"title": "Artist - Song (Live)", "uploader": "Unrelated Channel"}
+    expected = song_identity.resolve_song_identity(raw, {})
+    monkeypatch.setattr(song_identity, "resolve_song_identity", lambda *a, **kw: pytest.fail("Used installed service"))
+    assert karaoke_job._resolve_song_identity(raw, {}) == expected

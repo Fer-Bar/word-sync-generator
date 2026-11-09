@@ -142,13 +142,15 @@ job.main()
     assert received[2][1]['completed'] == 1
 
 
-def test_runtime_progress_reinitialization_keeps_host_handlers_and_emits_once():
+@pytest.mark.parametrize("level,debug_visible", [("INFO", False), ("DEBUG", True)])
+def test_runtime_progress_reinitialization_keeps_host_handlers_and_emits_once(level, debug_visible):
     import subprocess
     import sys
     from pathlib import Path
 
     program = f'''
-import logging, sys
+import logging, os, sys
+os.environ["KARAOKE_RUNTIME_LOG_LEVEL"] = {level!r}
 sys.path.insert(0, {str(Path(job.__file__).parent)!r})
 import karaoke_job as job
 logging.basicConfig(level=logging.WARNING)
@@ -157,10 +159,12 @@ job.configure_runtime_logging()
 job.configure_runtime_logging()
 assert all(handler in logging.getLogger().handlers for handler in host_handlers)
 job._event("Generating background", stage="background")
+logging.getLogger("model-download").debug("private-download-detail")
 '''
     result = subprocess.run([sys.executable, '-I', '-c', program], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert result.stdout.count('KARAOKE_EVENT ') == 1
+    assert ("private-download-detail" in result.stderr) is debug_visible
 
 
 def test_slow_frames_report_progress_before_a_second_of_video(monkeypatch, caplog):

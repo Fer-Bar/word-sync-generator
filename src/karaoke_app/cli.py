@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import logging
 import math
@@ -14,11 +13,11 @@ import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
+from karaoke_app.rendering import create_render_bundle as _create_render_bundle
 from karaoke_app.resources import PACKAGE_ROOT, PROJECT_ROOT, logo_resource, runtime_resource
 from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
 from karaoke_app.themes import THEMES
@@ -30,7 +29,6 @@ COLAB_SCRIPT = runtime_resource("karaoke_job.py")
 ASS_MODULE = PACKAGE_ROOT / "ass.py"
 LYRICS_MODULE = PACKAGE_ROOT / "lyrics_file.py"
 REFERENCES_MODULE = PACKAGE_ROOT / "lyric_references.py"
-COSMIC_MODULE = PACKAGE_ROOT / "cosmic_background.py"
 COLAB_REQUIREMENTS = runtime_resource("requirements.txt")
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
 DEFAULT_LOGO = logo_resource("banner.png")
@@ -535,6 +533,7 @@ def run_job(args: argparse.Namespace) -> Path:
             Path("/content/karaoke_ass.py"): ASS_MODULE,
             REMOTE_LYRICS_MODULE: LYRICS_MODULE,
             REMOTE_REFERENCES_MODULE: REFERENCES_MODULE,
+            Path("/content/karaoke_song_identity.py"): PACKAGE_ROOT / "song_identity.py",
         }
         if source_kind == "file":
             resources[Path(remote_source)] = Path(source_value)
@@ -706,50 +705,19 @@ def render_colab(args: argparse.Namespace) -> Path:
     began = time.perf_counter()
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
-    from karaoke_app.ass import generate_ass
-    from karaoke_app.job_document import resolve_job_asset
-    from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
-    from karaoke_app.style import StyleConfig
-    from karaoke_app.visual_config import resolve_options, show_appearance
+    from karaoke_app.rendering import prepare_render, render_subtitles
+    from karaoke_app.visual_config import show_appearance
 
     root = args.job_dir.expanduser().resolve()
-    document, selected_theme = resolve_options(root, vars(args))
-    args.mode = args.mode or document["render"]["mode"]
-    show_appearance(document)
-    from karaoke_app.srt import generate_srt
-
-    modes = ("karaoke", "lyrics") if args.mode == "both" else (args.mode,)
-    for mode in modes:
-        key = "instrumental_audio" if mode == "karaoke" else "original_audio"
-        resolve_job_asset(root, document["media"][key], f"{mode} audio")
-    if document["background"]["kind"] in {"image", "video"}:
-        resolve_job_asset(root, document["background"]["path"], "background")
-
-    lyrics_path = resolve_job_asset(root, document["media"]["lyrics"], "lyrics")
-    lyrics = load_lyrics_file(lyrics_path, require_words=True)
+    request = prepare_render(root, vars(args), report=show_appearance)
+    document, selected_theme, args.mode = request.document, request.theme, request.mode
     if getattr(args, "dry_run", False):
         LOGGER.info("Validation passed · mode: %s · no files changed; Colab not started", args.mode)
         return root
     _validate_installation()
     notify("Preparing render", stage="local_render")
-    transcript = lyrics_to_transcript(lyrics)
-    srt_content = generate_srt(transcript)
-
-    modes = ("karaoke", "lyrics") if args.mode == "both" else (args.mode,)
-    style_config = (
-        StyleConfig.from_dict(document.get("style"), height=document["video"]["height"])
-        if document.get("style")
-        else None
-    )
-    ass_by_mode = {
-        mode: generate_ass(
-            transcript,
-            document["video"],
-            style=style_config,
-            mode=mode,
-        )
-        for mode in modes
-    }
+    subtitles = render_subtitles(request)
+    transcript, ass_by_mode, srt_content = subtitles.transcript, subtitles.ass_by_mode, subtitles.srt
     render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}-{uuid.uuid4().hex[:12]}"
     output_dir = root / "renders" / render_id
     session = f"render-{uuid.uuid4().hex[:10]}"
@@ -843,93 +811,6 @@ def _create_source_bundle(resources: dict[Path, Path], destination: Path) -> Non
 def _safe_filename(value: str) -> str:
     normalized = re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._")
     return normalized[:80] or "karaoke"
-
-
-def _create_render_bundle(
-    job_dir: Path,
-    document: dict[str, object],
-    mode: str,
-    ass_by_mode: dict[str, str],
-    destination: Path,
-    transcript: dict[str, Any] | None = None,
-    srt_content: str | None = None,
-) -> None:
-    from karaoke_app.job_document import STATE_FILENAME, resolve_job_asset, resolve_watermark_path
-    from karaoke_app.render_graphics import generate_render_graphics
-
-    media = document["media"]
-    if not isinstance(media, dict):
-        raise ValueError("Invalid job media configuration")
-    modes = ("karaoke", "lyrics") if mode == "both" else (mode,)
-    audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
-    required = set()
-    background = document["background"]
-    if isinstance(background, dict) and background.get("kind") in {"image", "video"}:
-        required.add(str(background["path"]))
-
-    bundle_document = json.loads(json.dumps(document))
-    watermark = bundle_document.get("watermark")
-    watermark_file: Path | None = None
-    if isinstance(watermark, dict) and watermark.get("enabled", True):
-        watermark_file = resolve_watermark_path(job_dir, watermark.get("path"))
-        bundle_wm_name = f"watermark{watermark_file.suffix.lower()}"
-        watermark["path"] = bundle_wm_name
-
-    with tempfile.TemporaryDirectory(prefix="render-graphics-") as graphics_directory:
-        graphics = Path(graphics_directory)
-        from karaoke_app.media_transfer import prepare_audio_transfer
-
-        audio_files = {}
-        for item in modes:
-            key = audio_keys[item]
-            source = resolve_job_asset(job_dir, str(media[key]), f"{item} audio")
-            audio = prepare_audio_transfer(source, graphics / "audio-transfer")
-            with audio.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            relative = f"media/{digest}{audio.suffix.lower()}"
-            audio_files[relative] = audio
-            bundle_document["media"][key] = relative
-        timing = generate_render_graphics(job_dir, document, modes, graphics, transcript)
-        bundle_document["intro"] = timing or {"enabled": False}
-        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
-            archive.writestr(STATE_FILENAME, json.dumps(bundle_document, ensure_ascii=False, indent=2) + "\n")
-            if background.get("kind") == "cosmic":
-                if not COSMIC_MODULE.is_file():
-                    raise FileNotFoundError(f"Missing cosmic background generator module: {COSMIC_MODULE}")
-                archive.write(COSMIC_MODULE, "cosmic_background.py")
-            if (document.get("style") or {}).get("lyrics_effect") == "word-synced":
-                from karaoke_app.lyrics_plus import switzer_font
-
-                font = switzer_font()
-                archive.write(font, f"fonts/{font.name}")
-                archive.write(font.with_name("Switzer-FFL.txt"), "fonts/Switzer-FFL.txt")
-                from karaoke_app.browser_lyrics import ASSETS, build_browser_scene
-
-                if transcript is None:
-                    raise ValueError("Plus rendering requires the timed transcript")
-                archive.write(PACKAGE_ROOT / "browser_lyrics.py", "browser_lyrics.py")
-                for asset_root in (ASSETS / "braccato", ASSETS / "browser_lyrics"):
-                    for asset in sorted(asset_root.rglob("*")):
-                        if asset.is_file():
-                            archive.write(asset, f"browser_assets/{asset.relative_to(ASSETS).as_posix()}")
-                for item in modes:
-                    scene = build_browser_scene(transcript, document["video"], document["style"], item)
-                    archive.writestr(f"{item}.scene.json", json.dumps(scene, ensure_ascii=False))
-            if srt_content:
-                archive.writestr("lyrics.srt", srt_content)
-            elif (job_dir / "lyrics.srt").is_file():
-                archive.write(job_dir / "lyrics.srt", "lyrics.srt")
-            for item in modes:
-                archive.writestr(f"{item}.ass", ass_by_mode[item])
-            for relative, audio in sorted(audio_files.items()):
-                archive.write(audio, relative)
-            for relative_path in sorted(required):
-                path = resolve_job_asset(job_dir, relative_path, relative_path)
-                archive.write(path, relative_path)
-            if watermark_file is not None:
-                archive.write(watermark_file, bundle_document["watermark"]["path"])
-            for graphic in sorted(graphics.rglob("*.png")):
-                archive.write(graphic, f"graphics/{graphic.relative_to(graphics).as_posix()}")
 
 
 def _validate_installation() -> None:
