@@ -1,4 +1,4 @@
-"""Run the shared preparation pipeline inside an existing notebook GPU runtime."""
+"""Prepare and render projects inside an existing notebook GPU runtime."""
 
 import importlib.util
 import json
@@ -26,6 +26,16 @@ class PreparedProject:
     directory: Path
     archive: Path
     runtime: Path
+
+
+@dataclass(frozen=True)
+class RenderedProject:
+    """Downloadable outputs from one isolated render, preserving previous attempts."""
+
+    directory: Path
+    archive: Path
+    runtime: Path
+    videos: tuple[Path, ...]
 
 
 def runtime_report() -> dict[str, Any]:
@@ -77,7 +87,9 @@ def preparation_config(
         "language": language,
         "lyrics": {
             "title": title, "artist": artist, "album": None, "lrclib_id": None,
-            "disable_lrclib": not use_lrclib, "text_path": str(lyrics_text) if lyrics_text else None,
+            # The CLI flag disables all references; the notebook toggle only controls online lookup.
+            "disable_lrclib": not use_lrclib and lyrics_text is None,
+            "text_path": str(lyrics_text) if lyrics_text else None,
             "genius_url": None,
         },
         "whisper_model": whisper_model,
@@ -98,6 +110,8 @@ def _extract_project(archive_path: Path, destination: Path) -> None:
 
 
 def _run_preparation(config_path: Path, environment: dict[str, str]) -> None:
+    """Run the shared launcher, which dispatches preparation and rendering requests."""
+    environment = {**environment, "KARAOKE_RUNTIME_LOG_LEVEL": "INFO"}
     command = [sys.executable, "-u", str(runtime_resource("karaoke_launch.py")), str(config_path)]
     with subprocess.Popen(
         command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -169,3 +183,49 @@ def prepare_audio(
         return PreparedProject(destination, downloadable, runtime)
     except Exception as error:
         raise RuntimeError(f"Preparation failed; retained diagnostics and checkpoints in {runtime}: {error}") from error
+
+
+def render_project(
+    job_dir: Path, *, options: dict[str, Any] | None = None,
+) -> RenderedProject:
+    """Render reviewed lyrics on this runtime without provisioning another Colab session.
+
+    Options follow the shared project configuration service. Saved settings and earlier
+    renders are preserved; failed attempts retain diagnostics under the project's .runs.
+    """
+    from karaoke_app.rendering import create_render_bundle, prepare_render, render_subtitles
+
+    request = prepare_render(Path(job_dir), options or {})
+    subtitles = render_subtitles(request)
+    render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{request.mode}-{uuid.uuid4().hex[:12]}"
+    runtime = request.root / ".runs" / render_id
+    runtime.mkdir(parents=True, mode=0o700)
+    archive = runtime / "rendered.zip"
+    config = {
+        "schema_version": 1, "operation": "render", "mode": request.mode,
+        "theme": request.theme, "archive_path": str(archive),
+    }
+    config_path = runtime / "karaoke_job.json"
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    environment = os.environ.copy()
+    environment["KARAOKE_RUNTIME_DIR"] = str(runtime)
+    try:
+        create_render_bundle(
+            request.root, request.document, request.mode, subtitles.ass_by_mode,
+            runtime / "karaoke_render_job.zip", transcript=subtitles.transcript, srt_content=subtitles.srt,
+        )
+        _run_preparation(config_path, environment)
+        status = json.loads((runtime / "karaoke_status.json").read_text(encoding="utf-8"))
+        if status.get("status") != "completed":
+            raise RuntimeError(status.get("error_summary") or status.get("error") or "Incomplete render")
+        destination = request.root / "renders" / render_id
+        destination.mkdir(parents=True)
+        _extract_project(archive, destination)
+        videos = tuple(sorted(destination.glob("*.mp4")))
+        if not videos:
+            raise RuntimeError("Render completed without producing a video")
+        downloadable = destination.with_suffix(".zip")
+        shutil.move(archive, downloadable)
+        return RenderedProject(destination, downloadable, runtime, videos)
+    except Exception as error:
+        raise RuntimeError(f"Render failed; retained diagnostics in {runtime}: {error}") from error

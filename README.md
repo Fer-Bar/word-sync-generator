@@ -4,6 +4,16 @@ Prepara audio y letras sincronizadas, revisa la letra y genera videos de **karao
 (instrumental) o **lyrics** (audio original). La preparación se reutiliza: cambiar el fondo,
 la tipografía o la marca de agua no requiere separar voces ni alinear otra vez.
 
+## Empezar desde el navegador
+
+Abre [Generar un video con letras](notebooks/generate_video.ipynb) en Google Colab y
+selecciona una GPU T4. Recibe el paquete `.whl` del responsable del proyecto, súbelo
+cuando el cuaderno lo pida y sigue los pasos: **audio → preparación → revisión → video → descarga**.
+No necesitas terminal, construir paquetes ni escribir rutas Python.
+
+El notebook usa el mismo motor que la CLI, dentro de tu sesión actual. La CLI sigue
+disponible para automatización y proyectos locales. [Instalación, distribución y límites](docs/notebooks.md).
+
 ## Empezar con la CLI
 
 Necesitas Python 3.12+, [uv](https://docs.astral.sh/uv/) y acceso a Google Colab con GPU.
@@ -73,17 +83,19 @@ uv run karaoke cleanup outputs/JOB_ID RENDER_ID --restore --apply # Recuperar
 
 No es un borrado permanente ni libera espacio de disco. Conserva una copia del proyecto.
 
-## Usar un notebook GPU
+## Cómo está organizado
 
-[Abre o descarga `notebooks/prepare_audio.ipynb`](notebooks/prepare_audio.ipynb) y sigue sus
-celdas para subir e instalar el wheel privado construido con `uv build`, y preparar un
-archivo local dentro del runtime abierto. No necesita tokens de GitHub. Produce un ZIP editable,
-que puedes descargar y renderizar con la CLI. No crea otra sesión ni renderiza el video final.
+| Parte | Responsabilidad |
+| --- | --- |
+| `cli.py` | Comandos, transferencias y sesiones remotas. |
+| `notebook.py` / `notebook_runner.py` | Ejecución en la sesión abierta y adaptación de los controles del cuaderno. |
+| `rendering.py` | Validación de entradas, subtítulos y paquete de render compartidos. |
+| `visual_config.py`, `lyrics_file.py`, `job_document.py` | Configuración visual, letras y validación del proyecto. |
+| `colab/` | Lanzador aislado y procesamiento de audio/video. |
 
-**Validado localmente:** instalación del wheel, `pip check`, recursos, configuración,
-aislamiento y pruebas del lanzador. **No verificado de punta a punta en Colab ni Kaggle:** la GPU, imagen Python,
-dependencias de modelos y cuota dependen del proveedor. El notebook comprueba requisitos
-antes de ejecutar y no anuncia esas plataformas como probadas. [Instrucciones y límites](docs/notebooks.md).
+La interfaz no contiene una segunda implementación del motor. Las pruebas del motor
+y de la CLI protegen el comportamiento compartido; el notebook se comprueba ejecutándolo.
+Consulta [desarrollo y arquitectura](docs/development.md) para los límites de cada módulo.
 
 ## Archivos y credenciales
 

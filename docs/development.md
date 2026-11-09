@@ -36,14 +36,17 @@ comentario redundante: reserva las regresiones para comportamientos y errores re
 | Ruta | Responsabilidad |
 | --- | --- |
 | `src/karaoke_app/cli.py` | Comandos y coordinación de sesiones y artefactos. |
+| `src/karaoke_app/rendering.py` | Entradas validadas, subtítulos y bundle compartidos por CLI y notebook. |
 | `src/karaoke_app/` | Servicios de letras, configuración y render local. |
 | `project_editor.py`, `visual_config.py` | Menú por secciones y resolución de opciones. |
 | `job_document.py` | Validación del estado interno actual, sin migración de esquemas. |
+| `song_identity.py` | Identidad musical y precedencia de metadatos, sin descargas ni inferencia. |
 | `colab/karaoke_job.py` | Preparación y composición remotas. |
 | `colab/karaoke_launch.py` | Entorno CUDA y lanzamiento en proceso aislado. |
 | `src/karaoke_app/resources.py` | Recursos inmutables del checkout/wheel y raíz de datos local. |
 | `src/karaoke_app/notebook.py` | Configuración y ejecución dentro de un runtime existente. |
-| `notebooks/prepare_audio.ipynb` | Frontend notebook, sin duplicar inferencia. |
+| `src/karaoke_app/notebook_runner.py` | Adaptador JSON entre controles y entorno aislado del motor. |
+| `notebooks/generate_video.ipynb` | Controles de Colab, revisión, reproducción y descargas. |
 | `src/karaoke_app/assets/` | Motor visual, fuentes y licencias. |
 | `tests/` | Pruebas unitarias e integración. |
 
@@ -51,11 +54,16 @@ El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/` y los logos
 recursos de paquete, sin duplicar sus fuentes. `resources.py` separa esos archivos de los
 datos editables del usuario. `KARAOKE_RUNTIME_DIR` permite ejecutar el pipeline fuera de
 `/content`; la CLI remota mantiene ese valor predeterminado. El notebook construye la
-solicitud y utiliza el mismo lanzador/pipeline, sin gestionar sesiones.
+solicitud y utiliza el mismo lanzador/pipeline, sin gestionar sesiones. La resolución de
+render y el empaquetado ya no pertenecen a la CLI: `rendering.py` los comparte con el
+notebook. Los controles del notebook no importan la CLI ni instalan paquetes sobre el
+entorno Python del proveedor.
 
 La modularización es incremental: inferencia y composición siguen en `colab/karaoke_job.py`.
-No se cambia su comportamiento para dividir archivos durante estas mejoras. Las fronteras
-de configuración, recursos y lanzamiento son independientes y tienen pruebas enfocadas.
+La identidad musical se resuelve en `song_identity.py`, tanto desde el wheel como desde
+el bundle enviado por la CLI. Se conservan las reglas de precedencia y los mensajes.
+No se cambia el algoritmo de alineación solo para dividir archivos. Las fronteras de
+configuración, recursos, preparación de render y lanzamiento tienen comprobaciones enfocadas.
 Consulta [notebook y paquete portable](notebooks.md) para instalación y límites de validación.
 
 El workflow [Checks](../.github/workflows/checks.yml) instala el entorno con el lockfile,

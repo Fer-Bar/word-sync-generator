@@ -65,6 +65,28 @@ def test_disable_skips_every_reference():
     fetch.assert_not_called()
 
 
+def test_local_upload_is_used_when_notebook_online_lookup_is_disabled(tmp_path, monkeypatch):
+    from karaoke_app.notebook import preparation_config
+
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"audio")
+    lyrics = tmp_path / "lyrics.txt"
+    lyrics.write_text("Welcome to the workshop.\nFollow every line.\n")
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+    def forbid_network(*args, **kwargs):
+        pytest.fail("A local reference must not query a lyrics provider")
+
+    monkeypatch.setattr(job, "_fetch_lrclib", forbid_network)
+    monkeypatch.setattr(refs, "genius_reference", forbid_network)
+    config = preparation_config(source, tmp_path / "runtime", lyrics_text=lyrics, use_lrclib=False)
+    _, (document, evidence) = job._prepare_reference({"title": "Workshop"}, config, None)
+    assert document is not None
+    assert evidence["source"] == "txt"
+    assert [line["text"] for line in document["lines"]] == ["Welcome to the workshop.", "Follow every line."]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
 def test_empty_txt_is_actionable_error(tmp_path):
     path = tmp_path / "empty.txt"
     path.write_text("[Verse]\n\n")

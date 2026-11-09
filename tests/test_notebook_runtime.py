@@ -136,21 +136,6 @@ def test_bundled_resources_have_sources():
         resources.runtime_resource("../../other")
 
 
-def test_notebook_is_clean_and_all_code_cells_compile():
-    path = Path(__file__).resolve().parents[1] / "notebooks" / "prepare_audio.ipynb"
-    document = json.loads(path.read_text())
-    assert (document["nbformat"], document["nbformat_minor"]) == (4, 5)
-    assert document["metadata"]["kernelspec"]["name"] == "python3"
-    for cell in document["cells"]:
-        if cell["cell_type"] == "code":
-            assert cell["outputs"] == []
-            assert cell["execution_count"] is None
-            compile("".join(cell["source"]), str(path), "exec")
-    source = "\n".join("".join(cell["source"]) for cell in document["cells"])
-    assert "from karaoke_app.notebook import prepare_audio" in source
-    assert "sin verificar" in source
-
-
 def test_notebook_interrupt_stops_child_process(monkeypatch, tmp_path):
     class InterruptedStream:
         def __iter__(self):
@@ -211,17 +196,6 @@ def test_launcher_sets_runtime_before_child_starts(tmp_path, monkeypatch):
     assert observed.read_text() == str(tmp_path)
 
 
-def test_notebook_install_requires_local_wheel_before_any_subprocess(tmp_path):
-    path = Path(__file__).resolve().parents[1] / "notebooks" / "prepare_audio.ipynb"
-    cells = json.loads(path.read_text())["cells"]
-    namespace = {"WHEEL_PATH": tmp_path / "missing.whl", "Path": Path, "sys": sys}
-    with pytest.raises(FileNotFoundError, match="WHEEL_PATH"):
-        exec(compile("".join(cells[3]["source"]), str(path), "exec"), namespace)
-    code = "\n".join("".join(cell["source"]) for cell in cells if cell["cell_type"] == "code")
-    assert "git+https://github.com/Fer-Bar/word-sync-generator" not in code
-    assert '"pip", "check"' in code
-
-
 def test_remote_pins_satisfy_application_requirements():
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text())
@@ -239,16 +213,3 @@ def test_remote_pins_satisfy_application_requirements():
         for specifier in remote.specifier:
             if specifier.operator == "==" and "*" not in specifier.version:
                 assert local.specifier.contains(specifier.version), f"Incompatible pin: {remote} versus {local}"
-
-
-def test_notebook_install_rejects_cudnn13_before_pip(tmp_path, monkeypatch):
-    from importlib import metadata
-
-    path = Path(__file__).resolve().parents[1] / "notebooks" / "prepare_audio.ipynb"
-    cells = json.loads(path.read_text())["cells"]
-    wheel = tmp_path / "local.whl"
-    wheel.touch()
-    monkeypatch.setattr(metadata, "version", lambda name: "9.26.0.51")
-    namespace = {"WHEEL_PATH": wheel, "Path": Path, "sys": sys}
-    with pytest.raises(RuntimeError, match="cuDNN 13"):
-        exec(compile("".join(cells[3]["source"]), str(path), "exec"), namespace)
