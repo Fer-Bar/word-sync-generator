@@ -1,6 +1,7 @@
 """Exercise cleanup through the real CLI and filesystem, using disposable exports."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,16 +26,36 @@ def files(root):
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
-def cleanup(root, *args):
-    env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "NO_COLOR": "1"}
+def cleanup(root, *args, leading_args=(), package_root=REPO):
+    env = {**os.environ, "PYTHONPATH": str(package_root / "src"), "NO_COLOR": "1",
+           "PYTHONDONTWRITEBYTECODE": "1"}
     return subprocess.run([sys.executable, "-c", "from karaoke_app.cli import main; raise SystemExit(main())",
-                           "cleanup", str(root), *args],
+                           *leading_args, "cleanup", str(root), *args],
                           cwd=root, env=env, text=True, capture_output=True, timeout=30)
 
 
 def succeeded(result):
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("leading_args", [(), ("--verbose",)], ids=["normal", "leading-verbose"])
+def test_preview_preserves_project_and_actual_package_log_root(tmp_path, leading_args):
+    """A different cwd must not hide writes to the imported package's log root."""
+    package_root = tmp_path / "application"
+    shutil.copytree(REPO / "src", package_root / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    project = tmp_path / "project"
+    make_render(project, OLD)
+    before = files(tmp_path)
+
+    output = succeeded(cleanup(project, leading_args=leading_args, package_root=package_root))
+
+    assert OLD in output
+    assert "Preview only" in output
+    assert "1 export(s)" in output
+    assert files(tmp_path) == before
+    assert not (package_root / ".karaoke").exists()
+    assert not (project / ".trash").exists()
 
 
 def test_inventory_and_preview_are_read_only_then_selected_export_round_trips(tmp_path):

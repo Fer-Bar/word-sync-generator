@@ -298,11 +298,11 @@ def main() -> int:
         show_commands()
         return 0
     verbose = "--verbose" in sys.argv[1:]
+    if verbose:
+        sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
     log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
                                  "--help" not in sys.argv and "-h" not in sys.argv and
                                  sys.argv[1:2] != ["cleanup"])
-    if verbose:
-        sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
     if sys.argv[1:2] == ["source"]:
         del sys.argv[1]
 
