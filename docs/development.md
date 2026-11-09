@@ -20,6 +20,8 @@ uv run playwright install --with-deps chromium
 uv run pytest tests/test_browser_lyrics.py tests/test_render_graphics_runtime.py -q
 ```
 
+El [mapa de pruebas y límites](testing.md) distingue integración real de fronteras simuladas.
+
 Las reglas de Ruff y las dependencias locales están en [pyproject.toml](../pyproject.toml).
 Las dependencias remotas están en [colab/requirements.txt](../colab/requirements.txt).
 
@@ -36,13 +38,23 @@ comentario redundante: reserva las regresiones para comportamientos y errores re
 | `src/karaoke_app/cli.py` | Comandos y coordinación de sesiones y artefactos. |
 | `src/karaoke_app/` | Servicios de letras, configuración y render local. |
 | `colab/karaoke_job.py` | Preparación y composición remotas. |
-| `colab/karaoke_launch.py` | Entorno y lanzamiento del proceso remoto. |
+| `colab/karaoke_launch.py` | Entorno CUDA y lanzamiento en proceso aislado. |
+| `src/karaoke_app/resources.py` | Recursos inmutables del checkout/wheel y raíz de datos local. |
+| `src/karaoke_app/notebook.py` | Configuración y ejecución dentro de un runtime existente. |
+| `notebooks/prepare_audio.ipynb` | Frontend notebook, sin duplicar inferencia. |
 | `src/karaoke_app/assets/` | Motor visual, fuentes y licencias. |
 | `tests/` | Pruebas unitarias e integración. |
 
-La instalación soportada actualmente es desde el checkout con `uv`; la CLI localiza los
-scripts de `colab/` junto al repositorio. Un wheel independiente necesitaría empaquetar esos
-recursos y cambiar su resolución. No debe anunciarse como una distribución autónoma todavía.
+El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/` y los logos como
+recursos de paquete, sin duplicar sus fuentes. `resources.py` separa esos archivos de los
+datos editables del usuario. `KARAOKE_RUNTIME_DIR` permite ejecutar el pipeline fuera de
+`/content`; la CLI remota mantiene ese valor predeterminado. El notebook construye la
+solicitud y utiliza el mismo lanzador/pipeline, sin gestionar sesiones.
+
+La modularización es incremental: inferencia y composición siguen en `colab/karaoke_job.py`.
+No se cambia su comportamiento para dividir archivos durante estas mejoras. Las fronteras
+de configuración, recursos y lanzamiento son independientes y tienen pruebas enfocadas.
+Consulta [notebook y paquete portable](notebooks.md) para instalación y límites de validación.
 
 El workflow [Checks](../.github/workflows/checks.yml) instala el entorno con el lockfile,
 comprueba Ruff, ejecuta la suite local y construye los paquetes. No accede a cuentas Colab,

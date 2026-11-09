@@ -18,21 +18,21 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
+from karaoke_app.resources import PACKAGE_ROOT, PROJECT_ROOT, logo_resource, runtime_resource
 from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
 from karaoke_app.themes import THEMES
 from karaoke_app.upload_diagnostics import upload_failure_message, upload_size, warn_large_upload
 from karaoke_app.visual_config import BACKGROUND_STYLES, VISUAL_STYLES, preparation_visuals
 
 LOGGER = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-COLAB_SCRIPT = PROJECT_ROOT / "colab" / "karaoke_job.py"
-ASS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "ass.py"
-LYRICS_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyrics_file.py"
-REFERENCES_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "lyric_references.py"
-COSMIC_MODULE = PROJECT_ROOT / "src" / "karaoke_app" / "cosmic_background.py"
-COLAB_REQUIREMENTS = PROJECT_ROOT / "colab" / "requirements.txt"
+COLAB_SCRIPT = runtime_resource("karaoke_job.py")
+ASS_MODULE = PACKAGE_ROOT / "ass.py"
+LYRICS_MODULE = PACKAGE_ROOT / "lyrics_file.py"
+REFERENCES_MODULE = PACKAGE_ROOT / "lyric_references.py"
+COSMIC_MODULE = PACKAGE_ROOT / "cosmic_background.py"
+COLAB_REQUIREMENTS = runtime_resource("requirements.txt")
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
-DEFAULT_LOGO = PROJECT_ROOT / "logos" / "banner.png"
+DEFAULT_LOGO = logo_resource("banner.png")
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
@@ -878,7 +878,7 @@ def _create_render_bundle(
 
                 if transcript is None:
                     raise ValueError("Plus rendering requires the timed transcript")
-                archive.write(PROJECT_ROOT / "src/karaoke_app/browser_lyrics.py", "browser_lyrics.py")
+                archive.write(PACKAGE_ROOT / "browser_lyrics.py", "browser_lyrics.py")
                 for asset_root in (ASSETS / "braccato", ASSETS / "browser_lyrics"):
                     for asset in sorted(asset_root.rglob("*")):
                         if asset.is_file():

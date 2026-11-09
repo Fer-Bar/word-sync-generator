@@ -16,13 +16,14 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = Path("/content/karaoke_job.json")
-STATUS_PATH = Path("/content/karaoke_status.json")
-HF_TOKEN_PATH = Path("/content/.hf_token")
-WORK_DIR = Path("/content/karaoke_workspace")
-LYRICS_MODULE_PATH = Path("/content/karaoke_lyrics_file.py")
-REFERENCES_MODULE_PATH = Path("/content/karaoke_lyric_references.py")
-RENDER_JOB_PATH = Path("/content/karaoke_render_job.zip")
+RUNTIME_DIR = Path(os.environ.get("KARAOKE_RUNTIME_DIR", "/content")).expanduser().resolve()
+CONFIG_PATH = RUNTIME_DIR / "karaoke_job.json"
+STATUS_PATH = RUNTIME_DIR / "karaoke_status.json"
+HF_TOKEN_PATH = RUNTIME_DIR / ".hf_token"
+WORK_DIR = RUNTIME_DIR / "karaoke_workspace"
+LYRICS_MODULE_PATH = RUNTIME_DIR / "karaoke_lyrics_file.py"
+REFERENCES_MODULE_PATH = RUNTIME_DIR / "karaoke_lyric_references.py"
+RENDER_JOB_PATH = RUNTIME_DIR / "karaoke_render_job.zip"
 LOGGER = logging.getLogger(__name__)
 LRCLIB_API = "https://lrclib.net/api"
 CTC_ALIGNER_MODEL = "MahmoudAshraf/mms-300m-1130-forced-aligner"

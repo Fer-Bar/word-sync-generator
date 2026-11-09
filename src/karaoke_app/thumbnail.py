@@ -8,9 +8,10 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from karaoke_app.branding import THUMBNAIL_LOGO
+from karaoke_app.resources import PROJECT_ROOT
 
 FONTS = Path(__file__).parent / "assets" / "fonts"
-REFERENCES = Path(__file__).resolve().parents[2] / "references" / "thumbnails"
+REFERENCES = PROJECT_ROOT / "references" / "thumbnails"
 SIZE = (1672, 941)
 
 

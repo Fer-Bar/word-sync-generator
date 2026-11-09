@@ -3,10 +3,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from karaoke_app.resources import PROJECT_ROOT, logo_resource
 from karaoke_app.style import StyleConfig, validate_color, validate_config_object, validate_number
 
 JOB_FILENAME = "job.json"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BANNER_RELATIVE = "logos/banner.png"
 
 
@@ -211,4 +211,6 @@ def resolve_watermark_path(job_dir: Path, path_str: str | None = None) -> Path:
             resolved = (root / candidate).resolve()
             if resolved.is_relative_to(root) and resolved.is_file():
                 return resolved
+    if requested == DEFAULT_BANNER_RELATIVE and logo_resource("banner.png").is_file():
+        return logo_resource("banner.png")
     raise FileNotFoundError(f"Missing watermark asset: {requested}")
