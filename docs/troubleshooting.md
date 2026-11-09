@@ -65,7 +65,7 @@ que YouTube también aplique a tu conexión local.
 Si tienes el audio local, úsalo como entrada; se sube a Colab sin volver a descargarlo de YouTube:
 
 ```bash
-uv run karaoke ./cancion.webm --title "Mi canción" --artist "Artista" --language es --no-cookies
+uv run karaoke source ./cancion.webm --title "Mi canción" --artist "Artista" --language es --no-cookies
 ```
 
 Un rechazo desde Colab no demuestra por sí solo que las cookies hayan vencido.

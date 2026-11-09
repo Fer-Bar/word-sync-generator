@@ -134,7 +134,7 @@ class StyleConfig:
 
         if data is not None:
             validate_config_object(
-                data, set(cls.__dataclass_fields__) | {"background_color", "overlay_opacity"}, "style"
+                data, set(cls.__dataclass_fields__), "style"
             )
             if data.get("lyrics_effect", "classic") not in ("classic", "word-synced"):
                 raise ValueError("style.lyrics_effect must be classic or word-synced")
@@ -152,12 +152,12 @@ class StyleConfig:
                     if not isinstance(data[key], int):
                         raise ValueError(f"style.{key} must be an integer")
             for key, bounds in {
-                "shadow_opacity": (0, 1), "overlay_opacity": (0, 1), "line_gap_factor": (1, 2.5)
+                "shadow_opacity": (0, 1), "line_gap_factor": (1, 2.5)
             }.items():
                 if key in data:
                     validate_number(data[key], f"style.{key}", *bounds)
             for key in (
-                "primary_color", "highlight_color", "coros_color", "background_color", "outline_color", "shadow_color"
+                "primary_color", "highlight_color", "coros_color", "outline_color", "shadow_color"
             ):
                 if key in data:
                     validate_color(data[key], f"style.{key}")
@@ -190,7 +190,7 @@ class StyleConfig:
         primary_color = normalize_hex_color(str(data.get("primary_color", "#FFD700")), default="#FFD700")
         highlight_color = normalize_hex_color(str(data.get("highlight_color", "#FFFFFF")), default="#FFFFFF")
         coros_color = normalize_hex_color(
-            str(data.get("coros_color") or data.get("background_color") or "#94A3B8"),
+            str(data.get("coros_color") or "#94A3B8"),
             default="#94A3B8",
         )
         outline_color = normalize_hex_color(str(data.get("outline_color", "#000000")), default="#000000")

@@ -9,6 +9,7 @@ from pathlib import Path
 import imageio_ffmpeg
 import numpy as np
 import pytest
+from media_samples import write_audio
 from PIL import Image
 
 from karaoke_app.ass import generate_ass
@@ -134,7 +135,7 @@ def test_real_libass_selects_switzer_and_bundle_carries_font(tmp_path):
         "media": {"original_audio": "audio.wav"}}, PRESET)
     transcript = {"segments": [segment("Switzer", 0.2, 0.9)]}
     ass = generate_ass(transcript, doc["video"], style=StyleConfig.from_dict(doc["style"]), mode="lyrics")
-    (tmp_path / "audio.wav").write_bytes(b"unused for bundle")
+    write_audio(tmp_path / "audio.wav")
     bundle = tmp_path / "bundle.zip"
     _create_render_bundle(tmp_path, doc, "lyrics", {"lyrics": ass}, bundle, transcript=transcript)
     with zipfile.ZipFile(bundle) as archive:

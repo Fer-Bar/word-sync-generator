@@ -3,6 +3,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from media_samples import write_audio
+
 from karaoke_app.cli import _create_render_bundle
 from karaoke_app.srt import format_srt_timestamp, generate_srt
 
@@ -79,8 +81,8 @@ class SrtGenerationTests(unittest.TestCase):
     def test_render_bundle_contains_srt(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             job_dir = Path(tmpdir)
-            (job_dir / "instrumental.flac").write_bytes(b"dummy")
-            (job_dir / "original.flac").write_bytes(b"dummy")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             document = {
                 "title": "Test Song",
                 "video": {"width": 1280, "height": 720, "fps": 24},

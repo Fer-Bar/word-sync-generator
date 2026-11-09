@@ -6,6 +6,7 @@ from unittest.mock import patch
 import imageio_ffmpeg
 import numpy as np
 import pytest
+from media_samples import write_audio
 from PIL import Image, ImageFilter
 
 from colab import karaoke_job
@@ -69,12 +70,12 @@ def test_job_bundle_and_remote_render_share_generator(tmp_path, monkeypatch):
         "intro": {"enabled": False}, "watermark": {"enabled": False},
     })
     assert validate_job_document(document) == document
-    (tmp_path / "audio.wav").write_bytes(b"audio")
+    write_audio(tmp_path / "audio.wav")
     bundle = tmp_path / "render.zip"
     _create_render_bundle(tmp_path, document, "both", {"lyrics": "ass", "karaoke": "ass"}, bundle)
     with zipfile.ZipFile(bundle) as archive:
         assert "cosmic_background.py" in archive.namelist()
-        assert json.loads(archive.read("job.json"))["background"] == document["background"]
+        assert json.loads(archive.read(".karaoke/project.json"))["background"] == document["background"]
     monkeypatch.setattr(karaoke_job, "WORK_DIR", tmp_path / "remote")
     monkeypatch.setattr(karaoke_job, "RENDER_JOB_PATH", bundle)
     module = type("Generator", (), {"render_cosmic_video": None})()
@@ -116,7 +117,8 @@ def test_video_background_loops_under_lyrics_without_dimming_twice(tmp_path, wat
 
 
 def test_preview_cli_encodes_real_video_with_job_dimming(tmp_path):
-    config = tmp_path / "job.json"
+    (tmp_path / ".karaoke").mkdir(exist_ok=True)
+    config = tmp_path / ".karaoke/project.json"
     config.write_text(json.dumps({
         "video": {"width": 160, "height": 90, "fps": 12},
         "background": {"kind": "cosmic", "overlay_opacity": 1},

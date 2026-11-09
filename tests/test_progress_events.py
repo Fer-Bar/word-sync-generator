@@ -101,9 +101,9 @@ def test_notebook_logging_streams_stages_before_render_finishes(tmp_path):
     from karaoke_app.terminal import stream_process
 
     config = tmp_path / 'config.json'
-    config.write_text('{"operation":"render"}')
+    config.write_text(json.dumps({"operation": "render", "archive_path": str(tmp_path / "result.zip")}))
     program = f'''
-import logging, sys, time
+import logging, sys, time, zipfile
 from pathlib import Path
 sys.path.insert(0, {str(Path(job.__file__).parent)!r})
 import karaoke_job as job
@@ -120,6 +120,8 @@ def render(config):
     time.sleep(.3)
     job._event("Rendering karaoke video", stage="render_karaoke")
     time.sleep(.3)
+    with zipfile.ZipFile(config["archive_path"], "w") as archive:
+        archive.writestr("result.txt", "complete")
 
 job._render_existing_job = render
 job.main()

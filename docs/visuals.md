@@ -2,103 +2,135 @@
 
 [Volver al README](../README.md)
 
-## Configurar un proyecto
+La configuración se hace con `karaoke configure PROYECTO`. Abre el menú por secciones
+o pasa opciones explícitas. Solo **Guardar** escribe los cambios del menú; no genera
+una previsualización. Consulta la [guía de configuración](project-cli.md).
+
+Las mismas opciones en `render` afectan solo esa ejecución. Las opciones omitidas
+conservan lo guardado; `configure` no cambia la tipografía ni el fondo por sí solo.
+Los proyectos nuevos empiezan con letras Plus y fondo fluido.
+
+## Presets, tipografía y color
 
 ```bash
-uv run karaoke configure outputs/JOB_ID
-uv run karaoke status outputs/JOB_ID
-uv run karaoke validate outputs/JOB_ID
+uv run karaoke configure outputs/PROYECTO --preset fluid
+uv run karaoke configure outputs/PROYECTO --preset cosmic
+uv run karaoke configure outputs/PROYECTO --preset classic
+uv run karaoke configure outputs/PROYECTO --visual-style classic --font-size 64
+uv run karaoke configure outputs/PROYECTO --lyrics-active-color '#FFD34D' --lyrics-inactive-color '#E8E8E8'
 ```
 
-El menú organiza metadatos, salida, apariencia, fondo y marca de agua por secciones.
-Enter conserva el valor actual; cancelar no guarda. `configure` persiste las preferencias
-de forma atómica sin modificar audio ni letras. Los flags de `render` solo afectan esa
-corrida. No edites el estado interno del proyecto. [Flujo y opciones de la CLI](project-cli.md).
+`fluid` y `cosmic` usan palabras animadas con fondos fluido y de partículas,
+respectivamente. `classic` selecciona subtítulos clásicos y fondo sólido.
+`--visual-style plus|classic` cambia la tipografía sin elegir un fondo nuevo.
 
-También puedes usar flags para scripts:
+Plus usa Switzer Semibold y Braccato: karaoke desplaza frases y lyrics usa páginas
+fijas. El tratamiento del texto inactivo difiere entre ambos modos. Switzer se descarga
+con su licencia en `~/.cache/karaoke/fonts/`; Braccato está incluido con su
+[licencia y procedencia](../src/karaoke_app/assets/braccato/PROVENANCE.json).
+
+## Fondo y paleta
 
 ```bash
-uv run karaoke configure outputs/JOB_ID --preset fluid --cover portada.jpg
-uv run karaoke configure outputs/JOB_ID --title "Mi canción" --artist "Artista" --resolution 720p --fps 24
-uv run karaoke render outputs/JOB_ID --mode both
+uv run karaoke configure outputs/PROYECTO --background-style fluid --theme forest
+uv run karaoke configure outputs/PROYECTO --background-style cosmic-sand --seed 42
+uv run karaoke configure outputs/PROYECTO --background-style fluid --cover portada.jpg
+uv run karaoke configure outputs/PROYECTO --background-color '#112233'
+uv run karaoke configure outputs/PROYECTO --background-image outputs/PROYECTO/fondo.jpg
+uv run karaoke configure outputs/PROYECTO --background-video outputs/PROYECTO/fondo.mp4 \
+  --background-crop-right 0.12 --background-overlay-opacity 0.25
 ```
 
-Presets: `fluid`, `cosmic` y `classic`. `--visual-style plus|classic` selecciona las letras;
-`--background-style fluid|cosmic-sand` selecciona el fondo procedural. `--cover` toma colores
-de una imagen. No combines fondo procedural con `--background-image` o `--background-color`.
+Elige un solo tipo de fondo por comando. Las imágenes y videos de fondo deben estar dentro de
+la carpeta del proyecto; la portada que aporta la paleta puede ser externa. En el menú,
+las rutas relativas se interpretan desde el proyecto. En las opciones de línea de
+comandos, las rutas relativas parten del directorio actual.
 
-Plus usa Switzer Semibold y resaltado por palabra. Karaoke desplaza frases y lyrics muestra
-páginas fijas. Switzer se descarga con su licencia en `~/.cache/karaoke/fonts/`.
-Braccato conserva su [licencia y procedencia](../src/karaoke_app/assets/braccato/PROVENANCE.json).
+`--theme aurora|sunset|synthwave|stellar|forest|random` selecciona una paleta procedural.
+`random` elige tema y semilla; los valores efectivos quedan en `render-settings.json`.
+`--theme job`, el valor predeterminado, conserva el fondo guardado. Usa un tema concreto
+y `--seed N` para repetir una combinación.
 
-## Paletas y fondos
+`--background-crop-right` elimina entre 0 y 0.5 del ancho de una imagen o video antes
+de ajustarlo al lienzo. `--background-overlay-opacity` oscurece imágenes, videos o
+fondos procedurales entre 0 y 1. El video de fondo se repite y su audio se ignora;
+prepara un bucle continuo para evitar saltos. Se decodifica un fotograma antes de
+guardar para rechazar archivos inválidos o que solo contienen audio.
+
+## Título, intro y miniaturas
 
 ```bash
-uv run karaoke render outputs/JOB_ID --theme forest --background-style fluid
-uv run karaoke configure outputs/JOB_ID --background-color '#0B1020'
-uv run karaoke configure outputs/JOB_ID --background-image outputs/JOB_ID/portada.jpg
+uv run karaoke configure outputs/PROYECTO --title "Mi canción" --artist "Artista" --align center
+uv run karaoke configure outputs/PROYECTO --intro --intro-start 0.5 --intro-duration 3
+uv run karaoke configure outputs/PROYECTO --intro-start 0.5 --intro-end 3.5
+uv run karaoke configure outputs/PROYECTO --no-intro
+uv run karaoke configure outputs/PROYECTO --thumbnail-time 3 --thumbnail-align end
+uv run karaoke thumbnail outputs/PROYECTO --mode lyrics --align end
+uv run karaoke intro outputs/PROYECTO --mode lyrics
 ```
 
-Copia una imagen propia dentro del proyecto antes de seleccionarla. `--theme job`, el valor
-predeterminado, conserva el fondo guardado. Las paletas `aurora`, `sunset`, `synthwave`,
-`stellar` y `forest` cambian los colores del render. `forest` usa verdes oscuros sobre una
-base casi negra. `random` guarda la elección en `render-settings.json`; usa la paleta elegida
-y `--seed N` para repetirla. No cambies archivos internos para ajustar colores.
+`render` genera miniaturas y las intros habilitadas. Por defecto, la intro dura hasta cinco segundos
+por defecto y termina antes de la primera voz; si no hay espacio, se omite. Desactivarla
+no desactiva las miniaturas. `--intro-start` establece el comienzo; elige una duración
+o un final absoluto, no ambos en el mismo comando. Guardar una duración sustituye
+el final anterior y viceversa. La primera voz sigue limitando la intro.
 
-## Previsualizar
+`--align start|center|end` alinea título y artista, no las letras cantadas.
+`--thumbnail-time` selecciona el instante del fondo de la miniatura; el valor inicial
+es cero. Para un video, debe quedar antes de su final. `--thumbnail-align` permite
+alinear la miniatura sin cambiar la intro. `thumbnail PROYECTO` hereda el fondo,
+artista, alineación, instante y logo guardados; sus opciones explícitas los reemplazan
+solo para esa ejecución. Sin proyecto ni `--background`, usa un fondo sólido oscuro.
 
-Instala Chromium una vez y prueba un fragmento corto:
+Las miniaturas y tarjetas locales no necesitan Colab. Repetir sus comandos reemplaza
+los PNG correspondientes; usa `thumbnail --output-dir` para conservar variantes.
+
+## Logo
+
+```bash
+uv run karaoke configure outputs/PROYECTO --logo logos/banner.png --logo-position top_left
+uv run karaoke configure outputs/PROYECTO --logo-scale 0.18 --logo-opacity 0.85
+uv run karaoke configure outputs/PROYECTO --no-logo
+```
+
+Las posiciones son `top_left`, `top_right`, `bottom_left` y `bottom_right`. La escala
+va de 0.01 a 0.5 del ancho del video y la opacidad de 0 a 1. Conserva el archivo de logo
+que utiliza el proyecto. La intro es transparente y no incorpora la marca de agua.
+
+## Gráficos de cartel y fotocopia
+
+```bash
+uv run karaoke configure outputs/PROYECTO --graphic-style fomo --title-layout wide --align center
+uv run karaoke configure outputs/PROYECTO --graphic-style fomo-xerox --graphic-palette dark
+```
+
+`fomo` y `fomo-xerox` son nombres de estilos de cartel reutilizables, no configuraciones
+reservadas para una canción. Usan Abril Fatface, composición monocromática y, en Xerox,
+textura de fotocopia. `--graphic-palette dark` invierte la paleta.
+
+`--title-layout stacked|wide` permite hasta cuatro o dos filas. Estos estilos sustituyen
+el fondo y la paleta, conservando la fuente de las letras cantadas.
+`--graphic-style default` recupera la composición habitual; usa un preset para restaurar
+también fondo y tipografía.
+
+## Comandos locales existentes
+
+El menú de configuración no incluye preview. Si necesitas usar los comandos locales
+ya existentes, instala Chromium para `preview` y consulta sus límites:
 
 ```bash
 uv run playwright install --with-deps chromium
-uv run karaoke preview outputs/JOB_ID --mode karaoke --start 15 --duration 8 --output preview.mp4
-uv run karaoke background examples/cosmic-background.json --output cosmic-preview.mp4
+uv run karaoke preview --help
+uv run karaoke background --help
 ```
 
-`preview` usa instrumental en karaoke y audio original en lyrics. Genera MP4, ASS y JSON,
-sin sobrescribir salidas existentes. Muestra letras y fondo, pero no intro ni marca de agua.
-Para fondos estáticos, selecciona un procedural con `--background-style` al previsualizar.
-
-`background` genera solo el fondo. Acepta un proyecto o una configuración independiente como
-[cosmic-background.json](../examples/cosmic-background.json), sin editar el estado del proyecto.
-Admite `--start`, `--duration`, `--width`, `--height` y `--fps` para vistas rápidas.
-La generación del fondo usa CPU; un fragmento recortado no necesariamente cierra el bucle.
-
-## Miniaturas, intro y logo
-
-```bash
-uv run karaoke render outputs/JOB_ID --logo logos/banner.png --logo-position top_left
-uv run karaoke thumbnail outputs/JOB_ID --mode lyrics --align end
-uv run karaoke thumbnail --title "Mi canción" --artist "Artista" --output-dir outputs/miniaturas
-uv run karaoke intro outputs/JOB_ID --mode lyrics
-```
-
-El render genera miniaturas y una intro cuando hay espacio antes de la primera voz.
-El título y artista se cambian desde `configure`. `--align start|center|end` alinea esos
-textos, no las letras cantadas. `--no-logo` desactiva la marca. Los logos se reutilizan
-desde `logos/`, sin escribir dentro del paquete instalado.
-
-`thumbnail` e `intro` son locales y no abren Colab. Repetir una miniatura puede reemplazar
-sus PNG; usa `--output-dir` para variantes. El render conserva sus artefactos en una carpeta
-propia dentro de `renders/`, incluidos miniaturas, intro habilitada y configuración efectiva.
-
-## FOMO y fotocopia
-
-```bash
-uv run karaoke configure outputs/JOB_ID --graphic-style fomo --title-layout wide --align center
-uv run karaoke configure outputs/JOB_ID --graphic-style fomo-xerox --graphic-palette dark
-uv run karaoke render outputs/JOB_ID --mode lyrics
-```
-
-FOMO usa Abril Fatface para título y artista, fondo blanco y letras oscuras. `fomo-xerox`
-añade textura; `--graphic-palette dark` invierte la paleta. `--title-layout stacked|wide`
-permite hasta cuatro o dos filas. La composición gráfica tiene prioridad sobre fondo y
-paleta, pero conserva la fuente de las letras cantadas.
-
-`--graphic-style default` recupera la composición habitual. Para cambiar también fondo y
-colores, selecciona otras opciones explícitamente. Solo `configure` guarda preferencias.
+`preview` muestra letras y un fondo procedural sin la intro ni la marca del render final.
+`background` dibuja solo un fondo procedural y acepta un directorio de proyecto o la
+configuración independiente [cosmic-background.json](../examples/cosmic-background.json).
+Ese archivo independiente no es el estado del proyecto ni configura sus renders.
 
 ## Proyectos antiguos
 
-No hay comando de migración ni compatibilidad con el estado anterior. Conserva los archivos
-originales y prepara un proyecto nuevo con `karaoke source`.
+No hay migración automática ni comando `migrate`. Prepara un proyecto nuevo desde la
+fuente original; los archivos antiguos permanecen intactos. Los ajustes actuales se
+administran con la CLI, no mediante un archivo de configuración editable.

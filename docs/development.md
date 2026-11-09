@@ -37,6 +37,8 @@ comentario redundante: reserva las regresiones para comportamientos y errores re
 | --- | --- |
 | `src/karaoke_app/cli.py` | Comandos y coordinación de sesiones y artefactos. |
 | `src/karaoke_app/` | Servicios de letras, configuración y render local. |
+| `project_editor.py`, `visual_config.py` | Menú por secciones y resolución de opciones. |
+| `job_document.py` | Validación del estado interno actual, sin migración de esquemas. |
 | `colab/karaoke_job.py` | Preparación y composición remotas. |
 | `colab/karaoke_launch.py` | Entorno CUDA y lanzamiento en proceso aislado. |
 | `src/karaoke_app/resources.py` | Recursos inmutables del checkout/wheel y raíz de datos local. |

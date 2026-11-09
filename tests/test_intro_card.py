@@ -55,7 +55,7 @@ class IntroCardTests(unittest.TestCase):
             Image.new("RGBA", (200, 80), (0, 255, 0, 255)).save(logo_path)
 
             job_doc = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "job_id": "test-job",
                 "title": "Test Song",
                 "source": {"artist": "Test Artist"},
@@ -69,7 +69,8 @@ class IntroCardTests(unittest.TestCase):
                 "background": {"kind": "solid", "color": "#000000"},
                 "intro": {"enabled": True, "duration": 5.0, "logo": "banner.png"},
             }
-            (job_dir / "job.json").write_text(json.dumps(job_doc), encoding="utf-8")
+            (job_dir / ".karaoke").mkdir(exist_ok=True)
+            (job_dir / ".karaoke/project.json").write_text(json.dumps(job_doc), encoding="utf-8")
             (job_dir / "audio.flac").write_bytes(b"data")
             (job_dir / "vocals.flac").write_bytes(b"data")
             (job_dir / "instrumental.flac").write_bytes(b"data")
@@ -84,7 +85,7 @@ class IntroCardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             job_dir = Path(temp_dir)
             job_doc = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "job_id": "test-job",
                 "title": "Test Song",
                 "source": {"artist": "Test Artist"},
@@ -98,7 +99,8 @@ class IntroCardTests(unittest.TestCase):
                 "background": {"kind": "solid", "color": "#000000"},
                 "intro": {"enabled": False},
             }
-            (job_dir / "job.json").write_text(json.dumps(job_doc), encoding="utf-8")
+            (job_dir / ".karaoke").mkdir(exist_ok=True)
+            (job_dir / ".karaoke/project.json").write_text(json.dumps(job_doc), encoding="utf-8")
             (job_dir / "audio.flac").write_bytes(b"data")
             (job_dir / "vocals.flac").write_bytes(b"data")
             (job_dir / "instrumental.flac").write_bytes(b"data")

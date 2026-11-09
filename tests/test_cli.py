@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from media_samples import write_audio
 from PIL import Image
 
 from karaoke_app import cli
@@ -39,8 +40,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_packages_mode_specific_ass_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             destination = job_dir / "render.zip"
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
@@ -63,13 +64,13 @@ class RenderBundleTests(unittest.TestCase):
             with zipfile.ZipFile(destination) as archive:
                 self.assertEqual(archive.read("karaoke.ass"), b"karaoke-scroll")
                 self.assertEqual(archive.read("lyrics.ass"), b"lyrics-static")
-                self.assertEqual(json.loads(archive.read("job.json"))["background"]["kind"], "solid")
+                self.assertEqual(json.loads(archive.read(".karaoke/project.json"))["background"]["kind"], "solid")
 
     def test_packages_watermark_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             Image.new("RGBA", (100, 30), "red").save(job_dir / "banner.png")
             destination = job_dir / "render.zip"
             document = {
@@ -104,8 +105,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_regenerates_intro_card_instead_of_reusing_stale_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             (job_dir / "intro_card.png").write_bytes(b"intro-png-data")
             destination = job_dir / "render.zip"
             document = {
@@ -132,15 +133,15 @@ class RenderBundleTests(unittest.TestCase):
                 self.assertIn("graphics/intro/intro_karaoke.png", archive.namelist())
                 self.assertTrue(archive.read("graphics/intro/intro_karaoke.png").startswith(b"\x89PNG"))
                 self.assertNotIn("intro_card.png", archive.namelist())
-                bundle_job = json.loads(archive.read("job.json"))
+                bundle_job = json.loads(archive.read(".karaoke/project.json"))
                 self.assertIn("intro", bundle_job)
                 self.assertEqual(bundle_job["intro"]["duration"], 4.0)
 
     def test_packages_absolute_watermark_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             destination = job_dir / "render.zip"
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
@@ -169,7 +170,7 @@ class RenderBundleTests(unittest.TestCase):
 
             with zipfile.ZipFile(destination) as archive:
                 self.assertIn("watermark.png", archive.namelist())
-                bundled_doc = json.loads(archive.read("job.json"))
+                bundled_doc = json.loads(archive.read(".karaoke/project.json"))
                 self.assertEqual(bundled_doc["watermark"]["path"], "watermark.png")
 
 
@@ -207,7 +208,7 @@ class SourceReliabilityTests(unittest.TestCase):
             ["https://youtube.com/watch?v=test", "--no-logo", "--no-cookies", "--output-dir", str(self.root)]
         )
         audio = self.root / "download.webm"
-        audio.write_bytes(b"audio")
+        write_audio(audio)
         downloader = patch(
             "karaoke_app.youtube_source.download_youtube",
             return_value=(audio, {"title": "Song", "artist": "Artist", "webpage_url": self.args.source}),
@@ -267,7 +268,7 @@ class SourceReliabilityTests(unittest.TestCase):
                         archive.writestr("checkpoint.json", '{"status": "lyrics_failed"}')
                         archive.writestr("vocals.flac", b"vocals")
                     else:
-                        archive.writestr("job.json", "{}")
+                        archive.writestr(".karaoke/project.json", "{}")
         return subprocess.CompletedProcess(command, 0)
 
     def manifest(self):
@@ -287,8 +288,8 @@ class SourceReliabilityTests(unittest.TestCase):
         checkpoint = next(self.root.glob("*.recovery/checkpoint.zip"))
         with zipfile.ZipFile(checkpoint) as archive:
             self.assertIn("vocals.flac", archive.namelist())
-            self.assertNotIn("job.json", archive.namelist())
-        self.assertFalse(list(self.root.glob("*/job.json")))
+            self.assertNotIn(".karaoke/project.json", archive.namelist())
+        self.assertFalse(list(self.root.glob("*/.karaoke/project.json")))
 
     def test_execution_timeout_still_downloads_status_and_result_without_false_success(self) -> None:
         self.exec_code = -1
@@ -296,7 +297,7 @@ class SourceReliabilityTests(unittest.TestCase):
             cli.run_job(self.args)
         self.assertTrue(self.manifest()["session_stopped"])
         self.assertTrue(list(self.root.glob("*.recovery/result.zip")))
-        self.assertFalse(list(self.root.glob("*/job.json")))
+        self.assertFalse(list(self.root.glob("*/.karaoke/project.json")))
 
     def test_status_download_retries_are_bounded_and_keep_metadata(self) -> None:
         self.fail_downloads = 10
@@ -311,7 +312,7 @@ class SourceReliabilityTests(unittest.TestCase):
     def test_transient_download_failure_recovers(self) -> None:
         self.fail_downloads = 1
         output = cli.run_job(self.args)
-        self.assertTrue((output / "job.json").is_file())
+        self.assertTrue((output / ".karaoke/project.json").is_file())
         self.assertFalse(list(self.root.glob("*.recovery")))
         self.assertEqual(self.payload["watermark"], {"enabled": False})
 
@@ -528,7 +529,7 @@ class AtomicArchiveTests(unittest.TestCase):
     def test_disabled_watermark_does_not_resolve_or_bundle_asset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "audio.flac").write_bytes(b"audio")
+            write_audio(root / "audio.flac")
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
                 "video": {"width": 640, "height": 360, "fps": 24},
@@ -539,14 +540,14 @@ class AtomicArchiveTests(unittest.TestCase):
             destination = root / "bundle.zip"
             cli._create_render_bundle(root, document, "karaoke", {"karaoke": "ass"}, destination)
             with zipfile.ZipFile(destination) as archive:
-                self.assertFalse(json.loads(archive.read("job.json"))["watermark"]["enabled"])
+                self.assertFalse(json.loads(archive.read(".karaoke/project.json"))["watermark"]["enabled"])
                 self.assertNotIn("watermark.png", archive.namelist())
 
 
 class JobDocumentWatermarkTests(unittest.TestCase):
     def _base_valid_doc(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "title": "Test Song",
             "media": {
                 "original_audio": "audio.flac",

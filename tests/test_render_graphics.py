@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from media_samples import write_audio
 from PIL import Image
 
 from colab import karaoke_job
@@ -102,7 +103,7 @@ def test_thumbnail_is_the_same_overlay_composited_over_background(document, tmp_
 
 
 def test_render_bundle_routes_both_modes_and_returns_graphics(document, tmp_path, monkeypatch):
-    (tmp_path / "audio.wav").write_bytes(b"audio")
+    write_audio(tmp_path / "audio.wav")
     (tmp_path / "intro_card.png").write_bytes(b"obsolete")
     bundle = tmp_path / "bundle.zip"
     _create_render_bundle(
@@ -129,7 +130,7 @@ def test_render_bundle_routes_both_modes_and_returns_graphics(document, tmp_path
         assert "thumbnails/thumbnail_karaoke.png" in result.namelist()
         assert result.read("intro/intro_lyrics.png") != result.read("intro/intro_karaoke.png")
     with zipfile.ZipFile(bundle) as packed:
-        assert json.loads(packed.read("job.json"))["intro"]["end"] == pytest.approx(3.2)
+        assert json.loads(packed.read(".karaoke/project.json"))["intro"]["end"] == pytest.approx(3.2)
 
 
 def test_disabled_intro_still_generates_thumbnail(document, tmp_path):

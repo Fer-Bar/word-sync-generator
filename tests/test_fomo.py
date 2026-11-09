@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from media_samples import write_audio
 from PIL import Image
 
 from karaoke_app.fomo import apply_graphic_options, title_rows
@@ -33,7 +34,8 @@ def test_saved_fomo_produces_matching_intro_background_and_thumbnail(tmp_path):
                 "background": {"kind": "solid", "color": "#123456"}, "watermark": {"enabled": False},
                 "media": {"original_audio": "a.wav", "instrumental_audio": "i.wav",
                           "vocals_audio": "v.wav", "lyrics": "lyrics.yaml"}}
-    (tmp_path / "job.json").write_text(json.dumps(document))
+    (tmp_path / ".karaoke").mkdir(exist_ok=True)
+    (tmp_path / ".karaoke/project.json").write_text(json.dumps(document))
     configure_job(tmp_path, graphic_style="fomo", title_layout="wide", align="end")
     saved = load_job_document(tmp_path)
     assert saved["background"] == {"kind": "solid", "color": "#FFFFFF"}
@@ -68,7 +70,7 @@ def test_fomo_bundle_contains_white_background_and_monochrome_watermark(tmp_path
 
     logo = tmp_path / "logo.png"
     Image.new("RGBA", (90, 30), (250, 240, 210, 255)).save(logo)
-    (tmp_path / "audio.wav").write_bytes(b"placeholder audio")
+    write_audio(tmp_path / "audio.wav")
     document = apply_graphic_options({
         "title": "Song", "source": {"artist": "Drake"},
         "video": {"width": 1280, "height": 720, "fps": 24},
@@ -81,7 +83,7 @@ def test_fomo_bundle_contains_white_background_and_monochrome_watermark(tmp_path
     _create_render_bundle(tmp_path, document, "lyrics", {"lyrics": "ASS"}, bundle,
                           transcript={"segments": [{"words": [{"start": 5}]}]})
     with zipfile.ZipFile(bundle) as archive:
-        saved = json.loads(archive.read("job.json"))
+        saved = json.loads(archive.read(".karaoke/project.json"))
         if graphic_style == "fomo-xerox":
             assert saved["background"]["kind"] == "image"
             assert saved["background"]["path"] == "graphics/background.png"
