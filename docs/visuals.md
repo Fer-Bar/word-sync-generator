@@ -25,7 +25,8 @@ Braccato se incluye en el repositorio con su licencia y procedencia en
 
 ## Paletas y colores de las letras
 
-`--theme aurora|sunset|synthwave|stellar|random` cambia la paleta del render.
+`--theme aurora|sunset|synthwave|stellar|forest|random` cambia la paleta del render.
+`forest` combina dos tonos de verde bosque oscuro sobre un fondo casi negro.
 `random` selecciona tema y semilla para compartirlos entre los artefactos; los valores
 quedan en `render-settings.json`. Usa el tema elegido y `--seed N` para repetirlos.
 `--theme even-better-lyrics-plus` aplica Plus y fondo fluido juntos.

@@ -100,6 +100,8 @@ uv run karaoke render outputs/JOB_ID --mode lyrics
 El preview local muestra letras y fondo; el render final añade intro y marca de agua.
 Para previsualizar trabajos con fondo estático, indica un fondo procedural con `--background-style`.
 Las [opciones visuales](docs/visuals.md) incluyen fondos propios, colores, logos, miniaturas y FOMO.
+Usa `--theme forest` al renderizar para un fondo verde bosque oscuro, con variaciones
+del mismo verde sobre una base casi negra; combina con `--background-style fluid` para movimiento suave.
 
 ## Archivos del trabajo
 

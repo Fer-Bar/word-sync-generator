@@ -9,6 +9,7 @@ from karaoke_app.lyrics_plus import PRESET, apply_lyrics_plus
 
 DEFAULT_THEME = "aurora"
 THEMES = {
+    "forest": {"color": "#123D29", "secondary_color": "#245C3E", "base_color": "#030A06"},
     "synthwave": {"color": "#7928CA", "secondary_color": "#00DFD8", "base_color": "#080711"},
     "sunset": {"color": "#B83B5E", "secondary_color": "#F9A826", "base_color": "#0D0709"},
     "aurora": {"color": "#1D4E89", "secondary_color": "#52B788", "base_color": "#040B0E"},
