@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from colab.karaoke_job import _render_video
+from colab.karaoke_job import _encode_progress, _render_video
 from karaoke_app.job_document import validate_job_document
 from karaoke_app.render_graphics import background_frame
 
@@ -29,7 +29,7 @@ def test_crop_validation():
 
 @pytest.mark.parametrize("kind", ["image", "video"])
 @pytest.mark.parametrize("with_logo", [False, True])
-def test_actual_render_removes_right_strip(tmp_path, kind, with_logo):
+def test_actual_render_removes_right_strip(tmp_path, kind, with_logo, monkeypatch):
     pixels = np.zeros((180, 320, 3), dtype=np.uint8)
     pixels[:, :, 2] = 180
     pixels[:, 280:] = (255, 255, 255)
@@ -57,13 +57,17 @@ def test_actual_render_removes_right_strip(tmp_path, kind, with_logo):
         config["watermark"] = {"path": str(logo)}
     output = tmp_path / "render.mp4"
 
-    def run_ffmpeg(command):
-        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), *command[1:]], check=True, capture_output=True)
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    monkeypatch.setenv("PATH", "")
+
+    def encode_ffmpeg(command, duration):
+        assert command[0] == "ffmpeg"
+        _encode_progress([ffmpeg, *command[1:]], duration)
 
     with (
         patch("colab.karaoke_job._nvenc_available", return_value=False),
         patch("colab.karaoke_job._probe_duration", return_value=0.3),
-        patch("colab.karaoke_job._run", side_effect=run_ffmpeg),
+        patch("colab.karaoke_job._encode_progress", side_effect=encode_ffmpeg),
     ):
         _render_video(audio, output, config)
     rendered = background_frame(tmp_path, {
