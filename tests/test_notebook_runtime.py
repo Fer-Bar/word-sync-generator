@@ -157,6 +157,7 @@ def test_notebook_interrupt_stops_child_process(monkeypatch, tmp_path):
             raise KeyboardInterrupt
 
     class Process:
+        pid = 12345
         stdout = InterruptedStream()
         stopped = False
 
@@ -176,7 +177,18 @@ def test_notebook_interrupt_stops_child_process(monkeypatch, tmp_path):
             return -15
 
     process = Process()
-    monkeypatch.setattr(notebook.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    def launch(*args, **kwargs):
+        assert kwargs["start_new_session"] == (os.name == "posix")
+        return process
+
+    if os.name == "posix":
+        def stop_group(pid, signal):
+            assert pid == process.pid
+            assert signal == notebook.signal.SIGTERM
+            process.stopped = True
+        monkeypatch.setattr(notebook.os, "killpg", stop_group)
+    monkeypatch.setattr(notebook.subprocess, "Popen", launch)
     with pytest.raises(KeyboardInterrupt):
         notebook._run_preparation(tmp_path / "config.json", {})
     assert process.stopped

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -113,7 +114,7 @@ def _run_preparation(config_path: Path, environment: dict[str, str]) -> None:
     command = [sys.executable, "-u", str(runtime_resource("karaoke_launch.py")), str(config_path)]
     with subprocess.Popen(
         command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        text=True, encoding="utf-8", errors="replace", bufsize=1, start_new_session=os.name == "posix",
     ) as process:
         try:
             for line in process.stdout:
@@ -123,11 +124,17 @@ def _run_preparation(config_path: Path, environment: dict[str, str]) -> None:
                 raise subprocess.CalledProcessError(process.returncode, command)
         except BaseException:
             if process.poll() is None:
-                process.terminate()
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGTERM)
+                else:
+                    process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
                     process.wait()
             raise
 
