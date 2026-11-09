@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from media_samples import write_audio
 from PIL import Image
 
 from karaoke_app import cli
@@ -39,8 +40,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_packages_mode_specific_ass_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             destination = job_dir / "render.zip"
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
@@ -68,8 +69,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_packages_watermark_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             Image.new("RGBA", (100, 30), "red").save(job_dir / "banner.png")
             destination = job_dir / "render.zip"
             document = {
@@ -104,8 +105,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_regenerates_intro_card_instead_of_reusing_stale_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             (job_dir / "intro_card.png").write_bytes(b"intro-png-data")
             destination = job_dir / "render.zip"
             document = {
@@ -139,8 +140,8 @@ class RenderBundleTests(unittest.TestCase):
     def test_packages_absolute_watermark_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
-            (job_dir / "instrumental.flac").write_bytes(b"instrumental")
-            (job_dir / "original.flac").write_bytes(b"original")
+            write_audio(job_dir / "instrumental.flac")
+            write_audio(job_dir / "original.flac")
             destination = job_dir / "render.zip"
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
@@ -207,7 +208,7 @@ class SourceReliabilityTests(unittest.TestCase):
             ["https://youtube.com/watch?v=test", "--no-logo", "--no-cookies", "--output-dir", str(self.root)]
         )
         audio = self.root / "download.webm"
-        audio.write_bytes(b"audio")
+        write_audio(audio)
         downloader = patch(
             "karaoke_app.youtube_source.download_youtube",
             return_value=(audio, {"title": "Song", "artist": "Artist", "webpage_url": self.args.source}),
@@ -528,7 +529,7 @@ class AtomicArchiveTests(unittest.TestCase):
     def test_disabled_watermark_does_not_resolve_or_bundle_asset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "audio.flac").write_bytes(b"audio")
+            write_audio(root / "audio.flac")
             document = {
                 "title": "Song", "source": {"artist": "Artist"},
                 "video": {"width": 640, "height": 360, "fps": 24},

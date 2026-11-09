@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -445,7 +446,6 @@ def run_job(args: argparse.Namespace) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     session_requested = False
     recovery_dir = output_dir.with_name(f"{job_id}.recovery")
-    recovery_dir.mkdir()
     recovery = {
         "job_id": job_id,
         "session": session,
@@ -466,6 +466,11 @@ def run_job(args: argparse.Namespace) -> Path:
             source_path, source_metadata = download_youtube(source_value, temporary_path / "youtube", cookies)
             source_kind, source_value = "file", str(source_path)
             cookies = None
+        source_name = Path(source_value).stem if source_kind == "file" else None
+        if source_kind == "file":
+            from karaoke_app.media_transfer import prepare_audio_transfer
+
+            source_value = str(prepare_audio_transfer(Path(source_value), temporary_path / "audio-transfer"))
         job_path = temporary_path / "job.json"
         archive_path = recovery_dir / "result.zip"
         status_path = recovery_dir / "status.json"
@@ -490,7 +495,7 @@ def run_job(args: argparse.Namespace) -> Path:
             "source": {
                 "kind": source_kind,
                 "value": remote_source,
-                "name": Path(source_value).stem if source_kind == "file" else None,
+                "name": source_name,
                 "metadata": source_metadata,
             },
             "cookies_path": remote_cookies,
@@ -568,6 +573,7 @@ def run_job(args: argparse.Namespace) -> Path:
         _create_source_bundle(resources, source_bundle)
         warn_large_upload(source_bundle)
 
+        recovery_dir.mkdir()
         notify("Preparing render", stage="local_render", state="stopped")
         colab = ["colab", f"--auth={args.auth}"]
         try:
@@ -862,7 +868,7 @@ def _create_render_bundle(
         raise ValueError("Invalid job media configuration")
     modes = ("karaoke", "lyrics") if mode == "both" else (mode,)
     audio_keys = {"karaoke": "instrumental_audio", "lyrics": "original_audio"}
-    required = {str(media[audio_keys[item]]) for item in modes}
+    required = set()
     background = document["background"]
     if isinstance(background, dict) and background.get("kind") in {"image", "video"}:
         required.add(str(background["path"]))
@@ -877,6 +883,18 @@ def _create_render_bundle(
 
     with tempfile.TemporaryDirectory(prefix="render-graphics-") as graphics_directory:
         graphics = Path(graphics_directory)
+        from karaoke_app.media_transfer import prepare_audio_transfer
+
+        audio_files = {}
+        for item in modes:
+            key = audio_keys[item]
+            source = resolve_job_asset(job_dir, str(media[key]), f"{item} audio")
+            audio = prepare_audio_transfer(source, graphics / "audio-transfer")
+            with audio.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            relative = f"media/{digest}{audio.suffix.lower()}"
+            audio_files[relative] = audio
+            bundle_document["media"][key] = relative
         timing = generate_render_graphics(job_dir, document, modes, graphics, transcript)
         if watermark_file is not None and (document.get("intro") or {}).get("graphic_style") in ("fomo", "fomo-xerox"):
             from karaoke_app.fomo import fomo_logo
@@ -920,6 +938,8 @@ def _create_render_bundle(
                 archive.write(job_dir / "lyrics.srt", "lyrics.srt")
             for item in modes:
                 archive.writestr(f"{item}.ass", ass_by_mode[item])
+            for relative, audio in sorted(audio_files.items()):
+                archive.write(audio, relative)
             for relative_path in sorted(required):
                 path = resolve_job_asset(job_dir, relative_path, relative_path)
                 archive.write(path, relative_path)

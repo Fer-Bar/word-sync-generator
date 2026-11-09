@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from media_samples import write_audio
 from PIL import Image
 
 from colab import karaoke_job
@@ -102,7 +103,7 @@ def test_thumbnail_is_the_same_overlay_composited_over_background(document, tmp_
 
 
 def test_render_bundle_routes_both_modes_and_returns_graphics(document, tmp_path, monkeypatch):
-    (tmp_path / "audio.wav").write_bytes(b"audio")
+    write_audio(tmp_path / "audio.wav")
     (tmp_path / "intro_card.png").write_bytes(b"obsolete")
     bundle = tmp_path / "bundle.zip"
     _create_render_bundle(

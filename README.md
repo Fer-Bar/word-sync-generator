@@ -108,6 +108,14 @@ explícitos y mueve la carpeta completa (MP4, subtítulos, miniaturas y configur
 archivos existentes. La papelera es local y **sigue ocupando espacio**; el comando no borra
 permanentemente, no limpia audios fuente y rechaza enlaces simbólicos o rutas externas.
 
+## Audio y archivos temporales
+
+Las subidas contienen solo el audio necesario para el modo elegido. Los WAV enteros
+se comprimen sin pérdida y los videos de entrada se reducen a audio. Cada ejecución
+remota limpia únicamente sus archivos temporales después de guardar el ZIP de resultados.
+Los originales, el audio del proyecto y los exports se conservan; la limpieza de variantes
+es explícita mediante `karaoke cleanup`. Consulta la [política de medios y recuperación](docs/media-cache.md).
+
 ## Archivos del proyecto
 
 | Archivo o carpeta | Uso |
