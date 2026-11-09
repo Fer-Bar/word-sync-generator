@@ -279,5 +279,6 @@ Esto no cambia los requisitos de FFmpeg ni la instalación de fuentes en Colab.
 
 Uploads use audio-only inputs, compress integer WAV losslessly, and include only
 what the selected render mode needs. Successful remote runs discard their own
-scratch files after the result ZIP is committed. Original inputs, project audio
-and exported videos are preserved. See [media and cache policy](docs/media-cache.md).
+scratch files after the result ZIP is committed. This cleanup preserves original
+inputs, project audio and existing exports. The separate render-version retention
+rules above still apply. See [media and cache policy](docs/media-cache.md).

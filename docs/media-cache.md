@@ -3,7 +3,11 @@
 The project keeps three different audio assets: the source mix, vocals and
 instrumental. They are not duplicate recordings. Keep these project assets if
 you want to edit timing, regenerate a video or switch between lyrics and karaoke.
-Rendering never deletes the user's input, project audio or exported videos.
+The disposable-media cleanup described here preserves the user's inputs, project
+assets and existing exports. Export-version retention is a separate renderer
+policy, including any automatic pruning of superseded render directories. Follow
+the [README's render-retention instructions](../README.md) before rerendering;
+this media policy does not change those rules.
 
 ## Transfer only what is needed
 
@@ -44,5 +48,5 @@ failed run directory or resetting the runtime. Client `.recovery` directories
 also remain on failure. A forced process kill can leave temporary files behind;
 a successful future run never silently deletes these recovery files.
 
-No TTL or size limit applies to project assets or exports. Cleaning creative
-outputs requires an explicit user action, separate from disposable-media cleanup.
+The media-cache policy imposes no TTL or size limit on project assets or exports.
+Export retention follows the separate render-retention policy in the README.
