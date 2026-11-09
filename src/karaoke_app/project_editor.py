@@ -66,14 +66,17 @@ def edit_section(root: Path, document: dict, section: str, console) -> dict | No
         selected["lyrics_inactive_color"] = color("Inactive lyric color #RRGGBB")
     elif section == "3":
         background = choose("Background", [("fluid", "Flowing color"), ("cosmic-sand", "Particles"),
-                                           ("image", "Image in project folder"), ("solid", "Solid color")])
+                                           ("image", "Image in project folder"), ("solid", "Solid color"),
+                                           ("video", "Video in project folder")])
         if background is None:
             return None
-        if background == "image":
-            value = ask("Image path, relative to project")
+        if background in {"image", "video"}:
+            value = ask(f"{background.title()} path, relative to project")
             if not value:
                 return None
-            selected["background_image"] = path(value)
+            selected[f"background_{background}"] = path(value)
+            selected["background_overlay_opacity"] = number("Dark overlay opacity", float, 0, 1)
+            selected["background_crop_right"] = number("Right crop fraction", float, 0, 0.5)
         elif background == "solid":
             selected["background_color"] = color("Background color #RRGGBB")
             if selected["background_color"] is None:
@@ -87,6 +90,7 @@ def edit_section(root: Path, document: dict, section: str, console) -> dict | No
             value = ask("Artwork palette image path")
             if value:
                 selected["cover"] = path(value)
+            selected["background_overlay_opacity"] = number("Dark overlay opacity", float, 0, 1)
     elif section == "4":
         selected["title"] = ask("Title") or None
         selected["artist"] = ask("Artist") or None
@@ -101,9 +105,14 @@ def edit_section(root: Path, document: dict, section: str, console) -> dict | No
         enabled = choose("Title intro", [("enabled", "Enabled"), ("disabled", "Disabled")])
         if enabled:
             selected["intro"] = enabled == "enabled"
-        if enabled != "disabled" and document.get("intro", {}).get("enabled", True):
-            selected["intro_duration"] = number("Intro duration (seconds)", float, 0.1, 60)
+        if enabled == "enabled" or (enabled is None and document.get("intro", {}).get("enabled", True)):
+            selected["intro_start"] = number("Intro start (seconds)", float, 0, 86400)
+            timing = choose("Intro timing", [("duration", "Duration from start"), ("end", "Absolute end time")])
+            if timing:
+                selected[f"intro_{timing}"] = number(f"Intro {timing} (seconds)", float, 0.1, 86400)
         selected["thumbnail_time"] = number("Thumbnail background time (seconds)", float, 0, 86400)
+        selected["thumbnail_align"] = choose("Thumbnail alignment", [("start", "Left"),
+                                                                      ("center", "Center"), ("end", "Right")])
     elif section == "5":
         watermark = choose("Watermark", [("disabled", "Disable"), ("image", "Choose a logo"),
                                          ("adjust", "Adjust current logo")])

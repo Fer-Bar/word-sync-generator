@@ -54,7 +54,8 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
             "visual_style", "background_style", "background_image", "background_color", "cover", "theme",
             "seed", "graphic_style", "graphic_palette", "title_layout", "align", "resolution", "mode", "preset",
             "fps", "title", "artist", "font_size", "lyrics_active_color", "lyrics_inactive_color",
-            "intro", "intro_duration", "thumbnail_time",
+            "intro", "intro_duration", "intro_start", "intro_end", "thumbnail_time", "thumbnail_align",
+            "background_video", "background_overlay_opacity", "background_crop_right",
         },
         "Watermark": {"logo", "no_logo", "logo_position", "logo_scale", "logo_opacity"},
         "Colab and output": {"gpu", "auth", "timeout", "output_dir", "verbose"},
@@ -65,7 +66,7 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
             if action.dest in names:
                 parser._optionals._group_actions.remove(action)
                 group._group_actions.append(action)
-    parser.epilog = ("Commands: source, configure, status, validate, render, background, thumbnail, intro. "
+    parser.epilog = ("Commands: source, configure, status, validate, render, background, preview, thumbnail, intro. "
         "Save appearance: karaoke configure JOB --visual-style plus --background-style fluid. "
         "Render saved settings: karaoke render JOB. Preview background: karaoke background JOB."
     )
@@ -74,7 +75,7 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the preparation command parser."""
     parser = argparse.ArgumentParser(description="Prepare karaoke audio and lyrics on Google Colab.",
-        epilog="Commands: source, configure, status, validate, render, background, thumbnail, intro.")
+        epilog="Commands: source, configure, status, validate, render, background, preview, thumbnail, intro.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--title", help="Track title override used for LRCLIB matching")
@@ -148,7 +149,11 @@ def build_render_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("job_dir", type=Path)
     parser.add_argument("--dry-run", action="store_true", help="Validate and show settings without starting Colab")
-    parser.add_argument("--background-image", type=Path, help="Background image inside the job folder")
+    parser.add_argument("--background-image", type=Path, help="Background image inside the project folder")
+    parser.add_argument("--background-video", type=Path, help="Looping background video inside the project folder")
+    parser.add_argument("--background-overlay-opacity", type=float, help="Dark overlay opacity (0–1)")
+    parser.add_argument("--background-crop-right", type=float,
+                        help="Fraction to crop from the right of an image/video (0–0.5)")
     parser.add_argument("--background-color", help="Solid RGB background color")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
     parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
@@ -170,8 +175,11 @@ def build_render_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lyrics-inactive-color", help="Inactive lyric color, #RRGGBB")
     parser.add_argument("--intro", action=argparse.BooleanOptionalAction, default=None,
                         help="Enable/disable title intro")
-    parser.add_argument("--intro-duration", type=float, help="Intro duration in seconds, greater than zero")
+    parser.add_argument("--intro-duration", type=float, help="Intro duration in seconds; exclusive with --intro-end")
+    parser.add_argument("--intro-start", type=float, help="Intro start time in seconds (at least zero)")
+    parser.add_argument("--intro-end", type=float, help="Intro end time in seconds; exclusive with --intro-duration")
     parser.add_argument("--thumbnail-time", type=float, help="Background time for the thumbnail, in seconds")
+    parser.add_argument("--thumbnail-align", choices=("start", "center", "end"), help="Independent thumbnail alignment")
     parser.add_argument("--mode", choices=("both", "karaoke", "lyrics"), help="Default: saved project mode")
     parser.add_argument(
         "--logo",
@@ -301,6 +309,7 @@ def show_commands() -> None:
         ("render JOB --dry-run", "Validate files and review settings"),
         ("render JOB", "Render videos on Colab"),
         ("background JOB", "Preview the animated background"),
+        ("preview JOB", "Preview timed lyrics locally"),
         ("thumbnail JOB / intro JOB", "Generate artwork"),
     ):
         table.add_row(command, description)
@@ -314,10 +323,11 @@ def main() -> int:
         show_commands()
         return 0
     verbose = "--verbose" in sys.argv[1:]
-    log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
-                                 "--help" not in sys.argv and "-h" not in sys.argv)
     if verbose:
         sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
+    log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
+                                 "--help" not in sys.argv and "-h" not in sys.argv and
+                                 sys.argv[1:2] not in (["status"], ["validate"]))
     if sys.argv[1:2] == ["source"]:
         del sys.argv[1]
 

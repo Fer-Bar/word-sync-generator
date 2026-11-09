@@ -13,10 +13,10 @@ El texto sigue este orden de prioridad:
 4. Whisper cuando no hay referencia o se utiliza `--no-lrclib`.
 
 ```bash
-uv run karaoke ./cancion.flac --title "Mi canción" --artist "Artista" \
+uv run karaoke source ./cancion.flac --title "Mi canción" --artist "Artista" \
   --language es --lyrics-text ./letra.txt
-uv run karaoke "YOUTUBE_URL" --lrclib-id 123456
-uv run karaoke ./cancion.flac --language es --no-lrclib
+uv run karaoke source "YOUTUBE_URL" --lrclib-id 123456
+uv run karaoke source ./cancion.flac --language es --no-lrclib
 ```
 
 `--no-lrclib` desactiva todas las referencias externas y la reparación posterior;
@@ -84,6 +84,7 @@ por otra referencia. La escritura usa respaldo temporal para revertir fallos, no
 | `--no-lrclib` | disabled | Skip lyrics lookup and use Faster Whisper. |
 | `--whisper-model` | `large-v3` | Faster Whisper fallback model. |
 | `--demucs-model` | `htdemucs_ft` | Source separation model; `htdemucs` is faster. |
+| `--preset` | none | `fluid`, `cosmic` or `classic`; explicit appearance options override the preset. |
 | `--visual-style` | `plus` | Shared Switzer typography; karaoke scroll and fixed lyrics pages. |
 | `--background-style` | `fluid` | Choose `fluid` or `cosmic-sand`; omit when selecting a static background. |
 | `--cover` | none | Extract a procedural palette from local artwork. |
@@ -100,7 +101,7 @@ por otra referencia. La escritura usa respaldo temporal para revertir fallos, no
 | `--timeout` | `14400` | Remote timeout in seconds. |
 | `--no-cookies` | disabled | Do not upload the local cookies file. |
 
-Consulta `uv run karaoke --help` para la lista completa. La preparación termina antes del
+Consulta `uv run karaoke source --help` para la lista completa. La preparación termina antes del
 render para permitir revisar el resultado; la revisión externa no es un requisito técnico.
 
 ## Modelo de alineación

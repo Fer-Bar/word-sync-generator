@@ -23,7 +23,7 @@ def preset_options(options: dict[str, Any]) -> dict[str, Any]:
     if preset is not None and preset not in PRESETS:
         raise ValueError(f"Unknown preset: {preset}")
     result = dict(PRESETS.get(preset, {}))
-    backgrounds = ("background_image", "background_color", "background_style")
+    backgrounds = ("background_image", "background_video", "background_color", "background_style")
     if any(options.get(key) is not None for key in backgrounds):
         for key in backgrounds:
             result.pop(key, None)
@@ -124,25 +124,27 @@ def resolve_options(
             if key == "title":
                 document["title"] = options[key].strip()
     document, theme = apply_render_theme(document, options.get("theme") or "job")
-    static = [options.get("background_image"), options.get("background_color")]
+    static = [options.get("background_image"), options.get("background_video"), options.get("background_color")]
     if sum(bool(value) for value in [*static, options.get("background_style")]) > 1:
-        raise ValueError("Choose one background: --background-style, --background-image or --background-color")
+        raise ValueError("Choose one background: procedural, image, video or solid color")
     if any(static):
         if options.get("theme") not in (None, "job"):
             raise ValueError("Named themes require a procedural background; omit --theme for an image or solid color")
         if options.get("cover"):
             raise ValueError("--cover requires a procedural background")
-        if options.get("background_image"):
-            image = Path(options["background_image"]).expanduser().resolve()
-            if not image.is_relative_to(root):
-                raise ValueError("Background image must be inside the job folder. Copy it there first.")
-            relative = image.relative_to(root).as_posix()
-            resolve_job_asset(root, relative, "background image")
-            from PIL import Image
+        if options.get("background_image") or options.get("background_video"):
+            kind = "video" if options.get("background_video") else "image"
+            asset = Path(options[f"background_{kind}"]).expanduser().resolve()
+            if not asset.is_relative_to(root):
+                raise ValueError(f"Background {kind} must be inside the project folder. Copy it there first.")
+            relative = asset.relative_to(root).as_posix()
+            resolve_job_asset(root, relative, f"background {kind}")
+            if kind == "image":
+                from PIL import Image
 
-            with Image.open(image) as picture:
-                picture.verify()
-            document["background"] = {"kind": "image", "path": relative, "overlay_opacity": 0}
+                with Image.open(asset) as picture:
+                    picture.verify()
+            document["background"] = {"kind": kind, "path": relative, "overlay_opacity": 0}
         else:
             document["background"] = {"kind": "solid",
                                       "color": validate_color(options["background_color"], "background color")}
@@ -155,6 +157,15 @@ def resolve_options(
         document, _ = apply_render_theme(document, "job", options["seed"])
     document = apply_graphic_options(document, **{key: options.get(key) for key in
         ("graphic_style", "graphic_palette", "title_layout", "align")})
+    for option, field, kinds in (
+        ("background_overlay_opacity", "overlay_opacity", {"image", "video", "cosmic"}),
+        ("background_crop_right", "crop_right", {"image", "video"}),
+    ):
+        if options.get(option) is not None:
+            if document["background"]["kind"] not in kinds:
+                label = option.replace("_", "-")
+                raise ValueError(f"--{label} requires a compatible image, video or procedural background")
+            document["background"][field] = options[option]
     if options.get("font_size") is not None:
         document.setdefault("style", {})["font_size"] = options["font_size"]
     for phase in ("active", "inactive"):
@@ -165,11 +176,17 @@ def resolve_options(
             style["primary_color" if phase == "active" else "highlight_color"] = color
     if options.get("intro") is not None:
         document.setdefault("intro", {})["enabled"] = options["intro"]
-    if options.get("intro_duration") is not None:
-        document.setdefault("intro", {})["duration"] = options["intro_duration"]
-        document["intro"].pop("end", None)
+    if options.get("intro_duration") is not None and options.get("intro_end") is not None:
+        raise ValueError("Choose --intro-duration or --intro-end, not both")
+    for field in ("start", "duration", "end"):
+        if options.get(f"intro_{field}") is not None:
+            document.setdefault("intro", {})[field] = options[f"intro_{field}"]
+            if field in {"duration", "end"}:
+                document["intro"].pop("end" if field == "duration" else "duration", None)
     if options.get("thumbnail_time") is not None:
         document.setdefault("thumbnail", {})["time"] = options["thumbnail_time"]
+    if options.get("thumbnail_align") is not None:
+        document.setdefault("thumbnail", {})["align"] = options["thumbnail_align"]
     if options.get("no_logo"):
         document["watermark"] = {"enabled": False}
     else:
@@ -192,7 +209,30 @@ def resolve_options(
                                                 for key in ("position", "scale", "opacity")):
             raise ValueError("Choose --logo before adjusting a disabled watermark")
         document["watermark"] = watermark
-    return validate_job_document(document), theme
+    document = validate_job_document(document)
+    if document["background"]["kind"] == "video":
+        video = resolve_job_asset(root, document["background"]["path"], "background video")
+        metadata = validate_background_video(video)
+        duration = metadata.get("duration")
+        if isinstance(duration, (int, float)) and duration > 0:
+            if document.get("thumbnail", {}).get("time", 0) >= duration:
+                raise ValueError(f"Thumbnail time must be before the background video's end ({duration:g} seconds)")
+    return document, theme
+
+
+def validate_background_video(path: Path) -> dict[str, Any]:
+    """Decode one frame so invalid or audio-only files fail before saving settings."""
+    import imageio_ffmpeg
+
+    frames = imageio_ffmpeg.read_frames(str(path), pix_fmt="rgb24")
+    try:
+        metadata = next(frames)
+        next(frames)
+        return metadata
+    except (OSError, RuntimeError, StopIteration) as error:
+        raise ValueError(f"Background video has no decodable video frame: {path}") from error
+    finally:
+        frames.close()
 
 
 def appearance_rows(document: dict) -> dict[str, str]:
@@ -209,8 +249,13 @@ def appearance_rows(document: dict) -> dict[str, str]:
         "Title": document["title"],
         "Artist": intro.get("artist") or document.get("source", {}).get("artist") or "—",
         "Output": document.get("render", {}).get("mode", "both"),
-        "Intro": (f"Enabled · {intro.get('duration', 'automatic')} s" if intro.get("enabled", True) else "Disabled"),
+        "Intro": (f"Start {intro.get('start', 0)} s · " +
+                  (f"end {intro['end']} s" if "end" in intro else f"duration {intro.get('duration', 'automatic')} s")
+                  if intro.get("enabled", True) else "Disabled"),
         "Thumbnail time": str(document.get("thumbnail", {}).get("time", "automatic")),
+        "Thumbnail alignment": document.get("thumbnail", {}).get("align", intro.get("align", "start")),
+        "Background darkening": str(background.get("overlay_opacity", 0)),
+        "Background right crop": str(background.get("crop_right", 0)),
         "Lyric colors": " / ".join(str(value) for value in (style.get("lyrics_colors") or {}).values()) or "Default",
         "Typography": f"{style.get('font_family', 'Default')} · {style.get('font_size', 'default')} px",
         "Background": "Xerox poster" if xerox else str(background_name),

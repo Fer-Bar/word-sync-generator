@@ -21,9 +21,10 @@ entrar y volver a cualquier sección:
 1. **Presets:** `fluid` (palabras animadas y fondo fluido), `cosmic` (partículas)
    o `classic` (subtítulos clásicos y fondo sólido).
 2. **Tipografía:** palabras animadas o subtítulos clásicos, tamaño y colores de letras.
-3. **Fondo:** fondo procedural, paleta, semilla, imagen o color sólido.
-4. **Título y arte:** título, artista, gráficos, paleta, disposición, alineación, intro
-   y momento del fondo para la miniatura.
+3. **Fondo:** fondo procedural, paleta, semilla, imagen, video o color sólido;
+   recorte de imágenes/videos y opacidad de la capa oscura.
+4. **Título y arte:** título, artista, gráficos, paleta, disposición, alineación y
+   comienzo/duración/final de la intro; momento y alineación de la miniatura.
 5. **Marca de agua:** elegir o desactivar el logo, posición, escala y opacidad.
 6. **Video y salida:** resolución, FPS y modo karaoke, lyrics o ambos.
 
@@ -32,7 +33,7 @@ compara lo guardado con la selección. Solo **Guardar** y su confirmación escri
 el estado. Cancelar o interrumpir deja todos los archivos del proyecto intactos.
 No se genera una previsualización desde el menú.
 
-Las imágenes de fondo deben estar dentro de la carpeta del proyecto. Las rutas
+Las imágenes y videos de fondo deben estar dentro de la carpeta del proyecto. Las rutas
 relativas del menú se interpretan desde esa carpeta. El logo puede ser una imagen
 externa; conserva ese archivo mientras lo use el proyecto.
 
@@ -45,6 +46,9 @@ uv run karaoke configure outputs/PROYECTO --preset cosmic --resolution 720p --fp
 uv run karaoke configure outputs/PROYECTO --title "Otro título" --artist "Artista"
 uv run karaoke configure outputs/PROYECTO --background-color '#112233' --no-logo
 uv run karaoke configure outputs/PROYECTO --font-size 64 --lyrics-active-color '#FFFFFF' --no-intro
+uv run karaoke configure outputs/PROYECTO --background-video outputs/PROYECTO/fondo.mp4 \
+  --background-crop-right 0.1 --background-overlay-opacity 0.2
+uv run karaoke configure outputs/PROYECTO --intro-start 0.5 --intro-end 3 --thumbnail-align end
 ```
 
 Las opciones explícitas prevalecen sobre el preset. Las opciones omitidas conservan

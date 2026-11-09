@@ -46,9 +46,9 @@ def environment():
     return {**os.environ, "PYTHONPATH": str(ROOT / "src"), "TERM": "xterm", "COLUMNS": "110"}
 
 
-def run_cli(*arguments):
+def run_cli(*arguments, cwd=None):
     return subprocess.run([sys.executable, "-m", "karaoke_app.cli", *map(str, arguments)],
-                          capture_output=True, text=True, timeout=20, env=environment())
+                          capture_output=True, text=True, timeout=20, env=environment(), cwd=cwd)
 
 
 def run_terminal(project, answers):
@@ -101,14 +101,20 @@ def test_configure_status_and_validate_round_trip(project):
     assert document["style"]["lyrics_colors"]["active"] == "#ABCDEF"
     assert document["thumbnail"]["time"] == 2
     assert not (project / "job.json").exists()
+    invocation = project / "invocation"
+    invocation.mkdir()
     before = snapshot(project)
-    status = run_cli("status", project)
+    logs_before = snapshot(ROOT / ".karaoke/logs")
+    invocation_before = snapshot(invocation)
+    status = run_cli("--verbose", "status", project, cwd=invocation)
     assert status.returncode == 0, status.stderr
     assert "New title" in status.stdout and "Video exports: 0" in status.stdout
-    validate = run_cli("validate", project)
+    validate = run_cli("validate", project, "--verbose", cwd=invocation)
     assert validate.returncode == 0, validate.stderr
     assert "Colab not started" in validate.stderr
     assert snapshot(project) == before
+    assert snapshot(ROOT / ".karaoke/logs") == logs_before
+    assert snapshot(invocation) == invocation_before
 
 
 def test_invalid_config_preserves_all_files_and_mode_validation_is_selective(project):
@@ -199,3 +205,123 @@ def test_classic_colors_can_be_set_without_an_existing_palette(project):
             transcript, document["video"], style=StyleConfig.from_dict(document["style"]), mode=mode)
         assert hex_to_ass_color("#22CCFF") in subtitles
         assert hex_to_ass_color("#334455") in subtitles
+
+
+@pytest.fixture
+def video_background(project):
+    import imageio_ffmpeg
+
+    video = project / "background.mp4"
+    subprocess.run([
+        imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=200x100:r=8:d=2",
+        "-vf", "drawbox=x=150:y=0:w=50:h=100:color=blue:t=fill", "-pix_fmt", "yuv420p", str(video),
+    ], check=True, capture_output=True, timeout=20)
+    return video
+
+
+def test_cli_video_background_and_artwork_settings_reach_real_graphics(project, video_background):
+    import zipfile
+
+    from PIL import Image
+
+    from karaoke_app.ass import generate_ass
+    from karaoke_app.cli import _create_render_bundle
+    from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
+    from karaoke_app.render_graphics import background_frame, generate_render_graphics
+    from karaoke_app.style import StyleConfig
+
+    result = run_cli("configure", project, "--background-video", video_background,
+                     "--background-crop-right", "0.25", "--background-overlay-opacity", "0.5",
+                     "--intro", "--intro-start", "0.1", "--intro-end", "0.6",
+                     "--thumbnail-time", "0.7", "--thumbnail-align", "end")
+    assert result.returncode == 0, result.stderr
+    document = load_job_document(project)
+    assert run_cli("validate", project).returncode == 0
+    # Crop removes the blue strip, then darkening halves the decoded red pixels.
+    frame = background_frame(project, document, time=0.7)
+    for point in ((0, 0), (frame.width // 2, frame.height // 2), (frame.width - 1, frame.height - 1)):
+        red, green, blue = frame.getpixel(point)
+        assert 115 <= red <= 135 and green < 10 and blue < 10
+    lyrics = json.loads((project / "lyrics.yaml").read_text())
+    lyrics["metadata"]["duration_ms"] = 2000
+    lyrics["lines"][0].update(start_ms=1500, end_ms=1900)
+    lyrics["lines"][0]["words"][0].update(start_ms=1500, end_ms=1900)
+    (project / "lyrics.yaml").write_text(json.dumps(lyrics))
+    with wave.open(str(project / "original.wav"), "wb") as audio:
+        audio.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\x00\x00" * 16000)
+    transcript = lyrics_to_transcript(load_lyrics_file(project / "lyrics.yaml"))
+    graphics = project / "graphics-check"
+    timing = generate_render_graphics(project, document, ("lyrics",), graphics, transcript)
+    assert timing["start"] == pytest.approx(0.1)
+    assert timing["end"] == pytest.approx(0.6)
+    assert timing["duration"] == pytest.approx(0.5)
+    with Image.open(graphics / "thumbnails/thumbnail_lyrics.png") as thumbnail:
+        # Independent thumbnail alignment changes the composition, not the video background.
+        assert thumbnail.size == (1280, 720)
+        assert thumbnail.convert("RGB").tobytes() != frame.resize(thumbnail.size).tobytes()
+        import numpy as np
+
+        pixels = np.asarray(thumbnail.convert("RGB"))
+        _, ink_columns = np.where((pixels[:, :, 1] > 180) & (pixels[:, :, 2] > 180))
+        assert (ink_columns.min() + ink_columns.max()) / 2 > thumbnail.width / 2
+    bundle = project / "render.zip"
+    ass = generate_ass(transcript, document["video"], style=StyleConfig.from_dict(document["style"]), mode="lyrics")
+    _create_render_bundle(project, document, "lyrics", {"lyrics": ass}, bundle, transcript=transcript)
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read("background.mp4") == video_background.read_bytes()
+        packed = json.loads(archive.read(STATE_FILENAME))
+        assert packed["background"] == document["background"]
+        assert packed["intro"]["end"] == pytest.approx(0.6)
+    # A duration replaces the old absolute end, and separate thumbnail alignment survives.
+    changed = run_cli("configure", project, "--intro-duration", "0.3")
+    assert changed.returncode == 0, changed.stderr
+    saved = load_job_document(project)
+    assert "end" not in saved["intro"]
+    assert saved["thumbnail"]["align"] == "end"
+    # An explicit end is not silently capped by the default five-second duration.
+    assert run_cli("configure", project, "--intro-start", "0.5", "--intro-end", "6").returncode == 0
+    lyrics["metadata"]["duration_ms"] = 8000
+    lyrics["lines"][0].update(start_ms=7500, end_ms=7900)
+    lyrics["lines"][0]["words"][0].update(start_ms=7500, end_ms=7900)
+    (project / "lyrics.yaml").write_text(json.dumps(lyrics))
+    with wave.open(str(project / "original.wav"), "wb") as audio:
+        audio.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\x00\x00" * 64000)
+    transcript = lyrics_to_transcript(load_lyrics_file(project / "lyrics.yaml"))
+    timing = generate_render_graphics(project, load_job_document(project), ("lyrics",), graphics, transcript)
+    assert timing["start"] == pytest.approx(0.5)
+    assert timing["end"] == pytest.approx(6)
+    assert run_cli("configure", project, "--intro-duration", "6.2").returncode == 0
+    timing = generate_render_graphics(project, load_job_document(project), ("lyrics",), graphics, transcript)
+    assert timing["end"] == pytest.approx(6.7)
+
+
+
+def test_invalid_video_and_artwork_options_preserve_the_project(project, video_background):
+    original = snapshot(project)
+    cases = [
+        ("--background-video", video_background, "--background-image", video_background),
+        ("--background-video", video_background, "--background-crop-right", "0.51"),
+        ("--background-video", video_background, "--background-overlay-opacity", "nan"),
+        ("--background-video", video_background, "--thumbnail-time", "2"),
+        ("--intro-start", "1", "--intro-end", "0.5"),
+        ("--intro-duration", "1", "--intro-end", "2"),
+    ]
+    for arguments in cases:
+        result = run_cli("configure", project, *arguments)
+        assert result.returncode == 1, (arguments, result.stderr)
+        assert snapshot(project) == original
+    video_background.write_bytes(b"not video")
+    result = run_cli("configure", project, "--background-video", video_background)
+    assert result.returncode == 1 and "decodable video frame" in " ".join(result.stderr.split())
+    assert load_job_document(project)["background"]["kind"] == "solid"
+
+
+def test_terminal_video_section_accepts_a_relative_asset_and_saves(project, video_background):
+    # Background section: video, relative path, dimming, crop, then save.
+    code, output = run_terminal(project, "3\n5\nbackground.mp4\n0.2\n0.25\n8\ny\n")
+    assert code == 0, output
+    assert load_job_document(project)["background"] == {
+        "kind": "video", "path": "background.mp4", "overlay_opacity": 0.2, "crop_right": 0.25,
+    }
