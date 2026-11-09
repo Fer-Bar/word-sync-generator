@@ -66,7 +66,8 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
             if action.dest in names:
                 parser._optionals._group_actions.remove(action)
                 group._group_actions.append(action)
-    parser.epilog = ("Commands: source, configure, status, validate, render, background, preview, thumbnail, intro. "
+    parser.epilog = ("Commands: source, configure, status, validate, render, background, "
+        "preview, thumbnail, intro, cleanup. "
         "Save appearance: karaoke configure JOB --visual-style plus --background-style fluid. "
         "Render saved settings: karaoke render JOB. Preview background: karaoke background JOB."
     )
@@ -75,7 +76,7 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the preparation command parser."""
     parser = argparse.ArgumentParser(description="Prepare karaoke audio and lyrics on Google Colab.",
-        epilog="Commands: source, configure, status, validate, render, background, preview, thumbnail, intro.")
+        epilog="Commands: source, configure, status, validate, render, background, preview, thumbnail, intro, cleanup.")
     parser.add_argument("source", help="YouTube URL or local audio/video file")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--title", help="Track title override used for LRCLIB matching")
@@ -311,6 +312,7 @@ def show_commands() -> None:
         ("background JOB", "Preview the animated background"),
         ("preview JOB", "Preview timed lyrics locally"),
         ("thumbnail JOB / intro JOB", "Generate artwork"),
+        ("cleanup JOB", "Inspect exports; move selected renders to recoverable trash"),
     ):
         table.add_row(command, description)
     console.print(table)
@@ -327,7 +329,7 @@ def main() -> int:
         sys.argv[:] = [sys.argv[0], *(value for value in sys.argv[1:] if value != "--verbose")]
     log_path = configure_logging(verbose, diagnostics="--dry-run" not in sys.argv and
                                  "--help" not in sys.argv and "-h" not in sys.argv and
-                                 sys.argv[1:2] not in (["status"], ["validate"]))
+                                 sys.argv[1:2] not in (["status"], ["validate"], ["cleanup"]))
     if sys.argv[1:2] == ["source"]:
         del sys.argv[1]
 
@@ -340,6 +342,10 @@ def main() -> int:
             from karaoke_app.lyrics_preview import run_lyrics_preview
 
             run_lyrics_preview(sys.argv[2:])
+        elif sys.argv[1:2] == ["cleanup"]:
+            from karaoke_app.output_cleanup import run_cleanup
+
+            run_cleanup(sys.argv[2:])
         elif sys.argv[1:2] in (["status"], ["validate"]):
             from karaoke_app.project_status import run_project_status
 
@@ -744,7 +750,7 @@ def render_colab(args: argparse.Namespace) -> Path:
         )
         for mode in modes
     }
-    render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}"
+    render_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{args.mode}-{uuid.uuid4().hex[:12]}"
     output_dir = root / "renders" / render_id
     session = f"render-{uuid.uuid4().hex[:10]}"
     session_requested = False
@@ -815,12 +821,6 @@ def render_colab(args: argparse.Namespace) -> Path:
                 raise RuntimeError(f"Session stop was not confirmed; stop {session} manually")
 
     _save_client_performance(output_dir, began, args.gpu)
-    from karaoke_app.output_cleanup import prune_renders
-
-    try:
-        prune_renders(root)
-    except OSError as error:
-        LOGGER.warning("Render saved, but old renders could not be removed: %s", error)
     LOGGER.info("Completed in %.1fs", time.perf_counter() - began)
     LOGGER.info("Rendered artifacts saved to %s", output_dir)
     return output_dir

@@ -88,10 +88,25 @@ Sin `--mode`, se usa el modo guardado, inicialmente `both`. `--mode lyrics` usa 
 audio original y `--mode karaoke` el instrumental. Las opciones de apariencia que
 se pasan a `render` afectan solo esa ejecución; `configure` las guarda para el futuro.
 
-Los resultados se descargan en `outputs/PROYECTO/renders/FECHA-MODO/`.
-**En esta versión, un render correcto elimina variantes anteriores que ya tengan
-reemplazo.** Copia fuera de `renders/` las variantes que quieras conservar antes de
-volver a renderizar.
+Los resultados se descargan en `outputs/PROYECTO/renders/FECHA-MODO-ID/`.
+
+**Conservación de variantes:** cada render tiene un ID único y se conserva, aunque generes
+otro video del mismo modo. No se borran ni reemplazan automáticamente versiones anteriores.
+
+Para ordenar los exports, inspecciona el inventario y selecciona IDs exactos:
+
+```bash
+uv run karaoke cleanup outputs/PROYECTO
+uv run karaoke cleanup outputs/PROYECTO RENDER_ID
+uv run karaoke cleanup outputs/PROYECTO RENDER_ID --apply
+uv run karaoke cleanup outputs/PROYECTO RENDER_ID --restore --apply
+```
+
+Sin `--apply` solo se muestran los archivos seleccionables y su tamaño. `--apply` exige IDs
+explícitos y mueve la carpeta completa (MP4, subtítulos, miniaturas y configuración) a
+`.trash/renders/` del proyecto. `--restore` lista o recupera esos exports sin sobrescribir
+archivos existentes. La papelera es local y **sigue ocupando espacio**; el comando no borra
+permanentemente, no limpia audios fuente y rechaza enlaces simbólicos o rutas externas.
 
 ## Archivos del proyecto
 
