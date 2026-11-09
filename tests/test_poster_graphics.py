@@ -142,6 +142,7 @@ def test_saved_graphics_reach_both_rendered_videos(
         assert archive.testzip() is None
         archive.extractall(output)
     background = Image.open(output / "background.png").convert("RGBA")
+    intro_frames = {}
     for mode in ("lyrics", "karaoke"):
         video = imageio_ffmpeg.read_frames(str(output / f"Song_{mode}.mp4"), pix_fmt="rgb24")
         metadata = next(video)
@@ -153,11 +154,22 @@ def test_saved_graphics_reach_both_rendered_videos(
             ink = np.asarray(intro.getchannel("A")) > 240
         ink[:, :80] = False  # Exclude the independently applied watermark.
         assert np.count_nonzero(ink) > 20
-        assert np.abs(frames[1].astype(float)[ink] - expected[ink]).mean() < 35
-        # The intro is gone before the first lyric; actual lyric pixels appear later.
-        plain = np.asarray(background.convert("RGB"))[20:170, 80:310].astype(float)
-        singing = frames[12][20:170, 80:310].astype(float)
-        assert np.count_nonzero(np.abs(plain - singing) > 50) > 20
+        intro_frames[mode] = frames[1].astype(float)
+        assert np.abs(intro_frames[mode][ink] - expected[ink]).mean() < 35
+        plain = np.asarray(background.convert("RGB")).astype(float)
+        if graphic_style != "default":
+            # Readability is independent of whether the generated PNG has the same bug.
+            direction = 1 if palette == "dark" else -1
+            assert (direction * (intro_frames[mode][ink] - plain[ink])).mean() > 100
+        # At 0.75 s the intro has ended and vocals have not started. Keep clear of logos.
+        gap = frames[6].astype(float)
+        assert np.abs(gap[30:140, 80:300] - plain[30:140, 80:300]).mean() < 15
+        # Compare against the gap so a persistent watermark cannot stand in for lyrics.
+        singing = frames[12].astype(float)
+        assert np.count_nonzero(np.abs(gap[20:170, 80:310] - singing[20:170, 80:310]) > 50) > 20
         with Image.open(output / "thumbnails" / f"thumbnail_{mode}.png") as thumbnail:
             assert thumbnail.size == (1280, 720)
         assert (output / "subtitles" / f"Song_{mode}.ass").read_text() == subtitles[mode]
+    if graphic_style == "default":
+        # The default modes have distinct title cards; FOMO intentionally shares its layout.
+        assert np.count_nonzero(np.abs(intro_frames["lyrics"] - intro_frames["karaoke"]) > 50) > 100

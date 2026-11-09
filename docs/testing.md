@@ -4,6 +4,10 @@
 
 ## Ejecutar
 
+La suite completa requiere `ffmpeg` y `ffprobe` disponibles en `PATH`, además de
+Chromium. En Ubuntu/Debian, FFmpeg/FFprobe se instalan con `sudo apt-get install ffmpeg`.
+El workflow `Checks` instala estos requisitos.
+
 ```bash
 uv sync --locked --dev --python 3.12
 uv run playwright install --with-deps chromium
@@ -18,10 +22,11 @@ Para iterar sobre la preparación local y el render:
 uv run pytest -q tests/test_render_workflow.py tests/test_render_lifecycle.py
 ```
 
-Las pruebas nuevas usan el FFmpeg incluido en `imageio-ffmpeg`, sin depender de un
-FFmpeg/FFprobe del sistema. El workflow `Checks` ya instala Chromium. El caso de navegador
-falla en CI si falta Chromium; localmente se omite con una explicación. Una ejecución
-con omisiones no equivale a haber probado los escenarios omitidos.
+Los renders de `test_render_workflow.py` y `test_poster_graphics.py` usan el FFmpeg
+incluido en `imageio-ffmpeg`; el flujo de notebook de `test_notebook_pipeline.py` usa
+FFmpeg/FFprobe del sistema. El caso de navegador falla en CI si falta Chromium;
+localmente se omite con una explicación. Una ejecución con omisiones no equivale a
+haber probado los escenarios omitidos.
 
 ## Qué se comprueba
 
@@ -48,8 +53,9 @@ con omisiones no equivale a haber probado los escenarios omitidos.
   existentes específicas de Switzer en `test_browser_lyrics.py` requieren la fuente
   en caché y pueden omitirse cuando no está disponible.
 
-Los tests de render ASS desactivan únicamente la instalación/descarga de fuentes del
-runtime: no deben ejecutar `apt` ni cambiar fuentes del sistema durante una prueba.
+Los renders ASS de `test_render_workflow.py` y `test_poster_graphics.py` desactivan
+únicamente la instalación/descarga de fuentes del runtime: no deben ejecutar `apt` ni
+cambiar fuentes del sistema durante una prueba.
 Usan las fuentes ya disponibles. No sustituyen el detector de NVENC, FFmpeg, la creación
 de archivos ni el empaquetado. Como la dependencia local no incluye FFprobe, el adaptador
 de duración del test decodifica el audio real a PCM con FFmpeg y cuenta sus muestras.
@@ -101,8 +107,11 @@ paletas. No fija una media o desviación de ruido para imitar una portada determ
 Las combinaciones de límites de título/layout/alineación siguen cubiertas.
 
 El flujo de gráficos usa audio y subtítulos válidos y decodifica ambos MP4. Comprueba
-que el intro específico de cada modo llegue a sus fotogramas y que después aparezcan
-las letras. Sustituye las pruebas que solo inspeccionaban llamadas al renderizador.
+que el intro llegue a sus fotogramas, desaparezca antes de la primera letra y que
+las letras aparezcan después. Comprueba también que los modos del estilo predeterminado
+se distingan y que el texto tenga contraste con el fondo según la paleta elegida, sin
+usar otro gráfico del mismo generador como única referencia. Sustituye las pruebas que
+solo inspeccionaban llamadas al renderizador.
 Las tolerancias de píxeles cubren pérdidas de compresión de video, no una estética por
 canción. La selección del fotograma de miniatura también usa un video real de dos colores.
 
