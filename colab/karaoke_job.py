@@ -271,7 +271,9 @@ def _run_pipeline(config: dict[str, Any]) -> None:
             "margin": float(watermark_config.get("margin", 0.05)),
             "opacity": float(watermark_config.get("opacity", 0.85)),
         }
-    (output_dir / "job.json").write_text(json.dumps(job_document, ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / ".karaoke").mkdir(exist_ok=True)
+    (output_dir / ".karaoke/project.json").write_text(
+        json.dumps(job_document, ensure_ascii=False, indent=2), encoding="utf-8")
 
     _write_performance(output_dir, performance)
     _create_archive(output_dir, Path(config["archive_path"]))
@@ -293,7 +295,7 @@ def _render_existing_job(config: dict[str, Any]) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     _event("Opening render project", stage="runtime")
     _extract_archive(RENDER_JOB_PATH, job_dir)
-    document = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    document = json.loads((job_dir / ".karaoke/project.json").read_text(encoding="utf-8"))
     _event("Opening render project", stage="runtime", state="done")
     performance = {"stages": [], "modes": {}, "video": document["video"], "cpu_count": os.cpu_count()}
     requested_mode = config["mode"]

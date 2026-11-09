@@ -199,7 +199,7 @@ def test_colab_bundle_renders_browser_overlay_and_keeps_subtitle_export(tmp_path
             assert pixels[y, x, 0] > 200 and pixels[y, x, 1] < 60
         assert (output / "subtitles" / f"Sample_{mode}.ass").is_file()
         assert (output / "intro" / f"intro_{mode}.png").is_file()
-    bundled = json.loads((tmp_path / "remote/render_job/job.json").read_text())
+    bundled = json.loads((tmp_path / "remote/render_job/.karaoke/project.json").read_text())
     scene = json.loads((tmp_path / "remote/render_job/lyrics.scene.json").read_text())
     assert bundled["intro"]["end"] < scene["groups"][0]["start"] - .35
     assert all("ass=" not in " ".join(command) for command in commands)

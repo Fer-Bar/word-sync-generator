@@ -10,6 +10,7 @@ import pytest
 
 from colab import karaoke_job
 from karaoke_app.cli import _create_render_bundle
+from karaoke_app.job_document import STATE_FILENAME
 from karaoke_app.media_transfer import prepare_audio_transfer
 
 
@@ -98,7 +99,7 @@ def test_bundle_deduplicates_selected_audio_without_changing_project(wave_source
     with zipfile.ZipFile(destination) as archive:
         files = [name for name in archive.namelist() if name.startswith("media/")]
         assert len(files) == 1
-        bundle = json.loads(archive.read("job.json"))
+        bundle = json.loads(archive.read(STATE_FILENAME))
         assert bundle["media"]["original_audio"] == bundle["media"]["instrumental_audio"] == files[0]
         decoded = tmp_path / "bundled.flac"
         decoded.write_bytes(archive.read(files[0]))

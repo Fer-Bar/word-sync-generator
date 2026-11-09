@@ -314,7 +314,7 @@ def run_thumbnail(argv: list[str]) -> None:
     parser.add_argument("--background-style", choices=BACKGROUND_STYLES)
     parser.add_argument("--theme", choices=tuple(THEMES.keys()), help="Preset color palette")
     parser.add_argument("--cover", type=Path, help="Artwork palette for procedural background")
-    parser.add_argument("--logo", type=Path, default=THUMBNAIL_LOGO)
+    parser.add_argument("--logo", type=Path, help="Override the project logo")
     parser.add_argument("--no-logo", action="store_true")
     parser.add_argument(
         "--title-font", type=Path,
@@ -334,10 +334,11 @@ def run_thumbnail(argv: list[str]) -> None:
         artist = (
             artist
             if artist is not None
-            else (doc.get("source", {}).get("artist") or doc.get("metadata", {}).get("artist"))
+            else (doc.get("intro", {}).get("artist") or doc.get("source", {}).get("artist")
+                  or doc.get("metadata", {}).get("artist"))
         )
     if not title or not artist:
-        raise ValueError("Supply --title and --artist (or a job with title and source.artist / metadata.artist)")
+        raise ValueError("Supply --title and --artist, or configure the project title and artist first")
     from karaoke_app.cli import _safe_filename
 
     output_dir = args.output_dir or (
@@ -349,12 +350,7 @@ def run_thumbnail(argv: list[str]) -> None:
     bg: Path | Image.Image
     if args.background is not None:
         bg = args.background
-    elif (
-        args.background_style
-        or args.theme
-        or args.cover
-        or (doc and doc.get("background", {}).get("kind") in {"cosmic", "image", "video"})
-    ):
+    else:
         from karaoke_app.render_graphics import background_frame
         from karaoke_app.visual_config import apply_visual_options
 
@@ -373,11 +369,16 @@ def run_thumbnail(argv: list[str]) -> None:
         if args.theme:
             target_doc, _ = apply_render_theme(target_doc, theme=args.theme)
         job_root = args.job_dir or Path(".")
-        bg = background_frame(job_root, target_doc)
-    else:
-        bg = REFERENCES / "background.png"
+        bg = background_frame(job_root, target_doc, time=target_doc.get("thumbnail", {}).get("time", 0))
 
-    align = args.align if args.align is not None else ((doc or {}).get("intro") or {}).get("align", "start")
+    from karaoke_app.render_graphics import graphic_logo
+
+    intro = (doc or {}).get("intro") or {}
+    thumbnail = (doc or {}).get("thumbnail") or {}
+    align = args.align if args.align is not None else thumbnail.get("align", intro.get("align", "start"))
+    logo = None if args.no_logo else args.logo
+    if logo is None and not args.no_logo:
+        logo = graphic_logo(args.job_dir or Path("."), doc or {})
     graphic_style = args.graphic_style or ((doc or {}).get("intro") or {}).get("graphic_style", "default")
     graphic_palette = args.graphic_palette or ((doc or {}).get("intro") or {}).get("graphic_palette", "light")
     title_layout = args.title_layout or ((doc or {}).get("intro") or {}).get("title_layout", "stacked")
@@ -392,7 +393,7 @@ def run_thumbnail(argv: list[str]) -> None:
             graphic_palette=graphic_palette,
             title_layout=title_layout,
             background_path=bg,
-            logo_path=None if args.no_logo else args.logo,
+            logo_path=logo,
             title_font=args.title_font,
             artist_font=args.artist_font,
             width=args.width,

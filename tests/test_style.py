@@ -135,18 +135,12 @@ class StyleTests(unittest.TestCase):
     {"agent_colors": {"v1": {"highlight_colour": "#FFFFFF"}}},
     {"agent_colors": {"v1": {"primary_color": False}}},
     {"lyrics_colors": None}, {"lyrics_colors": {"actve": "#FFFFFF"}},
-    {"lyrics_colors": {"active": "bad"}},
+    {"lyrics_colors": {"active": "bad"}}, {"overlay_opacity": 0.6}, {"background_color": "#123456"},
 ])
 def test_invalid_style_values_fail_without_coercion(data):
     with pytest.raises(ValueError):
         StyleConfig.from_dict(data)
 
-
-def test_legacy_editor_opacity_input_is_accepted_but_not_stored():
-    config = StyleConfig.from_dict({"overlay_opacity": 0.6})
-    assert not hasattr(config, "overlay_opacity")
-    assert "overlay_opacity" not in config.to_dict()
-    assert StyleConfig.from_dict(config.to_dict()) == config
 
 
 if __name__ == "__main__":

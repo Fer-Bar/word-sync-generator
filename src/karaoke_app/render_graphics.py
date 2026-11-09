@@ -88,7 +88,10 @@ def intro_timing(document: dict[str, Any], transcript: dict[str, Any] | None) ->
     if not starts:
         return None
     start = float(config.get("start", 0))
-    end = min(start + float(config.get("duration", 5)), float(config.get("end", float("inf"))), min(starts) - 0.8)
+    requested_end = float(config.get("end", start + float(config.get("duration", 5))))
+    if "duration" in config:
+        requested_end = min(requested_end, start + float(config["duration"]))
+    end = min(requested_end, min(starts) - 0.8)
     if end - start < 1 / document["video"]["fps"]:
         return None
     return {**config, "enabled": True, "start": start, "end": end, "duration": end - start}
