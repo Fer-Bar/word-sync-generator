@@ -25,5 +25,28 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -version
           ffprobe -version
-      - run: uv run pytest -q
+      - name: Cache verified Switzer files
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/karaoke/fonts/Switzer-Semibold.otf
+            ~/.cache/karaoke/fonts/Switzer-FFL.txt
+          key: switzer-0b1652d8384f-145e7fe2429a
+      - name: Prepare pinned Switzer from Fontshare
+        run: |
+          uv run python - <<'PYTHON'
+          from hashlib import sha256
+          from karaoke_app.lyrics_plus import FONT_DIRECTORY, switzer_font
+
+          switzer_font()
+          expected = {
+              "Switzer-Semibold.otf": "0b1652d8384fcd5038dc19317ab0e0c4f4b7317e6a9729d8ef38fba375b01921",
+              "Switzer-FFL.txt": "145e7fe2429a3336ba215c070ef722000e01348a3e1baaa127e871bb5012f554",
+          }
+          for name, digest in expected.items():
+              path = FONT_DIRECTORY / name
+              if not path.is_file() or sha256(path.read_bytes()).hexdigest() != digest:
+                  raise SystemExit(f"Unverified Switzer file: {name}. Review Fontshare source and license before updating pins.")
+          PYTHON
+      - run: uv run pytest -q -rs
       - run: uv build

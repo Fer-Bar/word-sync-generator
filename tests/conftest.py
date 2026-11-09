@@ -12,6 +12,14 @@ import pytest
 from colab import karaoke_job as job
 from karaoke_app.job_document import STATE_FILENAME
 from karaoke_app.lyrics_file import dump_lyrics_file
+from karaoke_app.lyrics_plus import FONT_DIRECTORY
+
+
+def pytest_sessionstart():
+    if os.environ.get("CI") and not (FONT_DIRECTORY / "Switzer-Semibold.otf").is_file():
+        raise pytest.UsageError(
+            "CI requires cached Switzer before pytest; run the Prepare pinned Switzer from Fontshare step."
+        )
 
 
 @pytest.fixture
