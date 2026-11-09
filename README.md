@@ -84,11 +84,25 @@ uv run karaoke render outputs/JOB_ID --mode both
 ```
 
 Usa `--mode lyrics` o `--mode karaoke` para producir solo uno. Los resultados se descargan
-en `outputs/JOB_ID/renders/FECHA-MODO/`, con MP4, subtítulos, miniaturas y configuración efectiva.
+en `outputs/JOB_ID/renders/FECHA-MODO-ID/`, con MP4, subtítulos, miniaturas y configuración efectiva.
 
-**Conservación de variantes:** después de una descarga correcta se eliminan renders anteriores
-que ya tienen reemplazo, conservando el último video de cada modo. Copia fuera de `renders/`
-las variantes que quieras guardar antes de volver a renderizar.
+**Conservación de variantes:** cada render tiene un ID único y se conserva, aunque generes
+otro video del mismo modo. No se borran ni reemplazan automáticamente versiones anteriores.
+
+Para ordenar los exports, inspecciona el inventario y selecciona IDs exactos:
+
+```bash
+uv run karaoke cleanup outputs/JOB_ID
+uv run karaoke cleanup outputs/JOB_ID RENDER_ID
+uv run karaoke cleanup outputs/JOB_ID RENDER_ID --apply
+uv run karaoke cleanup outputs/JOB_ID RENDER_ID --restore --apply
+```
+
+Sin `--apply` solo se muestran los archivos seleccionables y su tamaño. `--apply` exige IDs
+explícitos y mueve la carpeta completa (MP4, subtítulos, miniaturas y configuración) a
+`.trash/renders/` del proyecto. `--restore` lista o recupera esos exports sin sobrescribir
+archivos existentes. La papelera es local y **sigue ocupando espacio**; el comando no borra
+permanentemente, no limpia audios fuente y rechaza enlaces simbólicos o rutas externas.
 
 ## Personalizar y previsualizar
 
