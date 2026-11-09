@@ -255,3 +255,22 @@ Errors show the operation and the underlying exception or tool error, then point
 the full log. Known Colab session-limit errors include a suggested action.
 `--verbose` also displays technical details live. These
 logs are local and are not automatically deleted. Help and dry runs do not create logs.
+
+
+## Desarrollo y comprobaciones
+
+El workflow `Checks` usa Python 3.12 y ejecuta estas comprobaciones:
+
+```bash
+uv sync --locked --dev --python 3.12
+uv run playwright install --with-deps chromium
+uv run ruff check .
+uv run pytest -q
+uv build
+```
+
+Las pruebas locales de composición usan el binario incluido en `imageio-ffmpeg`,
+también al medir el progreso de codificación. Las pruebas de recorte y de marca de
+agua vacían `PATH` para detectar dependencias accidentales de un FFmpeg del sistema.
+Las pruebas de marca de agua no instalan ni descargan fuentes del sistema.
+Esto no cambia los requisitos de FFmpeg ni la instalación de fuentes en Colab.

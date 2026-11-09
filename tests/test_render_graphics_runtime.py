@@ -11,11 +11,12 @@ import numpy as np
 from PIL import Image
 
 from colab import karaoke_job
+from colab.karaoke_job import _encode_progress
 from karaoke_app.cli import _create_render_bundle
 from karaoke_app.themes import apply_render_theme
 
 
-def test_real_render_has_one_video_watermark_and_unbranded_intro(tmp_path):
+def test_real_render_has_one_video_watermark_and_unbranded_intro(tmp_path, monkeypatch):
     logo = tmp_path / "logo.png"
     Image.new("RGB", (100, 30), (255, 0, 0)).save(logo)
     with wave.open(str(tmp_path / "audio.wav"), "wb") as audio:
@@ -56,15 +57,23 @@ Dialogue: 0,0:00:02.30,0:00:03.00,Default,,0,0,0,,Lyrics
         transcript={"segments": [{"words": [{"start": 2.3}]}]},
     )
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    monkeypatch.setenv("PATH", "")
 
     def run(command, *, capture_output=False):
         assert command[0] == "ffmpeg"
         return subprocess.run([ffmpeg, "-loglevel", "error", *command[1:]], capture_output=True, text=True, check=True)
 
+    def encode(command, duration):
+        assert command[0] == "ffmpeg"
+        _encode_progress([ffmpeg, "-loglevel", "error", *command[1:]], duration)
+
     with (
         patch.object(karaoke_job, "WORK_DIR", tmp_path / "remote"),
         patch.object(karaoke_job, "RENDER_JOB_PATH", bundle),
         patch.object(karaoke_job, "_run", run),
+        patch.object(karaoke_job, "_encode_progress", encode),
+        patch.object(karaoke_job, "_ensure_system_fonts"),
+        patch.object(karaoke_job, "_ensure_bebas_font"),
         patch.object(karaoke_job, "_probe_duration", return_value=3),
         patch.object(karaoke_job, "_nvenc_available", return_value=False),
     ):
