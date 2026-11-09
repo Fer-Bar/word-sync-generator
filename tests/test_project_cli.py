@@ -180,3 +180,22 @@ def test_terminal_input_interruption_preserves_project(project):
     code, output = run_terminal(project, "1\n2\n\x04")
     assert code == 1, output
     assert snapshot(project) == before
+
+
+def test_classic_colors_can_be_set_without_an_existing_palette(project):
+    assert load_job_document(project)["style"].get("lyrics_colors") is None
+    result = run_cli("configure", project, "--lyrics-active-color", "#22CCFF", "--lyrics-inactive-color", "#334455")
+    assert result.returncode == 0, result.stderr
+    document = load_job_document(project)
+    assert document["style"]["lyrics_colors"] == {"active": "#22CCFF", "inactive": "#334455"}
+    assert run_cli("validate", project).returncode == 0
+    from karaoke_app.ass import generate_ass
+    from karaoke_app.lyrics_file import load_lyrics_file, lyrics_to_transcript
+    from karaoke_app.style import StyleConfig, hex_to_ass_color
+
+    transcript = lyrics_to_transcript(load_lyrics_file(project / "lyrics.yaml"))
+    for mode in ("karaoke", "lyrics"):
+        subtitles = generate_ass(
+            transcript, document["video"], style=StyleConfig.from_dict(document["style"]), mode=mode)
+        assert hex_to_ass_color("#22CCFF") in subtitles
+        assert hex_to_ass_color("#334455") in subtitles

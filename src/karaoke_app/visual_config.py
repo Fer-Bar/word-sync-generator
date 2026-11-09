@@ -160,7 +160,9 @@ def resolve_options(
     for phase in ("active", "inactive"):
         color = options.get(f"lyrics_{phase}_color")
         if color is not None:
-            document.setdefault("style", {}).setdefault("lyrics_colors", {})[phase] = color
+            style = document.setdefault("style", {})
+            style["lyrics_colors"] = {**(style.get("lyrics_colors") or {}), phase: color}
+            style["primary_color" if phase == "active" else "highlight_color"] = color
     if options.get("intro") is not None:
         document.setdefault("intro", {})["enabled"] = options["intro"]
     if options.get("intro_duration") is not None:
