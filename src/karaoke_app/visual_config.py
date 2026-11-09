@@ -10,6 +10,25 @@ from karaoke_app.style import StyleConfig
 
 VISUAL_STYLES = ("plus", "classic")
 BACKGROUND_STYLES = ("fluid", "cosmic-sand")
+PRESETS = {
+    "fluid": {"visual_style": "plus", "background_style": "fluid", "graphic_style": "default"},
+    "cosmic": {"visual_style": "plus", "background_style": "cosmic-sand", "graphic_style": "default"},
+    "classic": {"visual_style": "classic", "background_color": "#0B1020", "graphic_style": "default"},
+}
+
+
+def preset_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Apply a named preset before explicit options, without conflicting backgrounds."""
+    preset = options.get("preset")
+    if preset is not None and preset not in PRESETS:
+        raise ValueError(f"Unknown preset: {preset}")
+    result = dict(PRESETS.get(preset, {}))
+    backgrounds = ("background_image", "background_color", "background_style")
+    if any(options.get(key) is not None for key in backgrounds):
+        for key in backgrounds:
+            result.pop(key, None)
+    result.update({key: value for key, value in options.items() if value is not None})
+    return result
 
 
 def apply_visual_options(
@@ -49,24 +68,28 @@ def apply_visual_options(
 
 def preparation_visuals(video: dict[str, int], args: Any) -> dict[str, Any]:
     """Resolve portable visual defaults before provisioning the remote preparation job."""
-    static = bool(getattr(args, "background_image", None) or getattr(args, "background_color", None))
-    background_style = getattr(args, "background_style", None)
+    options = preset_options(vars(args))
+    static = bool(options.get("background_image") or options.get("background_color"))
+    background_style = options.get("background_style")
     if static and background_style:
         raise ValueError("Choose --background-style or a static --background-image/--background-color")
-    if static and getattr(args, "cover", None):
+    if static and options.get("cover"):
         raise ValueError("--cover requires a procedural background")
     document = apply_visual_options(
-        {"video": video, "background": {"kind": "solid", "color": "#0B1020"}},
-        visual_style=getattr(args, "visual_style", "plus"),
+        {"video": video, "background": {"kind": "solid", "color": options.get("background_color") or "#0B1020"}},
+        visual_style=options.get("visual_style", "plus"),
         background_style=background_style or (None if static else "fluid"),
-        cover=getattr(args, "cover", None),
+        cover=options.get("cover"),
     )
     return {"render_style": document["style"],
-            **({} if static else {"render_background": document["background"]})}
+            **({"render_background": document["background"]} if not options.get("background_image") else {})}
 
 
 
-def resolve_options(job_dir: Path, options: dict[str, Any]) -> tuple[dict[str, Any], str]:
+
+def resolve_options(
+    job_dir: Path, options: dict[str, Any], *, document: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
     """Resolve saved settings and explicit overrides without copying or writing assets."""
     from karaoke_app.fomo import apply_graphic_options
     from karaoke_app.job_document import (
@@ -79,7 +102,28 @@ def resolve_options(job_dir: Path, options: dict[str, Any]) -> tuple[dict[str, A
     from karaoke_app.themes import apply_render_theme
 
     root = job_dir.expanduser().resolve()
-    document, theme = apply_render_theme(load_job_document(root), options.get("theme") or "job")
+    options = preset_options(options)
+    document = copy.deepcopy(document) if document is not None else load_job_document(root)
+    if options.get("resolution"):
+        width, height = (1920, 1080) if options["resolution"] == "1080p" else (1280, 720)
+        scale = height / document["video"]["height"]
+        document["video"].update(width=width, height=height)
+        # Keep custom typography proportional when changing the output canvas.
+        for key in ("font_size", "margin_v", "margin_h", "outline_width", "shadow_depth"):
+            if key in document.get("style", {}):
+                document["style"][key] = round(document["style"][key] * scale)
+    if options.get("fps") is not None:
+        document["video"]["fps"] = options["fps"]
+    if options.get("mode"):
+        document["render"] = {"mode": options["mode"]}
+    for key in ("title", "artist"):
+        if options.get(key) is not None:
+            if not isinstance(options[key], str) or (key == "title" and not options[key].strip()):
+                raise ValueError(f"{key} must contain text")
+            document.setdefault("intro", {})[key] = options[key].strip()
+            if key == "title":
+                document["title"] = options[key].strip()
+    document, theme = apply_render_theme(document, options.get("theme") or "job")
     static = [options.get("background_image"), options.get("background_color")]
     if sum(bool(value) for value in [*static, options.get("background_style")]) > 1:
         raise ValueError("Choose one background: --background-style, --background-image or --background-color")
@@ -111,6 +155,19 @@ def resolve_options(job_dir: Path, options: dict[str, Any]) -> tuple[dict[str, A
         document, _ = apply_render_theme(document, "job", options["seed"])
     document = apply_graphic_options(document, **{key: options.get(key) for key in
         ("graphic_style", "graphic_palette", "title_layout", "align")})
+    if options.get("font_size") is not None:
+        document.setdefault("style", {})["font_size"] = options["font_size"]
+    for phase in ("active", "inactive"):
+        color = options.get(f"lyrics_{phase}_color")
+        if color is not None:
+            document.setdefault("style", {}).setdefault("lyrics_colors", {})[phase] = color
+    if options.get("intro") is not None:
+        document.setdefault("intro", {})["enabled"] = options["intro"]
+    if options.get("intro_duration") is not None:
+        document.setdefault("intro", {})["duration"] = options["intro_duration"]
+        document["intro"].pop("end", None)
+    if options.get("thumbnail_time") is not None:
+        document.setdefault("thumbnail", {})["time"] = options["thumbnail_time"]
     if options.get("no_logo"):
         document["watermark"] = {"enabled": False}
     else:
@@ -129,6 +186,9 @@ def resolve_options(job_dir: Path, options: dict[str, Any]) -> tuple[dict[str, A
             for key in ("position", "scale", "opacity"):
                 if options.get(f"logo_{key}") is not None:
                     watermark[key] = options[f"logo_{key}"]
+        if not watermark.get("enabled") and any(options.get(f"logo_{key}") is not None
+                                                for key in ("position", "scale", "opacity")):
+            raise ValueError("Choose --logo before adjusting a disabled watermark")
         document["watermark"] = watermark
     return validate_job_document(document), theme
 
@@ -144,6 +204,12 @@ def appearance_rows(document: dict) -> dict[str, str]:
     if background_name == "cosmic":
         background_name = "cosmic-sand"
     return {
+        "Title": document["title"],
+        "Artist": intro.get("artist") or document.get("source", {}).get("artist") or "—",
+        "Output": document.get("render", {}).get("mode", "both"),
+        "Intro": (f"Enabled · {intro.get('duration', 'automatic')} s" if intro.get("enabled", True) else "Disabled"),
+        "Thumbnail time": str(document.get("thumbnail", {}).get("time", "automatic")),
+        "Lyric colors": " / ".join(str(value) for value in (style.get("lyrics_colors") or {}).values()) or "Default",
         "Typography": f"{style.get('font_family', 'Default')} · {style.get('font_size', 'default')} px",
         "Background": "Xerox poster" if xerox else str(background_name),
         "Background image / color": (str(background.get("path", background.get("color", "—")))
@@ -187,17 +253,21 @@ def show_appearance(document, *, before=None, console=None):
     console.print(table)
 
 
-def save_configuration(job_dir: Path, document: dict) -> Path:
-    """Validate and atomically save only the job document."""
+def save_configuration(job_dir: Path, document: dict, *, expected: dict | None = None) -> Path:
+    """Atomically save internal state, refusing to overwrite concurrent edits."""
     import json
     import tempfile
 
-    from karaoke_app.job_document import validate_job_document
+    from karaoke_app.job_document import STATE_FILENAME, validate_job_document
 
-    path = job_dir.expanduser().resolve() / "job.json"
+    path = job_dir.expanduser().resolve() / STATE_FILENAME
     document = validate_job_document(document)
-    if document == json.loads(path.read_text(encoding="utf-8")):
+    current = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if expected is not None and (current is None or validate_job_document(current) != expected):
+        raise ValueError("Project changed while configuring. Reopen configure to avoid overwriting those changes.")
+    if document == current:
         return path
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temporary:
@@ -218,113 +288,40 @@ def configure_job(job_dir: Path, **options) -> Path:
 
 
 def interactive_configuration(job_dir: Path, options: dict, *, console=None) -> Path | None:
-    """Edit a temporary selection; only the final save writes the job."""
+    """Edit any section repeatedly; cancellation never modifies the project."""
     import sys
-    import tempfile
 
     from rich.console import Console
     from rich.prompt import Confirm, Prompt
 
     from karaoke_app.job_document import load_job_document
+    from karaoke_app.project_editor import edit_section
 
     console = console or Console(stderr=True)
     if not console.is_terminal or not sys.stdin.isatty():
-        raise ValueError("--interactive requires a terminal. Use configure JOB with explicit flags instead.")
-    options = options.copy()
-    if options.get("theme") == "random":
-        import secrets
-
-        from karaoke_app.themes import THEMES
-
-        options["theme"] = secrets.choice(tuple(THEMES))
-        if options.get("seed") is None:
-            options["seed"] = secrets.randbelow(2**32)
+        raise ValueError("Interactive configuration requires a terminal. Use configure PROJECT with explicit flags.")
     saved = load_job_document(job_dir)
     document, _ = resolve_options(job_dir, options)
     show_appearance(document, console=console)
-
-    def choose(label, choices):
-        console.print(label, markup=False)
-        console.print("  0. Keep current", markup=False)
-        for index, (value, description) in enumerate(choices, 1):
-            console.print(f"  {index}. {value} — {description}", markup=False)
-        selected = int(Prompt.ask("Choice", choices=[str(i) for i in range(len(choices) + 1)],
-                                  default="0", console=console))
-        return choices[selected - 1][0] if selected else None
-
-    typography = choose("Typography", [("plus", "Animated word highlighting"), ("classic", "Classic subtitles")])
-    if typography:
-        options["visual_style"] = typography
-    background = choose("Background", [("fluid", "Flowing color"), ("cosmic-sand", "Textured particles"),
-                                       ("image", "Image inside the job folder"), ("solid", "Solid RGB color")])
-    if background:
-        for key in ("background_style", "background_image", "background_color", "cover"):
-            options.pop(key, None)
-        if background in {"image", "solid"}:
-            options["theme"] = "job"
-            options.pop("seed", None)
-        if background == "image":
-            value = Path(Prompt.ask("Image path (relative to job folder)", console=console)).expanduser()
-            options["background_image"] = value if value.is_absolute() else job_dir / value
-        elif background == "solid":
-            options["background_color"] = Prompt.ask("Color (#RRGGBB)", console=console)
+    sections = {"1": "Presets", "2": "Typography", "3": "Background", "4": "Title and artwork",
+                "5": "Watermark", "6": "Video and output"}
+    while True:
+        console.print("\n" + " | ".join(f"{key}. {value}" for key, value in sections.items()), markup=False)
+        console.print("7. Summary | 8. Save | 0. Cancel", markup=False)
+        choice = Prompt.ask("Section", choices=[*sections, "7", "8", "0"], default="0", console=console)
+        if choice == "0":
+            console.print("Configuration unchanged.")
+            return None
+        if choice == "7":
+            show_appearance(document, before=saved, console=console)
+        elif choice == "8":
+            show_appearance(document, before=saved, console=console)
+            if Confirm.ask("Save configuration?", default=False, console=console):
+                return save_configuration(job_dir, document, expected=saved)
         else:
-            options["background_style"] = background
-    document, _ = resolve_options(job_dir, options)
-    if document["background"]["kind"] == "cosmic":
-        from karaoke_app.themes import THEMES
-
-        theme = choose("Background palette", [(name, "Named color palette") for name in THEMES])
-        if theme:
-            options["theme"] = theme
-        seed = Prompt.ask("Animation seed (Enter to keep current)", default="", console=console)
-        if seed:
-            options["seed"] = int(seed)
-        artwork = Prompt.ask("Artwork palette path (Enter to keep current)", default="", console=console)
-        if artwork:
-            options["cover"] = Path(artwork)
-    for key, label, choices in (
-        ("graphic_style", "Graphics", [("default", "Standard"), ("fomo", "Poster"),
-                                       ("fomo-xerox", "Xerox poster; replaces background")]),
-        ("graphic_palette", "Graphic palette", [("light", "Light"), ("dark", "Dark")]),
-        ("title_layout", "Title layout", [("stacked", "Multiple lines"), ("wide", "Wide title")]),
-        ("align", "Alignment", [("start", "Left"), ("center", "Center"), ("end", "Right")]),
-    ):
-        value = choose(label, choices)
-        if value:
-            options[key] = value
-    watermark = choose("Watermark", [("disabled", "Remove watermark"), ("image", "Choose a logo image")])
-    if watermark == "disabled":
-        options["no_logo"] = True
-    elif watermark == "image":
-        options["no_logo"] = False
-        options["logo"] = Path(Prompt.ask("Logo path", console=console))
-    document, _ = resolve_options(job_dir, options)
-    if document["watermark"].get("enabled"):
-        position = choose("Watermark position", [(key, key.replace("_", " ")) for key in
-                                                ("top_left", "top_right", "bottom_left", "bottom_right")])
-        if position:
-            options["logo_position"] = position
-        for key, label in (("logo_scale", "Scale (0.01–0.5)"), ("logo_opacity", "Opacity (0–1)")):
-            value = Prompt.ask(f"{label} (Enter to keep current)", default="", console=console)
-            if value:
-                options[key] = float(value)
-    document, _ = resolve_options(job_dir, options)
-    show_appearance(document, before=saved, console=console)
-    if (document["background"]["kind"] == "cosmic"
-            and Confirm.ask("Preview background?", default=False, console=console)):
-        from karaoke_app.cosmic_background import render_cosmic_video
-
-        with tempfile.TemporaryDirectory(prefix="karaoke-preview-") as directory:
-            preview = render_cosmic_video(document["background"], {"width": 640, "height": 360, "fps": 12},
-                                          Path(directory) / "preview.mp4", duration=3)
-            console.print(f"Preview: {preview}", markup=False)
-            Prompt.ask("Open this file to review it, then press Enter", default="", console=console)
-    if not Confirm.ask("Save appearance?", default=False, console=console):
-        console.print("Configuration unchanged.")
-        return None
-    return save_configuration(job_dir, document)
-
+            candidate = edit_section(job_dir, document, choice, console)
+            if candidate is not None:
+                document = candidate
 
 def run_configure(argv: list[str]) -> None:
     """Persist styles without retranscription or a remote session."""
@@ -333,10 +330,11 @@ def run_configure(argv: list[str]) -> None:
 
     from karaoke_app.cli import build_render_parser
 
-    parser = argparse.ArgumentParser(prog="karaoke configure", description="Save appearance for future renders.",
+    parser = argparse.ArgumentParser(prog="karaoke configure",
+                                     description="Configure project sections, presets and output settings.",
                                      parents=[build_render_parser()], add_help=False)
     for action in list(parser._actions):
-        if action.dest in {"mode", "gpu", "auth", "timeout"}:
+        if action.dest in {"gpu", "auth", "timeout"}:
             parser._remove_action(action)
             for group in parser._action_groups:
                 if action in group._group_actions:
@@ -346,7 +344,8 @@ def run_configure(argv: list[str]) -> None:
     for group in parser._action_groups:
         if group.title == "Colab and output":
             group.title = "Diagnostics"
-    parser.epilog = "Example: karaoke configure JOB --interactive. Render saved settings: karaoke render JOB."
+    parser.epilog = ("Examples: karaoke configure PROJECT; karaoke configure PROJECT --preset fluid; "
+                     "karaoke render PROJECT.")
     parser.add_argument("--interactive", action="store_true", help="Choose appearance with optional prompts")
     args = parser.parse_args(argv)
     options = vars(args).copy()
@@ -356,6 +355,7 @@ def run_configure(argv: list[str]) -> None:
         document, _ = resolve_options(root, options)
         show_appearance(document)
         return
-    path = interactive_configuration(root, options) if interactive else configure_job(root, **options)
+    explicit = any(value.startswith("--") and value not in {"--interactive", "--verbose"} for value in argv)
+    path = interactive_configuration(root, options) if interactive or not explicit else configure_job(root, **options)
     if path:
-        logging.getLogger(__name__).info("Saved appearance: %s", path)
+        logging.getLogger(__name__).info("Configuration saved. Render with: karaoke render %s", root)

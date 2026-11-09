@@ -63,7 +63,7 @@ class RenderBundleTests(unittest.TestCase):
             with zipfile.ZipFile(destination) as archive:
                 self.assertEqual(archive.read("karaoke.ass"), b"karaoke-scroll")
                 self.assertEqual(archive.read("lyrics.ass"), b"lyrics-static")
-                self.assertEqual(json.loads(archive.read("job.json"))["background"]["kind"], "solid")
+                self.assertEqual(json.loads(archive.read(".karaoke/project.json"))["background"]["kind"], "solid")
 
     def test_packages_watermark_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -132,7 +132,7 @@ class RenderBundleTests(unittest.TestCase):
                 self.assertIn("graphics/intro/intro_karaoke.png", archive.namelist())
                 self.assertTrue(archive.read("graphics/intro/intro_karaoke.png").startswith(b"\x89PNG"))
                 self.assertNotIn("intro_card.png", archive.namelist())
-                bundle_job = json.loads(archive.read("job.json"))
+                bundle_job = json.loads(archive.read(".karaoke/project.json"))
                 self.assertIn("intro", bundle_job)
                 self.assertEqual(bundle_job["intro"]["duration"], 4.0)
 
@@ -169,7 +169,7 @@ class RenderBundleTests(unittest.TestCase):
 
             with zipfile.ZipFile(destination) as archive:
                 self.assertIn("watermark.png", archive.namelist())
-                bundled_doc = json.loads(archive.read("job.json"))
+                bundled_doc = json.loads(archive.read(".karaoke/project.json"))
                 self.assertEqual(bundled_doc["watermark"]["path"], "watermark.png")
 
 
@@ -267,7 +267,7 @@ class SourceReliabilityTests(unittest.TestCase):
                         archive.writestr("checkpoint.json", '{"status": "lyrics_failed"}')
                         archive.writestr("vocals.flac", b"vocals")
                     else:
-                        archive.writestr("job.json", "{}")
+                        archive.writestr(".karaoke/project.json", "{}")
         return subprocess.CompletedProcess(command, 0)
 
     def manifest(self):
@@ -287,8 +287,8 @@ class SourceReliabilityTests(unittest.TestCase):
         checkpoint = next(self.root.glob("*.recovery/checkpoint.zip"))
         with zipfile.ZipFile(checkpoint) as archive:
             self.assertIn("vocals.flac", archive.namelist())
-            self.assertNotIn("job.json", archive.namelist())
-        self.assertFalse(list(self.root.glob("*/job.json")))
+            self.assertNotIn(".karaoke/project.json", archive.namelist())
+        self.assertFalse(list(self.root.glob("*/.karaoke/project.json")))
 
     def test_execution_timeout_still_downloads_status_and_result_without_false_success(self) -> None:
         self.exec_code = -1
@@ -296,7 +296,7 @@ class SourceReliabilityTests(unittest.TestCase):
             cli.run_job(self.args)
         self.assertTrue(self.manifest()["session_stopped"])
         self.assertTrue(list(self.root.glob("*.recovery/result.zip")))
-        self.assertFalse(list(self.root.glob("*/job.json")))
+        self.assertFalse(list(self.root.glob("*/.karaoke/project.json")))
 
     def test_status_download_retries_are_bounded_and_keep_metadata(self) -> None:
         self.fail_downloads = 10
@@ -311,7 +311,7 @@ class SourceReliabilityTests(unittest.TestCase):
     def test_transient_download_failure_recovers(self) -> None:
         self.fail_downloads = 1
         output = cli.run_job(self.args)
-        self.assertTrue((output / "job.json").is_file())
+        self.assertTrue((output / ".karaoke/project.json").is_file())
         self.assertFalse(list(self.root.glob("*.recovery")))
         self.assertEqual(self.payload["watermark"], {"enabled": False})
 
@@ -539,14 +539,14 @@ class AtomicArchiveTests(unittest.TestCase):
             destination = root / "bundle.zip"
             cli._create_render_bundle(root, document, "karaoke", {"karaoke": "ass"}, destination)
             with zipfile.ZipFile(destination) as archive:
-                self.assertFalse(json.loads(archive.read("job.json"))["watermark"]["enabled"])
+                self.assertFalse(json.loads(archive.read(".karaoke/project.json"))["watermark"]["enabled"])
                 self.assertNotIn("watermark.png", archive.namelist())
 
 
 class JobDocumentWatermarkTests(unittest.TestCase):
     def _base_valid_doc(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "title": "Test Song",
             "media": {
                 "original_audio": "audio.flac",
