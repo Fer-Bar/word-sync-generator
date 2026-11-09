@@ -4,10 +4,12 @@ The project keeps three different audio assets: the source mix, vocals and
 instrumental. They are not duplicate recordings. Keep these project assets if
 you want to edit timing, regenerate a video or switch between lyrics and karaoke.
 The disposable-media cleanup described here preserves the user's inputs, project
-assets and existing exports. Export-version retention is a separate renderer
-policy, including any automatic pruning of superseded render directories. Follow
-the [README's render-retention instructions](../README.md) before rerendering;
-this media policy does not change those rules.
+assets and existing exports. Rendering does not automatically prune older variants.
+Export cleanup is explicit: `karaoke cleanup PROJECT` previews the inventory;
+selecting render IDs with `--apply` moves those exports to recoverable
+`.trash/renders/`. Trash still occupies disk space. See the
+[README's cleanup instructions](../README.md) for selection and restoration.
+Export cleanup is separate from temporary-media cleanup.
 
 ## Transfer only what is needed
 
