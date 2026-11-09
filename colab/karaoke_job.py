@@ -178,7 +178,7 @@ def _run_pipeline(config: dict[str, Any]) -> None:
         _discard_scratch_audio(mixture_path)
 
         safe_title = _safe_filename(metadata["title"])
-        output_dir = WORK_DIR / safe_title
+        output_dir = WORK_DIR / "prepared_result" / safe_title
         output_dir.mkdir(parents=True, exist_ok=True)
         original_audio = output_dir / f"original_audio{source_path.suffix.lower()}"
         vocals_flac = output_dir / "vocals.flac"
