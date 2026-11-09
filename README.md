@@ -11,6 +11,11 @@ selecciona una GPU T4. Recibe el paquete `.whl` del responsable del proyecto, s�
 cuando el cuaderno lo pida y sigue los pasos: **audio → preparación → revisión → video → descarga**.
 No necesitas terminal, construir paquetes ni escribir rutas Python.
 
+El flujo principal usa **audio local y búsqueda automática de letras**: completa título,
+artista e idioma (álbum opcional), prepara y comprueba el proveedor de la letra y los
+tiempos antes de renderizar. El TXT es una alternativa, no un requisito. La entrada
+por URL de YouTube sigue disponible en la CLI; en el notebook queda para una etapa posterior.
+
 El notebook usa el mismo motor que la CLI, dentro de tu sesión actual. La CLI sigue
 disponible para automatización y proyectos locales. [Instalación, distribución y límites](docs/notebooks.md).
 

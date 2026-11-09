@@ -56,6 +56,7 @@ def preparation_config(
     *,
     title: str | None = None,
     artist: str | None = None,
+    album: str | None = None,
     language: str = "en",
     lyrics_text: Path | None = None,
     use_lrclib: bool = True,
@@ -86,7 +87,7 @@ def preparation_config(
         "watermark": {"enabled": False},
         "language": language,
         "lyrics": {
-            "title": title, "artist": artist, "album": None, "lrclib_id": None,
+            "title": title, "artist": artist, "album": album, "lrclib_id": None,
             # The CLI flag disables all references; the notebook toggle only controls online lookup.
             "disable_lrclib": not use_lrclib and lyrics_text is None,
             "text_path": str(lyrics_text) if lyrics_text else None,
@@ -146,6 +147,7 @@ def prepare_audio(
     output_dir: Path,
     title: str | None = None,
     artist: str | None = None,
+    album: str | None = None,
     language: str = "en",
     lyrics_text: Path | None = None,
     use_lrclib: bool = True,
@@ -161,7 +163,7 @@ def prepare_audio(
     root = Path(output_dir).expanduser().resolve()
     runtime = root / ".runs" / job_id
     config = preparation_config(
-        source, runtime, title=title, artist=artist, language=language, lyrics_text=lyrics_text,
+        source, runtime, title=title, artist=artist, album=album, language=language, lyrics_text=lyrics_text,
         use_lrclib=use_lrclib, whisper_model=whisper_model, demucs_model=demucs_model,
     )
     runtime.mkdir(parents=True, mode=0o700)

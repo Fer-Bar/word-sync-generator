@@ -10,10 +10,13 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
 
 1. Ejecuta la instalación y selecciona el `.whl` recibido.
 2. Comprueba la GPU con el diagnóstico del cuaderno.
-3. Selecciona tu audio, completa título/artista/idioma y, opcionalmente, sube una letra `.txt`.
+3. Selecciona tu audio local y completa título/artista/idioma; añade el álbum si lo conoces.
+   Deja la búsqueda en línea activada y «Tengo letra TXT» desactivado para el flujo habitual.
 4. Espera a que termine la preparación. La primera ejecución descarga modelos.
-5. Escucha la voz y lee las letras. Si hay errores, aporta una letra corregida y repite
-   la preparación; activa «Cambiar letra» para sustituir una referencia anterior.
+5. Comprueba los datos de la canción, el origen de la letra y los tiempos por línea.
+   Escucha la voz; activa los tiempos por palabra si necesitas revisarlos con más detalle.
+   Si la letra corresponde a otra canción, corrige primero título/artista y repite la
+   preparación. Como alternativa, aporta un TXT; activa «Cambiar letra» para sustituirlo.
 6. Confirma la revisión, elige modo/aspecto y genera el video. Cambiar el aspecto no repite
    la separación ni la transcripción. `classic` es la opción más sencilla para empezar.
 7. Descarga el MP4 o el paquete ZIP. Conserva también el proyecto editable para usarlo
@@ -24,6 +27,24 @@ en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores
 Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio autorizado.
 La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
 interruptor no significa «ignorar mi archivo». La CLI conserva la semántica de sus flags.
+
+### Probar el flujo real con una canción local
+
+Usa un archivo propio o autorizado, con el título y artista de su versión exacta.
+El notebook pide esos dos datos cuando vas a buscar letras automáticamente; no coloca
+un título de ejemplo que pueda provocar una búsqueda incorrecta. El álbum es opcional.
+El motor consulta LRCLIB y después Genius; si no hay una referencia válida, utiliza
+transcripción. No se garantiza que un proveedor tenga la canción o esté disponible.
+
+En el paso 5, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
+transcripción no demuestra que la búsqueda haya encontrado letras. Los tiempos se
+muestran en segundos junto a cada línea, con detalle por palabra opcional. Un resultado
+sin evidencia o con anclas insuficientes no se presenta como validado: escucha y revisa.
+
+Después genera el video, comprueba audio/subtítulos en la previsualización y descarga
+el MP4 y el proyecto editable. Repite solo el render si cambias el aspecto. La entrada
+YouTube/cookies está pospuesta en el notebook, no eliminada de la CLI. No hay guardado
+automático en Drive: descarga los archivos antes de desconectar el runtime.
 
 El notebook está diseñado para la interfaz de **Google Colab**. No se presenta como una
 interfaz comprobada para Kaggle o Jupyter genérico; las funciones Python del motor pueden
@@ -103,6 +124,8 @@ conservaron sus hashes. La comprobación independiente de anclas ASR indicó anc
 insuficientes: no equivale a una validación completa de precisión temporal.
 
 **Sigue pendiente el recorrido real de controles, reproducción y descargas en el navegador.**
+La ampliación de metadatos y revisión se comprueba localmente a través del adaptador del
+motor; la búsqueda en línea con una canción real todavía requiere esa prueba en Colab.
 No confundas un código de salida local de la CLI con éxito remoto.
 Los procesos del notebook usan nivel INFO para no volcar trazas DEBUG de descarga de
 modelos en las celdas. Revisa cualquier diagnóstico antes de compartirlo; puede contener

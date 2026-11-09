@@ -14,10 +14,26 @@ def project_info(directory: Path) -> dict:
     """Return reviewable lyrics and media locations without changing the project."""
     document = load_job_document(directory)
     lyrics = load_lyrics_file(resolve_job_asset(directory, document["media"]["lyrics"], "lyrics"))
+    source = document.get("source") or {}
+    alignment = document.get("alignment") or {}
+    anchor_check = alignment.get("asr_anchor_check")
+    preparation = document.get("preparation") or {}
     return {
         "title": document["title"],
         "vocals": str(resolve_job_asset(directory, document["media"]["vocals_audio"], "vocals")),
         "lyrics": "\n".join(line["text"] for line in lyrics["lines"]),
+        "song": {
+            "title": document["title"], "artist": source.get("artist"), "album": source.get("album"),
+            "language": (source.get("language") or preparation.get("requested_language")
+                         or (lyrics.get("metadata") or {}).get("language")),
+        },
+        "review": {
+            "reference_source": alignment.get("reference_source") or alignment.get("text_source"),
+            "alignment_engine": alignment.get("engine"), "word_timing": alignment.get("word_timing"),
+            "needs_review": alignment.get("needs_review"),
+            "anchor_status": anchor_check.get("status") if isinstance(anchor_check, dict) else None,
+        },
+        "timed_lines": lyrics["lines"],
     }
 
 

@@ -27,6 +27,39 @@ def test_config_accepts_external_read_only_inputs_without_writing(tmp_path):
     assert source.read_bytes() == b"audio"
 
 
+def test_preparation_passes_local_song_metadata_and_keeps_automatic_lyrics(tmp_path, monkeypatch):
+    from colab import karaoke_job
+
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"audio")
+    seen = []
+    monkeypatch.setattr(karaoke_job, "_probe_duration", lambda path: 120)
+
+    def run(config_path, environment):
+        config = json.loads(config_path.read_text())
+        assert config["lyrics"]["disable_lrclib"] is False
+        assert config["lyrics"]["text_path"] is None
+        path, metadata = karaoke_job._acquire_source(config)
+        assert path == source
+        assert metadata["title"] == "Song title"
+        assert metadata["artist"] == "Song artist"
+        assert metadata["album"] == "Studio album"
+        assert config["language"] == "es"
+        seen.append(metadata)
+        with zipfile.ZipFile(config["archive_path"], "w") as archive:
+            archive.writestr("source.json", json.dumps(metadata))
+        (config_path.parent / "karaoke_status.json").write_text('{"status":"completed"}')
+
+    monkeypatch.setattr(notebook, "_run_preparation", run)
+    result = notebook.prepare_audio(
+        source, output_dir=tmp_path / "outputs", title="Song title", artist="Song artist",
+        album="Studio album", language="es",
+    )
+    assert json.loads((result.directory / "source.json").read_text()) == seen[0]
+    assert result.archive.is_file()
+    assert source.read_bytes() == b"audio"
+
+
 def test_invalid_source_does_not_create_output(tmp_path):
     output = tmp_path / "outputs"
     with pytest.raises(FileNotFoundError, match="Upload a local"):
