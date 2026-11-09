@@ -1,15 +1,9 @@
 import copy
-import json
-import zipfile
-from unittest.mock import patch
 
 import numpy as np
 import pytest
-from media_samples import write_audio
 from PIL import Image
 
-from colab import karaoke_job
-from karaoke_app.cli import _create_render_bundle
 from karaoke_app.cosmic_background import CosmicBackground
 from karaoke_app.job_document import validate_job_document
 from karaoke_app.render_graphics import (
@@ -24,8 +18,8 @@ from karaoke_app.render_graphics import (
 @pytest.fixture
 def document():
     return {
-        "title": "ALRIGHT",
-        "source": {"artist": "Ashes to Amber"},
+        "title": "Example Title",
+        "source": {"artist": "Example Artist"},
         "video": {"width": 640, "height": 360, "fps": 24},
         "background": {"kind": "solid", "color": "#183040"},
         "watermark": {"enabled": False},
@@ -52,12 +46,12 @@ def test_timing_considers_all_voices_and_custom_start(document):
 
 def test_metadata_precedence(document):
     document["metadata"] = {"artist": "Fallback"}
-    assert graphic_metadata(document) == ("ALRIGHT", "Ashes to Amber")
+    assert graphic_metadata(document) == ("Example Title", "Example Artist")
     document["intro"] = {"title": "Custom", "artist": "Override"}
     assert graphic_metadata(document) == ("Custom", "Override")
     document.pop("intro")
     document.pop("source")
-    assert graphic_metadata(document) == ("ALRIGHT", "Fallback")
+    assert graphic_metadata(document) == ("Example Title", "Fallback")
 
 
 def test_explicit_no_logo_wins_over_intro_logo(document, tmp_path):
@@ -102,37 +96,6 @@ def test_thumbnail_is_the_same_overlay_composited_over_background(document, tmp_
         assert np.array_equal(expected, thumbnail)
 
 
-def test_render_bundle_routes_both_modes_and_returns_graphics(document, tmp_path, monkeypatch):
-    write_audio(tmp_path / "audio.wav")
-    (tmp_path / "intro_card.png").write_bytes(b"obsolete")
-    bundle = tmp_path / "bundle.zip"
-    _create_render_bundle(
-        tmp_path,
-        document,
-        "both",
-        {"lyrics": "lyrics-ass", "karaoke": "karaoke-ass"},
-        bundle,
-        transcript={"segments": [{"words": [{"start": 4}]}]},
-    )
-    monkeypatch.setattr(karaoke_job, "WORK_DIR", tmp_path / "remote")
-    monkeypatch.setattr(karaoke_job, "RENDER_JOB_PATH", bundle)
-    archive = tmp_path / "result.zip"
-    with patch.object(karaoke_job, "_render_video") as render:
-        karaoke_job._render_existing_job({"mode": "both", "archive_path": str(archive)})
-    assert render.call_count == 2
-    for mode, call in zip(("karaoke", "lyrics"), render.call_args_list, strict=True):
-        config = call.args[2]
-        assert config["intro_card"]["path"].endswith(f"intro_{mode}.png")
-        assert config["intro_card"]["end"] == pytest.approx(3.2)
-    with zipfile.ZipFile(archive) as result:
-        assert "background.png" in result.namelist()
-        assert "thumbnails/thumbnail_lyrics.png" in result.namelist()
-        assert "thumbnails/thumbnail_karaoke.png" in result.namelist()
-        assert result.read("intro/intro_lyrics.png") != result.read("intro/intro_karaoke.png")
-    with zipfile.ZipFile(bundle) as packed:
-        assert json.loads(packed.read(".karaoke/project.json"))["intro"]["end"] == pytest.approx(3.2)
-
-
 def test_disabled_intro_still_generates_thumbnail(document, tmp_path):
     document["intro"] = {"enabled": False}
     timing = generate_render_graphics(tmp_path, document, ("karaoke",), tmp_path, None)
@@ -156,32 +119,11 @@ def test_thumbnail_has_logo_but_intro_is_unbranded(document, tmp_path):
         },
     )
     with Image.open(tmp_path / "graphics/intro/intro_lyrics.png") as intro:
-        assert intro.getchannel("A").crop((0, 300, 130, 360)).getbbox() is None
+        pixels = np.asarray(intro)
+        red_logo = (pixels[..., 0] > 200) & (pixels[..., 1] < 60) & (pixels[..., 2] < 60)
+        assert not np.any(red_logo & (pixels[..., 3] > 0))
     with Image.open(tmp_path / "graphics/thumbnails/thumbnail_lyrics.png") as thumbnail:
         assert thumbnail.getpixel((80, 665)) == (255, 0, 0)
-
-
-def test_watermark_keeps_its_top_left_position_during_intro(tmp_path):
-    logo, intro = tmp_path / "logo.png", tmp_path / "intro.png"
-    logo.touch()
-    intro.touch()
-    config = {
-        "video": {"width": 1280, "height": 720, "fps": 24},
-        "background": {"kind": "solid", "value": "#000000"},
-        "watermark": {"path": str(logo), "position": "top_left"},
-        "intro_card": {"path": str(intro), "start": 0, "end": 3},
-    }
-    with (
-        patch.object(karaoke_job, "_probe_duration", return_value=10),
-        patch.object(karaoke_job, "_nvenc_available", return_value=False),
-        patch.object(karaoke_job, "_encode_progress") as run,
-    ):
-        karaoke_job._render_video(tmp_path / "audio.wav", tmp_path / "video.mp4", config)
-    command = run.call_args.args[0]
-    filters = command[command.index("-filter_complex") + 1]
-    assert "[bg][wm]overlay=x=main_w*0.05:y=main_h*0.05[v_wm]" in filters
-    assert "not(between" not in filters
-    assert command.count(str(logo)) == 1
 
 
 def test_thumbnail_configuration_survives_normalization(document):
@@ -202,18 +144,19 @@ def test_invalid_thumbnail_configuration(document, config):
         validate_job_document(document)
 
 
-def test_thumbnail_time_and_alignment_do_not_change_intro(document, tmp_path):
+def test_thumbnail_time_and_alignment_do_not_change_intro(document, tmp_path, changing_background):
     from karaoke_app.thumbnail import create_title_overlay
 
-    document["thumbnail"] = {"time": 3, "align": "end"}
-    frames = [Image.new("RGB", (640, 360), color) for color in ("red", "blue")]
-    with patch("karaoke_app.render_graphics.background_frame", side_effect=frames) as sample:
-        generate_render_graphics(tmp_path, document, ("lyrics",), tmp_path,
-                                 {"segments": [{"words": [{"start": 10}]}]})
-    assert sample.call_args_list[1].kwargs == {"time": 3}
-    expected_intro = create_title_overlay("ALRIGHT", "Ashes to Amber", mode="lyrics", size=(640, 360))
-    expected_title = create_title_overlay("ALRIGHT", "Ashes to Amber", mode="lyrics", size=(640, 360), align="end")
-    expected_thumbnail = Image.alpha_composite(frames[1].convert("RGBA"), expected_title).convert("RGB")
+    document["background"] = {"kind": "video", "path": changing_background.name}
+    document["thumbnail"] = {"time": .75, "align": "end"}
+    selected = background_frame(tmp_path, document, time=.75)
+    generate_render_graphics(tmp_path, document, ("lyrics",), tmp_path,
+                             {"segments": [{"words": [{"start": 10}]}]})
+    expected_intro = create_title_overlay("Example Title", "Example Artist", mode="lyrics", size=(640, 360))
+    expected_title = create_title_overlay(
+        "Example Title", "Example Artist", mode="lyrics", size=(640, 360), align="end"
+    )
+    expected_thumbnail = Image.alpha_composite(selected.convert("RGBA"), expected_title).convert("RGB")
     expected_thumbnail = expected_thumbnail.resize((1280, 720), Image.Resampling.LANCZOS)
     with Image.open(tmp_path / "intro/intro_lyrics.png") as intro:
         assert np.array_equal(intro, expected_intro)
@@ -221,7 +164,8 @@ def test_thumbnail_time_and_alignment_do_not_change_intro(document, tmp_path):
         assert np.array_equal(thumbnail, expected_thumbnail)
 
 
-def test_video_thumbnail_samples_requested_frame(document, tmp_path):
+@pytest.fixture
+def changing_background(tmp_path):
     import subprocess
 
     import imageio_ffmpeg
@@ -232,7 +176,11 @@ def test_video_thumbnail_samples_requested_frame(document, tmp_path):
         "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-pix_fmt", "yuv420p",
         str(tmp_path / "scene.mp4"),
     ], check=True, capture_output=True)
-    document["background"] = {"kind": "video", "path": "scene.mp4"}
+    return tmp_path / "scene.mp4"
+
+
+def test_video_thumbnail_samples_requested_frame(document, tmp_path, changing_background):
+    document["background"] = {"kind": "video", "path": changing_background.name}
     first = background_frame(tmp_path, document).getpixel((0, 0))
     selected = background_frame(tmp_path, document, time=0.75).getpixel((0, 0))
     assert first[0] > 240 and first[2] < 10

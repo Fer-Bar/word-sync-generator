@@ -24,22 +24,6 @@ from karaoke_app.style import StyleConfig
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
 
-@pytest.fixture
-def media_tools(tmp_path, monkeypatch):
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    (binaries / "ffmpeg").symlink_to(FFMPEG)
-    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ.get("PATH", ""))
-
-    def decoded_duration(path):
-        # The local dependency bundles FFmpeg, not FFprobe. Decode the actual input
-        # instead of returning a fabricated duration; all composition stays real.
-        pcm = run_media(FFMPEG, "-v", "error", "-i", str(path), "-vn", "-ac", "1",
-                        "-ar", "16000", "-f", "s16le", "pipe:1").stdout
-        return len(pcm) / (16000 * 2)
-
-    monkeypatch.setattr(job, "_probe_duration", decoded_duration)
-
 def run_media(*command):
     return subprocess.run(command, capture_output=True, check=True)
 

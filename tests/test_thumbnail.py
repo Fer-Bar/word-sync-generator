@@ -18,7 +18,7 @@ def assets(tmp_path):
 def test_modes_keep_background_and_logo_with_distinct_layouts(tmp_path, assets):
     images = []
     for mode in ("lyrics", "karaoke"):
-        path = create_thumbnail("ALRIGHT", "Ashes to Amber", tmp_path / f"{mode}.png", mode=mode, **assets)
+        path = create_thumbnail("Example Title", "Example Artist", tmp_path / f"{mode}.png", mode=mode, **assets)
         with Image.open(path) as result:
             assert result.mode == "RGB"
             assert result.size == (1280, 720)
@@ -110,7 +110,7 @@ def test_run_thumbnail_inherits_cosmic_background(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("title", ["Ángel", "A", "W" * 100, "A very long song title with many words", "First\nSecond"])
-@pytest.mark.parametrize("artist", [None, "Jhené Aiko", "Artist " * 40])
+@pytest.mark.parametrize("artist", [None, "Artísta Ñ", "Artist " * 40])
 def test_lyrics_overlay_preserves_transparent_edges(title, artist):
     from karaoke_app.thumbnail import create_title_overlay
 

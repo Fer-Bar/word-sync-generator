@@ -140,14 +140,14 @@ def test_repair_adds_agents_to_unchanged_text_and_preserves_headers(tmp_path):
     from karaoke_app.lyrics_file import load_lyrics_file
 
     pipeline, _ = _make_job(tmp_path, "Sing this", "Sing this")
-    text = "[Verse 1: Drake,\nDon Toliver\n]\nSing this\n"
+    text = "[Verse 1: Lead Singer,\nGuest Singer\n]\nSing this\n"
     (tmp_path / "reference.txt").write_text(text)
     result = lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)
     assert result["status"] == "repaired"
     assert result["estimated_words"] == 0
     assert (tmp_path / "reference.txt").read_text() == text
     lyrics = load_lyrics_file(tmp_path / "lyrics.lyricsfile.yaml")
-    assert lyrics["lines"][0]["agent"] == "Drake, Don Toliver"
+    assert lyrics["lines"][0]["agent"] == "Lead Singer, Guest Singer"
     assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)["status"] == "skipped"
 
 

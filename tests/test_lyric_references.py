@@ -591,10 +591,10 @@ def test_validate_lyrics_file_sanitizes_lines_and_words():
 
 
 def test_wrapped_section_header_becomes_shared_agent():
-    lines = refs.plain_lines("Yeah\n[Verse 1: Drake,\nDon Toliver\n]\nSing this\n[Chorus]\n(oh yeah)")
+    lines = refs.plain_lines("Yeah\n[Verse 1: Lead Singer,\nGuest Singer\n]\nSing this\n[Chorus]\n(oh yeah)")
     assert lines == [
         {"text": "Yeah"},
-        {"text": "Sing this", "agent": "Drake, Don Toliver"},
+        {"text": "Sing this", "agent": "Lead Singer, Guest Singer"},
         {"text": "(oh yeah)"},
     ]
 
@@ -602,10 +602,10 @@ def test_wrapped_section_header_becomes_shared_agent():
 @pytest.mark.parametrize("apply", [refs.apply_reference_text, refs.merge_reference_lines, refs.restore_structure])
 def test_reference_agents_reach_timed_words(apply):
     original = timed_document()
-    desired = refs.plain_lines("[Verse 1: Drake]\nall I do is\n[Verse 2: Don Toliver]\nwin and not forgive.")
+    desired = refs.plain_lines("[Verse 1: Lead Singer]\nall I do is\n[Verse 2: Guest Singer]\nwin and not forgive.")
     output = apply(original, desired)
     result = output[0] if isinstance(output, tuple) else output
-    assert [line["agent"] for line in result["lines"]] == ["Drake", "Don Toliver"]
+    assert [line["agent"] for line in result["lines"]] == ["Lead Singer", "Guest Singer"]
     assert all(word["agent"] == line["agent"] for line in result["lines"] for word in line["words"])
     assert [(w["start_ms"], w["end_ms"]) for line in result["lines"] for w in line["words"]] == [
         (w["start_ms"], w["end_ms"]) for line in original["lines"] for w in line["words"]
@@ -615,13 +615,13 @@ def test_reference_agents_reach_timed_words(apply):
 
 def test_reference_agent_applies_when_text_already_matches():
     original = timed_document()
-    desired = [{"text": line["text"], "agent": "Drake"} for line in original["lines"]]
+    desired = [{"text": line["text"], "agent": "Lead Singer"} for line in original["lines"]]
     result, _ = refs.apply_reference_text(original, desired)
-    assert all(w["agent"] == "Drake" for line in result["lines"] for w in line["words"])
+    assert all(w["agent"] == "Lead Singer" for line in result["lines"] for w in line["words"])
 
 
 def test_saved_reference_keeps_section_headers(tmp_path):
-    text = "[Verse 1: Drake,\nDon Toliver\n]\nSing this"
+    text = "[Verse 1: Lead Singer,\nGuest Singer\n]\nSing this"
     job._save_lyrics_evidence(tmp_path, "lyrics_reference.json", {
         "original_text": text, "lines": refs.plain_lines(text),
     })
