@@ -13,7 +13,7 @@ from colab import karaoke_job
 from karaoke_app.ass import generate_ass
 from karaoke_app.cli import _create_render_bundle
 from karaoke_app.fomo import apply_graphic_options, title_rows
-from karaoke_app.job_document import JOB_FILENAME, load_job_document
+from karaoke_app.job_document import STATE_FILENAME, load_job_document
 from karaoke_app.lyrics_file import dump_lyrics_file, load_lyrics_file, lyrics_to_transcript
 from karaoke_app.render_graphics import generate_render_graphics
 from karaoke_app.style import StyleConfig
@@ -42,7 +42,7 @@ def test_saved_poster_settings_match_intro_background_and_thumbnail(tmp_path):
                 "background": {"kind": "solid", "color": "#123456"}, "watermark": {"enabled": False},
                 "media": {"original_audio": "a.wav", "instrumental_audio": "i.wav",
                           "vocals_audio": "v.wav", "lyrics": "lyrics.yaml"}}
-    state = tmp_path / JOB_FILENAME
+    state = tmp_path / STATE_FILENAME
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps(document))
     configure_job(tmp_path, graphic_style="fomo", title_layout="wide", align="end")

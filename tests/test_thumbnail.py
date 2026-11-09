@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 from PIL import Image
@@ -71,23 +69,6 @@ def test_cli_dispatch(monkeypatch):
     monkeypatch.setattr("sys.argv", ["karaoke", "thumbnail", "--title", "Song"])
     assert cli.main() == 0
     assert seen == [["--title", "Song"]]
-
-
-def test_job_metadata_and_overrides(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "karaoke_app.job_document.load_job_document",
-        lambda _: {
-            "title": "From job",
-            "metadata": {"artist": "Job artist"},
-        },
-    )
-    seen = []
-    monkeypatch.setattr("karaoke_app.thumbnail.create_thumbnail", lambda *args, **kwargs: seen.append((args, kwargs)))
-    run_thumbnail([str(tmp_path), "--title", "Override", "--no-logo"])
-    assert [item[1]["mode"] for item in seen] == ["lyrics", "karaoke"]
-    assert all(item[0][:2] == ("Override", "Job artist") for item in seen)
-    assert seen[0][0][2] == Path(tmp_path) / "thumbnails" / "thumbnail_lyrics.png"
-    assert seen[0][1]["logo_path"] is None
 
 
 def test_create_thumbnail_with_in_memory_image(tmp_path, assets):

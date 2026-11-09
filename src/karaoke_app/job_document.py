@@ -3,39 +3,39 @@ import json
 from pathlib import Path
 from typing import Any
 
+from karaoke_app.resources import PROJECT_ROOT, logo_resource
 from karaoke_app.style import StyleConfig, validate_color, validate_config_object, validate_number
 
-JOB_FILENAME = "job.json"
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STATE_FILENAME = ".karaoke/project.json"
 DEFAULT_BANNER_RELATIVE = "logos/banner.png"
 
 
 def load_job_document(job_dir: Path) -> dict[str, Any]:
-    """Load a normalized v2 job, migrating v1 in memory without rewriting it."""
-    path = job_dir.expanduser().resolve() / JOB_FILENAME
+    """Load the internal project state. Configuration is managed through the CLI."""
+    path = job_dir.expanduser().resolve() / STATE_FILENAME
     if not path.is_file():
-        raise FileNotFoundError(f"Missing prepared job document: {path}")
+        raise FileNotFoundError(f"Not a prepared project: {job_dir}. Prepare it with karaoke source first.")
     try:
         return validate_job_document(json.loads(path.read_text(encoding="utf-8")))
     except json.JSONDecodeError as error:
-        raise ValueError(f"Invalid {JOB_FILENAME}: {error}") from error
+        raise ValueError(f"Invalid {STATE_FILENAME}: {error}") from error
 
 
 def validate_job_document(value: Any) -> dict[str, Any]:
     """Validate durable rendering configuration and preserve extensible provenance."""
     validate_config_object(value, {
         "schema_version", "job_id", "title", "source", "alignment", "metadata", "preparation",
-        "media", "video", "background", "style", "lyrics_colors", "watermark", "intro", "thumbnail",
-    }, "job.json")
+        "media", "video", "background", "style", "lyrics_colors", "watermark", "intro", "thumbnail", "render",
+    }, "project")
     version = value.get("schema_version")
-    if type(version) is not int or version not in {1, 2}:
-        raise ValueError("job.json schema_version must be 1 or 2")
+    if type(version) is not int or version != 2:
+        raise ValueError("Unsupported project version. Prepare a new project with karaoke source.")
     title = value.get("title")
     if not isinstance(title, str) or not title.strip():
-        raise ValueError("job.json title is required")
+        raise ValueError("Project title is required")
     job_id = value.get("job_id", "")
     if not isinstance(job_id, str):
-        raise ValueError("job.json job_id must be a string")
+        raise ValueError("Project ID must be a string")
     result = {"schema_version": 2, "job_id": job_id, "title": title.strip()}
     for key in ("source", "alignment", "metadata", "preparation"):
         if key in value or key in {"source", "alignment"}:
@@ -80,8 +80,7 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     else:
         if "color" in background:
             validate_color(background["color"], "background.color")
-        # v1 renderers ignored style.overlay_opacity; preserve actual rendered opacity.
-        opacity = background.get("overlay_opacity", 0.38 if version == 1 else 0)
+        opacity = background.get("overlay_opacity", 0)
         normalized_background = {
             "kind": kind,
             "path": _relative_path(background.get("path"), "background.path"),
@@ -97,9 +96,7 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     if not isinstance(style, dict):
         raise ValueError("style must be an object")
     style = dict(style)
-    if version == 1:
-        style.pop("overlay_opacity", None)
-    elif "overlay_opacity" in style:
+    if "overlay_opacity" in style:
         raise ValueError("style.overlay_opacity belongs in background.overlay_opacity")
     if "lyrics_colors" in value:
         colors = validate_config_object(value["lyrics_colors"], {"inactive", "active"}, "lyrics_colors")
@@ -108,14 +105,14 @@ def validate_job_document(value: Any) -> dict[str, Any]:
         style.setdefault("lyrics_colors", colors)
     result["style"] = StyleConfig.from_dict(style, height=video["height"]).to_dict()
 
-    watermark = value.get("watermark", {"enabled": version == 1 and (PROJECT_ROOT / DEFAULT_BANNER_RELATIVE).is_file()})
+    watermark = value.get("watermark", {"enabled": False})
     validate_config_object(watermark, {"enabled", "path", "position", "scale", "margin", "opacity"}, "watermark")
     enabled = watermark.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError("watermark.enabled must be a boolean")
     normalized_watermark = {"enabled": enabled}
     if "path" in watermark or enabled:
-        path = watermark.get("path", DEFAULT_BANNER_RELATIVE if version == 1 else None)
+        path = watermark.get("path")
         if not isinstance(path, str) or not path.strip() or ".." in Path(path).parts or "\x00" in path:
             raise ValueError("watermark.path must be a path string without traversal")
         normalized_watermark["path"] = path.strip()
@@ -172,6 +169,11 @@ def validate_job_document(value: Any) -> dict[str, Any]:
                 raise ValueError("thumbnail.align must be start, center or end")
             normalized_thumbnail["align"] = thumbnail["align"]
         result["thumbnail"] = normalized_thumbnail
+    render = validate_config_object(value.get("render", {}), {"mode"}, "render")
+    mode = render.get("mode", "both")
+    if mode not in ("both", "karaoke", "lyrics"):
+        raise ValueError("render.mode must be both, karaoke or lyrics")
+    result["render"] = {"mode": mode}
     return result
 
 
@@ -211,4 +213,6 @@ def resolve_watermark_path(job_dir: Path, path_str: str | None = None) -> Path:
             resolved = (root / candidate).resolve()
             if resolved.is_relative_to(root) and resolved.is_file():
                 return resolved
+    if requested == DEFAULT_BANNER_RELATIVE and logo_resource("banner.png").is_file():
+        return logo_resource("banner.png")
     raise FileNotFoundError(f"Missing watermark asset: {requested}")

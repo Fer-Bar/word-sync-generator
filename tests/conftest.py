@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from colab import karaoke_job as job
-from karaoke_app.job_document import JOB_FILENAME
+from karaoke_app.job_document import STATE_FILENAME
 from karaoke_app.lyrics_file import dump_lyrics_file
 
 
@@ -41,7 +41,7 @@ def prepared_project(tmp_path):
         "watermark": {"enabled": False}, "intro": {"enabled": False},
         "style": {"font_size": 24, "margin_h": 20, "margin_v": 20},
     }
-    state = root / JOB_FILENAME
+    state = root / STATE_FILENAME
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps(document), encoding="utf-8")
     return root

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from karaoke_app import cli
-from karaoke_app.job_document import JOB_FILENAME
+from karaoke_app.job_document import STATE_FILENAME
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def render(prepared_project, monkeypatch):
                 if str(item).endswith("render-job.zip") and Path(item).is_file():
                     with zipfile.ZipFile(item) as archive:
                         assert archive.testzip() is None
-                        document = json.loads(archive.read(JOB_FILENAME))
+                        document = json.loads(archive.read(STATE_FILENAME))
                         assert document["media"]["original_audio"] in archive.namelist()
                         assert {"lyrics.ass", "lyrics.srt"} <= set(archive.namelist())
                         assert "Hello world" in archive.read("lyrics.srt").decode()

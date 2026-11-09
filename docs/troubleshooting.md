@@ -29,10 +29,11 @@ orientativo, no un límite confirmado de Colab; no bloquea la subida.
 - **HTTP 400:** la petición fue rechazada; el peso puede influir, pero ese código no confirma la causa.
 - Otros errores conservan su diagnóstico sin atribuirlos al tamaño.
 
-Si el paquete es grande, reduce el bitrate del fondo o usa audio comprimido sin pérdida
-en lugar de WAV (por ejemplo, FLAC o WavPack, según el formato de muestras). Actualiza
-la ruta correspondiente en `job.json` y conserva el original. Si también falla una subida
-pequeña, revisa la sesión y el cliente Colab usando el error original del log.
+Si el paquete es grande, usa un fondo de menor bitrate y prepara el proyecto desde una
+fuente FLAC cuando corresponda. Cambia el fondo con `karaoke configure`, sin editar el
+estado interno. Conserva siempre el original. La preparación de transferencias y el descarte
+de archivos temporales se explican en [audio y temporales](media-cache.md).
+Si también falla una subida pequeña, revisa sesión y cliente usando el error original del log.
 
 ## Límite de sesiones de Colab
 
@@ -64,7 +65,7 @@ que YouTube también aplique a tu conexión local.
 Si tienes el audio local, úsalo como entrada; se sube a Colab sin volver a descargarlo de YouTube:
 
 ```bash
-uv run karaoke ./cancion.webm --title "Mi canción" --artist "Artista" --language es --no-cookies
+uv run karaoke source ./cancion.webm --title "Mi canción" --artist "Artista" --language es --no-cookies
 ```
 
 Un rechazo desde Colab no demuestra por sí solo que las cookies hayan vencido.

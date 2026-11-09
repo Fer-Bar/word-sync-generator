@@ -18,6 +18,8 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Column
 from rich.text import Text
 
+from karaoke_app.resources import PROJECT_ROOT
+
 LOGGER = logging.getLogger(__name__)
 EVENT_PREFIX = "KARAOKE_EVENT "
 
@@ -191,7 +193,7 @@ def configure_logging(verbose: bool = False, *, log_dir: Path | None = None, dia
     handlers = [ProgressHandler()]
     path = None
     if diagnostics:
-        directory = log_dir or Path(__file__).resolve().parents[2] / ".karaoke/logs"
+        directory = log_dir or PROJECT_ROOT / ".karaoke/logs"
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = directory / f"{datetime.now(UTC):%Y%m%dT%H%M%S-%f}-{os.getpid()}.log"
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
