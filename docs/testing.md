@@ -5,16 +5,27 @@
 ## Ejecutar
 
 La suite completa requiere `ffmpeg` y `ffprobe` disponibles en `PATH`, además de
-Chromium. En Ubuntu/Debian, FFmpeg/FFprobe se instalan con `sudo apt-get install ffmpeg`.
-El workflow `Checks` instala estos requisitos.
+Chromium y Switzer Semibold en caché. En Ubuntu/Debian, FFmpeg/FFprobe se instalan
+con `sudo apt-get install ffmpeg`. El workflow `Checks` prepara estos requisitos.
 
 ```bash
 uv sync --locked --dev --python 3.12
 uv run playwright install --with-deps chromium
+uv run python -c "from karaoke_app.lyrics_plus import switzer_font; switzer_font()"
 uv run ruff check .
-uv run pytest -q
+uv run pytest -q -rs
 uv build
 ```
+
+CI descarga Switzer sin modificar desde la API oficial de Fontshare y verifica los
+SHA-256 del OTF y de su licencia ITF FFL 2.0 (17-08-2026). Cada ejecución obtiene
+su propia copia; no se guarda en el caché compartido de Actions ni como artefacto.
+Si faltan los archivos o cambian sus bytes, CI falla: los pins sólo se actualizan tras
+revisar la fuente oficial y su licencia. Este workflow no publica la fuente en el
+repositorio, wheel/sdist ni artefactos CI. Los bundles de render privados pueden
+incluirla para uso propio; no deben compartirse con terceros, que deben obtener su
+copia de Fontshare. La licencia restringe la redistribución. Consulta la [licencia de Fontshare](https://www.fontshare.com/licenses).
+Con `CI` definido, pytest también falla antes de recopilar pruebas si falta Switzer.
 
 Para iterar sobre la preparación local y el render:
 
@@ -51,7 +62,7 @@ haber probado los escenarios omitidos.
   solo dentro del directorio temporal. No necesita descargar Switzer. La instalación
   del navegador se omite durante el render porque es un requisito previo. Las pruebas
   existentes específicas de Switzer en `test_browser_lyrics.py` requieren la fuente
-  en caché y pueden omitirse cuando no está disponible.
+  en caché; sólo pueden omitirse localmente cuando no está disponible.
 
 Los renders ASS de `test_render_workflow.py` y `test_poster_graphics.py` desactivan
 únicamente la instalación/descarga de fuentes del runtime: no deben ejecutar `apt` ni

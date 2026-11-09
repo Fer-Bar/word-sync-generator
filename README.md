@@ -108,7 +108,9 @@ archivos recuperables y si la sesión remota se cerró.
 - [Notebook y paquete portable](docs/notebooks.md).
 - [Errores, autenticación y recuperación](docs/troubleshooting.md).
 - [Desarrollo y arquitectura](docs/development.md).
-- [Pruebas de integración y sus límites](docs/testing.md).
+- [Pruebas de integración y sus límites](docs/testing.md). CI prepara Chromium y
+  FFmpeg, y descarga Switzer desde Fontshare con hashes fijados; no acepta omisiones
+  por falta de la fuente. Switzer sólo se guarda en el runner, sin caché compartida ni redistribución.
 - [Auditoría de sincronización](docs/alignment-audit-20261105.md): diagnóstico histórico,
   no garantía de precisión. La recuperación experimental con regresiones fue revertida.
 
