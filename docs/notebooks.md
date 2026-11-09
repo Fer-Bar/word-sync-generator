@@ -37,6 +37,13 @@ para que puedas encontrarla en el panel de archivos.
 letras; los pesos de los modelos siguen necesitando Internet. No compartas un notebook con
 rutas, títulos o salidas que no quieras publicar. No pegues secretos en sus celdas.
 
+## Tamaño del audio de entrada
+
+Prefiere un archivo de audio como FLAC. El notebook todavía no aplica la preparación
+`audio-only` de la CLI antes de invocar el pipeline: si eliges un video local, el proyecto
+y su ZIP pueden conservar ese video completo como fuente original. La optimización de
+transferencias de la CLI no implica que esté aplicada a este frontend.
+
 ## Instalar sin checkout
 
 Con Python 3.12+ y una revisión revisada del repositorio:
