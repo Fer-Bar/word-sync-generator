@@ -9,7 +9,7 @@ bibliotecas, pesos de modelos, tipografías ni contenido aportado por el usuario
   [licencia](src/karaoke_app/assets/braccato/LICENSE) y
   [procedencia y checksum](src/karaoke_app/assets/braccato/PROVENANCE.json).
   Código original: [better-lyrics/braccato](https://github.com/better-lyrics/braccato).
-- **Anton, Montserrat, Abril Fatface y Barlow Condensed**: SIL Open Font License 1.1.
+- **Anton, Montserrat y Barlow Condensed**: SIL Open Font License 1.1.
   Los avisos de autoría y condiciones acompañan a cada familia en
   [assets/fonts](src/karaoke_app/assets/fonts/).
 

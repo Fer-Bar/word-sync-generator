@@ -144,7 +144,7 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     Image.new("RGBA", (64, 16), "black").save(logo)
     command = [sys.executable, "-m", "karaoke_app.cli"]
     environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
-    subprocess.run([*command, "configure", str(prepared_project), "--graphic-style", "fomo",
+    subprocess.run([*command, "configure", str(prepared_project), "--graphic-style", "default",
                     "--lyrics-active-color", "#00FF00", "--lyrics-inactive-color", "#0000FF",
                     "--logo", str(logo), "--logo-position", "top_right", "--logo-scale", "0.2"],
                    capture_output=True, text=True, check=True, env=environment)
@@ -153,18 +153,16 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     colors = {"active": "#00FF00", "inactive": "#0000FF"}
     assert document["style"]["lyrics_colors"] == colors
     assert document["watermark"] == saved["watermark"]
-    # Editing a different section must not silently reapply the graphic preset.
-    subprocess.run([*command, "configure", str(prepared_project), "--title-layout", "wide", "--align", "end",
+    # Editing alignment must not reset the saved lyric colors or logo.
+    subprocess.run([*command, "configure", str(prepared_project), "--align", "end",
                     "--background-color", "#123456"],
                    capture_output=True, text=True, check=True, env=environment)
     document, _ = resolve_options(prepared_project, {})
     assert document["style"]["lyrics_colors"] == colors
     assert document["watermark"]["position"] == "top_right"
     assert document["watermark"]["scale"] == .2
-    # This graphic style uses a fixed paper background in both local graphics
-    # and final video, including after changing unrelated background options.
-    assert document["background"] == {"kind": "solid", "color": "#FFFFFF"}
-    assert background_frame(prepared_project, document).getpixel((0, 0)) == (255, 255, 255)
+    assert document["background"] == {"kind": "solid", "color": "#123456"}
+    assert background_frame(prepared_project, document).getpixel((0, 0)) == (18, 52, 86)
     before = (prepared_project / STATE_FILENAME).read_bytes()
     transcript = lyrics_to_transcript(load_lyrics_file(prepared_project / "lyrics.yaml"))
     subtitles = generate_ass(transcript, document["video"], style=StyleConfig.from_dict(document["style"]),
@@ -182,7 +180,7 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     settings = json.loads((extracted / "render-settings.json").read_text())
     assert settings["style"]["lyrics_colors"] == colors
     pixels = decode_frame(extracted / "Song_karaoke.mp4", .375)
-    assert (pixels[0, 0] > 245).all()
+    assert np.abs(pixels[0, 0].astype(int) - [18, 52, 86]).max() < 6
     red, green, blue = np.moveaxis(pixels, 2, 0)
     assert np.count_nonzero((green > 150) & (red < 100) & (blue < 100)) > 15
     assert np.count_nonzero((blue > 150) & (red < 100) & (green < 100)) > 15

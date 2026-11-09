@@ -158,8 +158,6 @@ def create_title_overlay(
     mode: str = "lyrics",
     align: str = "start",
     graphic_style: str = "default",
-    graphic_palette: str = "light",
-    title_layout: str = "stacked",
     logo_path: Path | None = None,
     title_font: Path | None = None,
     artist_font: Path = FONTS / "Montserrat.ttf",
@@ -173,18 +171,9 @@ def create_title_overlay(
         raise ValueError("Align must be start, center or end")
     if mode not in {"lyrics", "karaoke"}:
         raise ValueError("Mode must be lyrics or karaoke")
-    from karaoke_app.fomo import GRAPHIC_STYLES, add_fomo_logo, create_fomo_overlay
-
-    if graphic_style not in GRAPHIC_STYLES:
+    if graphic_style != "default":
         raise ValueError("Unknown graphic style")
-    if graphic_style in ("fomo", "fomo-xerox"):
-        canvas = create_fomo_overlay(title, artist, size=size, align=align, layout=title_layout, title_font=title_font,
-                                     xerox=graphic_style == "fomo-xerox", palette=graphic_palette)
-        if logo_path is not None:
-            add_fomo_logo(canvas, logo_path, align=align, palette=graphic_palette)
-        return canvas
-    title_font = title_font or FONTS / ("AbrilFatface-Regular.ttf" if graphic_style in ("fomo", "fomo-xerox") else
-                                      ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf"))
+    title_font = title_font or FONTS / ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf")
     if mode == "lyrics":
         canvas = _lyrics_overlay(title, artist, title_font, artist_font, align)
         if logo_path is not None:
@@ -236,8 +225,6 @@ def create_thumbnail(
     mode: str = "lyrics",
     align: str = "start",
     graphic_style: str = "default",
-    graphic_palette: str = "light",
-    title_layout: str = "stacked",
     background_path: Path | Image.Image = REFERENCES / "background.png",
     logo_path: Path | None = THUMBNAIL_LOGO,
     title_font: Path | None = None,
@@ -257,8 +244,7 @@ def create_thumbnail(
     if isinstance(width, bool) or not isinstance(width, int) or width < 640 or width > 3840 or width % 16:
         raise ValueError("Width must be a multiple of 16 between 640 and 3840")
     output_path = Path(output_path)
-    title_font = title_font or FONTS / ("AbrilFatface-Regular.ttf" if graphic_style in ("fomo", "fomo-xerox") else
-                                      ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf"))
+    title_font = title_font or FONTS / ("BarlowCondensed-BlackItalic.ttf" if mode == "lyrics" else "Anton-Regular.ttf")
     inputs = [title_font, artist_font, *([logo_path] if logo_path else [])]
     if isinstance(background_path, (str, Path)):
         inputs.append(Path(background_path))
@@ -266,11 +252,7 @@ def create_thumbnail(
         raise ValueError("Output must not overwrite a source asset")
     if output_path.suffix.lower() != ".png":
         raise ValueError("Thumbnail output must have a .png extension")
-    if graphic_style in ("fomo", "fomo-xerox"):
-        from karaoke_app.fomo import fomo_paper
-
-        canvas = fomo_paper(SIZE, xerox=graphic_style == "fomo-xerox", palette=graphic_palette).convert("RGBA")
-    elif isinstance(background_path, Image.Image):
+    if isinstance(background_path, Image.Image):
         canvas = ImageOps.fit(background_path.convert("RGBA"), SIZE, method=Image.Resampling.LANCZOS)
     else:
         with Image.open(background_path) as source:
@@ -282,8 +264,6 @@ def create_thumbnail(
             mode=mode,
             align=align,
             graphic_style=graphic_style,
-            graphic_palette=graphic_palette,
-            title_layout=title_layout,
             logo_path=logo_path,
             title_font=title_font,
             artist_font=artist_font,
@@ -304,9 +284,7 @@ def run_thumbnail(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="karaoke thumbnail", description=__doc__)
     parser.add_argument("job_dir", nargs="?", type=Path)
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
-    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
-    parser.add_argument("--graphic-palette", choices=("light", "dark"))
-    parser.add_argument("--title-layout", choices=("stacked", "wide"))
+    parser.add_argument("--graphic-style", choices=("default",))
     parser.add_argument("--title")
     parser.add_argument("--artist")
     parser.add_argument("--mode", choices=("lyrics", "karaoke", "both"), default="both")
@@ -381,8 +359,6 @@ def run_thumbnail(argv: list[str]) -> None:
     if logo is None and not args.no_logo:
         logo = graphic_logo(args.job_dir or Path("."), doc or {})
     graphic_style = args.graphic_style or ((doc or {}).get("intro") or {}).get("graphic_style", "default")
-    graphic_palette = args.graphic_palette or ((doc or {}).get("intro") or {}).get("graphic_palette", "light")
-    title_layout = args.title_layout or ((doc or {}).get("intro") or {}).get("title_layout", "stacked")
     for mode in ("lyrics", "karaoke") if args.mode == "both" else (args.mode,):
         output = create_thumbnail(
             title,
@@ -391,8 +367,6 @@ def run_thumbnail(argv: list[str]) -> None:
             mode=mode,
             align=align,
             graphic_style=graphic_style,
-            graphic_palette=graphic_palette,
-            title_layout=title_layout,
             background_path=bg,
             logo_path=logo,
             title_font=args.title_font,

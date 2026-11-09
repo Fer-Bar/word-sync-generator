@@ -95,10 +95,6 @@ def edit_section(root: Path, document: dict, section: str, console) -> dict | No
         selected["title"] = ask("Title") or None
         selected["artist"] = ask("Artist") or None
         for key, label, choices in (
-            ("graphic_style", "Graphics", [("default", "Standard"), ("fomo", "Poster"),
-                                           ("fomo-xerox", "Xerox poster")]),
-            ("graphic_palette", "Palette", [("light", "Light"), ("dark", "Dark")]),
-            ("title_layout", "Title layout", [("stacked", "Multiple lines"), ("wide", "Wide title")]),
             ("align", "Alignment", [("start", "Left"), ("center", "Center"), ("end", "Right")]),
         ):
             selected[key] = choose(label, choices)

@@ -111,18 +111,12 @@ Usa títulos, artistas e identificadores sintéticos como datos de prueba.
 Una regresión debe explicar el comportamiento que protege, no conservar la apariencia
 exacta de una canción que se generó una vez.
 
-`test_poster_graphics.py` prueba los estilos reutilizables que la CLI llama `fomo` y
-`fomo-xerox`; esos nombres son opciones de la aplicación, no canciones de referencia.
-Conserva los límites de texto, alineación, transparencia, repetibilidad y contraste de
-paletas. No fija una media o desviación de ruido para imitar una portada determinada.
-Las combinaciones de límites de título/layout/alineación siguen cubiertas.
-
-El flujo de gráficos usa audio y subtítulos válidos y decodifica ambos MP4. Comprueba
+`test_graphics_configuration.py` comprueba el rechazo de estilos retirados sin
+modificar el proyecto y la conservación de la configuración general.
+`test_rendered_graphics.py` usa audio y subtítulos válidos y decodifica ambos MP4. Comprueba
 que el intro llegue a sus fotogramas, desaparezca antes de la primera letra y que
-las letras aparezcan después. Comprueba también que los modos del estilo predeterminado
-se distingan y que el texto tenga contraste con el fondo según la paleta elegida, sin
-usar otro gráfico del mismo generador como única referencia. Sustituye las pruebas que
-solo inspeccionaban llamadas al renderizador.
+las letras aparezcan después. Comprueba también que los modos se distingan, además
+de conservar las pruebas de colores y logos sobre el video real.
 Las tolerancias de píxeles cubren pérdidas de compresión de video, no una estética por
 canción. La selección del fotograma de miniatura también usa un video real de dos colores.
 

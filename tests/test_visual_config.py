@@ -106,7 +106,7 @@ def test_omitted_options_preserve_custom_style_and_zero_opacity(prepared_job):
     (prepared_job / ".karaoke").mkdir(exist_ok=True)
     (prepared_job / ".karaoke/project.json").write_text(json.dumps(document))
     configure_job(prepared_job, background_style="fluid")
-    resolved, _ = resolve_options(prepared_job, {"graphic_style": "fomo"})
+    resolved, _ = resolve_options(prepared_job, {"graphic_style": "default"})
     assert resolved["style"]["font_size"] == 83
     assert load_job_document(prepared_job)["style"]["font_size"] == 83
 

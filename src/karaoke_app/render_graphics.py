@@ -42,12 +42,6 @@ def background_frame(job_dir: Path, document: dict[str, Any], *, time: float = 0
     """Sample a background with the same dimensions, seed and dimming as the video."""
     video, background = document["video"], document["background"]
     size = (video["width"], video["height"])
-    config = document.get("intro") or {}
-    if config.get("graphic_style") in ("fomo", "fomo-xerox"):
-        from karaoke_app.fomo import fomo_paper
-
-        return fomo_paper(size, xerox=config.get("graphic_style") == "fomo-xerox",
-                          palette=config.get("graphic_palette", "light"))
     if background["kind"] == "cosmic":
         from karaoke_app.cosmic_background import CosmicBackground
 
@@ -110,7 +104,6 @@ def generate_render_graphics(
         LOGGER.warning("No artist metadata found; render graphics will show only the song title")
     logo = graphic_logo(job_dir, document)
     config = document.get("intro") or {}
-    fomo = config.get("graphic_style") in ("fomo", "fomo-xerox")
     frame = background_frame(job_dir, document)
     destination.mkdir(parents=True, exist_ok=True)
     frame.save(destination / "background.png")
@@ -123,8 +116,7 @@ def generate_render_graphics(
     for mode in modes:
         overlay = create_title_overlay(
             title, artist, mode=mode, size=frame.size, align=config.get("align", "start"),
-            graphic_style=config.get("graphic_style", "default"), title_layout=config.get("title_layout", "stacked"),
-            graphic_palette=config.get("graphic_palette", "light")
+            graphic_style=config.get("graphic_style", "default"),
         )
         thumbnail_align = thumbnail_config.get("align", config.get("align", "start"))
         thumbnail_overlay = overlay
@@ -132,18 +124,10 @@ def generate_render_graphics(
             thumbnail_overlay = create_title_overlay(
                 title, artist, mode=mode, size=frame.size, align=thumbnail_align,
                 graphic_style=config.get("graphic_style", "default"),
-                title_layout=config.get("title_layout", "stacked"),
-                graphic_palette=config.get("graphic_palette", "light"),
             )
         thumbnail = Image.alpha_composite(thumbnail_frame.convert("RGBA"), thumbnail_overlay)
         if logo is not None:
-            if fomo:
-                from karaoke_app.fomo import add_fomo_logo
-
-                add_fomo_logo(thumbnail, logo, align=thumbnail_align,
-                              palette=config.get("graphic_palette", "light"))
-            else:
-                add_thumbnail_logo(thumbnail, logo)
+            add_thumbnail_logo(thumbnail, logo)
         thumbnail = thumbnail.convert("RGB")
         thumbnails = destination / "thumbnails"
         thumbnails.mkdir(exist_ok=True)

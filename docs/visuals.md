@@ -97,26 +97,16 @@ Las posiciones son `top_left`, `top_right`, `bottom_left` y `bottom_right`. La e
 va de 0.01 a 0.5 del ancho del video y la opacidad de 0 a 1. Conserva el archivo de logo
 que utiliza el proyecto. La intro es transparente y no incorpora la marca de agua.
 
-## Gráficos de cartel y fotocopia
+## Composición y alineación
 
-```bash
-uv run karaoke configure outputs/PROYECTO --graphic-style fomo --title-layout wide --align center
-uv run karaoke configure outputs/PROYECTO --graphic-style fomo-xerox --graphic-palette dark
-```
+`--align start|center|end` ajusta el título de letras; `--thumbnail-align` permite
+una alineación independiente en la miniatura. El fondo, los colores de letras y el
+logo configurados se conservan al cambiar la alineación.
 
-`fomo` y `fomo-xerox` son nombres de estilos de cartel reutilizables, no configuraciones
-reservadas para una canción. Usan Abril Fatface, composición monocromática y, en Xerox,
-textura de fotocopia. `--graphic-palette dark` invierte la paleta.
-
-`--title-layout stacked|wide` permite hasta cuatro o dos filas. Estos estilos sustituyen
-el fondo y la paleta, conservando la fuente de las letras cantadas.
-`--graphic-style default` recupera la composición habitual; usa un preset para restaurar
-también fondo y tipografía.
-
-Los estilos de cartel mantienen su fondo de papel claro u oscuro en miniaturas y video.
-Para usar un fondo personalizado, cambia primero a `--graphic-style default`.
-Los colores de letras y ajustes del logo personalizados se conservan al volver a abrir
-el proyecto o cambiar la composición. Elegir de nuevo un estilo o paleta aplica sus valores iniciales.
+Los estilos específicos del álbum FOMO y sus opciones `--graphic-palette` y
+`--title-layout` se retiraron. Los proyectos que guardan esos ajustes se rechazan
+sin modificarlos; no se convierten silenciosamente a otra apariencia. Conserva la
+versión anterior para esos proyectos o configura una copia con los ajustes actuales.
 
 ## Comandos locales existentes
 

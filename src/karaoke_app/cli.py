@@ -53,7 +53,7 @@ def organize_help(parser: argparse.ArgumentParser) -> None:
     groups = {
         "Appearance · typography, background and palette": {
             "visual_style", "background_style", "background_image", "background_color", "cover", "theme",
-            "seed", "graphic_style", "graphic_palette", "title_layout", "align", "resolution", "mode", "preset",
+            "seed", "graphic_style", "align", "resolution", "mode", "preset",
             "fps", "title", "artist", "font_size", "lyrics_active_color", "lyrics_inactive_color",
             "intro", "intro_duration", "intro_start", "intro_end", "thumbnail_time", "thumbnail_align",
             "background_video", "background_overlay_opacity", "background_crop_right",
@@ -158,9 +158,7 @@ def build_render_parser() -> argparse.ArgumentParser:
                         help="Fraction to crop from the right of an image/video (0–0.5)")
     parser.add_argument("--background-color", help="Solid RGB background color")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
-    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
-    parser.add_argument("--graphic-palette", choices=("light", "dark"))
-    parser.add_argument("--title-layout", choices=("stacked", "wide"))
+    parser.add_argument("--graphic-style", choices=("default",))
     parser.add_argument("--theme", choices=(*THEMES, "even-better-lyrics-plus", "random", "job"), default="job",
                         help="Palette override; default: preserve the saved job background")
     parser.add_argument("--visual-style", choices=VISUAL_STYLES, help="Override the saved typography")
@@ -235,9 +233,7 @@ def build_intro_parser() -> argparse.ArgumentParser:
     parser.add_argument("job_dir", type=Path, help="Path to prepared job directory")
     parser.add_argument("--mode", choices=("lyrics", "karaoke"), default="lyrics")
     parser.add_argument("--align", choices=("start", "center", "end"), help="Lyrics title and artist alignment")
-    parser.add_argument("--graphic-style", choices=("default", "fomo", "fomo-xerox"))
-    parser.add_argument("--graphic-palette", choices=("light", "dark"))
-    parser.add_argument("--title-layout", choices=("stacked", "wide"))
+    parser.add_argument("--graphic-style", choices=("default",))
     return parser
 
 
@@ -247,9 +243,7 @@ def run_intro(args: argparse.Namespace) -> Path:
 
     root = args.job_dir.expanduser().resolve()
     result = generate_intro_card_for_job(root, mode=args.mode, align=getattr(args, "align", None),
-                                         graphic_style=getattr(args, "graphic_style", None),
-                                         graphic_palette=getattr(args, "graphic_palette", None),
-                                         title_layout=getattr(args, "title_layout", None))
+                                         graphic_style=getattr(args, "graphic_style", None))
     if result is None:
         raise RuntimeError(f"Intro is disabled for {root}")
     LOGGER.info("Intro card created: %s", result)
@@ -896,17 +890,6 @@ def _create_render_bundle(
             audio_files[relative] = audio
             bundle_document["media"][key] = relative
         timing = generate_render_graphics(job_dir, document, modes, graphics, transcript)
-        if watermark_file is not None and (document.get("intro") or {}).get("graphic_style") in ("fomo", "fomo-xerox"):
-            from karaoke_app.fomo import fomo_logo
-
-            prepared_logo = Path(graphics_directory) / "fomo-watermark.png"
-            fomo_logo(watermark_file, palette=(document.get("intro") or {}).get("graphic_palette", "light")).save(
-                prepared_logo)
-            watermark_file = prepared_logo
-            bundle_document["watermark"]["path"] = "watermark.png"
-        if (document.get("intro") or {}).get("graphic_style") == "fomo-xerox":
-            bundle_document["background"] = {"kind": "image", "path": "graphics/background.png",
-                                             "overlay_opacity": 0}
         bundle_document["intro"] = timing or {"enabled": False}
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
             archive.writestr(STATE_FILENAME, json.dumps(bundle_document, ensure_ascii=False, indent=2) + "\n")

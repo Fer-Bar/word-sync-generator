@@ -91,7 +91,6 @@ def resolve_options(
     job_dir: Path, options: dict[str, Any], *, document: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Resolve saved settings and explicit overrides without copying or writing assets."""
-    from karaoke_app.fomo import apply_graphic_options
     from karaoke_app.job_document import (
         load_job_document,
         resolve_job_asset,
@@ -155,8 +154,9 @@ def resolve_options(
         document = apply_visual_options(document, visual_style=options.get("visual_style"), cover=options.get("cover"))
     if options.get("seed") is not None:
         document, _ = apply_render_theme(document, "job", options["seed"])
-    document = apply_graphic_options(document, **{key: options.get(key) for key in
-        ("graphic_style", "graphic_palette", "title_layout", "align")})
+    for key in ("graphic_style", "align"):
+        if options.get(key) is not None:
+            document.setdefault("intro", {})[key] = options[key]
     for option, field, kinds in (
         ("background_overlay_opacity", "overlay_opacity", {"image", "video", "cosmic"}),
         ("background_crop_right", "crop_right", {"image", "video"}),
@@ -241,7 +241,6 @@ def appearance_rows(document: dict) -> dict[str, str]:
     style, intro = document.get("style", {}), document.get("intro", {})
     watermark = document.get("watermark", {})
     video = document["video"]
-    xerox = intro.get("graphic_style") == "fomo-xerox"
     background_name = background.get("appearance", background["kind"])
     if background_name == "cosmic":
         background_name = "cosmic-sand"
@@ -258,16 +257,14 @@ def appearance_rows(document: dict) -> dict[str, str]:
         "Background right crop": str(background.get("crop_right", 0)),
         "Lyric colors": " / ".join(str(value) for value in (style.get("lyrics_colors") or {}).values()) or "Default",
         "Typography": f"{style.get('font_family', 'Default')} · {style.get('font_size', 'default')} px",
-        "Background": "Xerox poster" if xerox else str(background_name),
+        "Background": str(background_name),
         "Background image / color": (str(background.get("path", background.get("color", "—")))
-                                     if not xerox and background["kind"] != "cosmic" else "—"),
+                                      if background["kind"] != "cosmic" else "—"),
         "Background palette": " / ".join(str(background[key]) for key in
                                             ("base_color", "color", "secondary_color") if key in background)
-                              if background["kind"] == "cosmic" and not xerox else "—",
-        "Seed": str(background.get("seed", "—")) if not xerox else "—",
+                              if background["kind"] == "cosmic" else "—",
+        "Seed": str(background.get("seed", "—")),
         "Graphics": intro.get("graphic_style", "default"),
-        "Graphic palette": intro.get("graphic_palette", "light"),
-        "Title layout": intro.get("title_layout", "stacked"),
         "Alignment": intro.get("align", "start"),
         "Watermark": (f"{watermark.get('path')} · {watermark.get('position')} · "
                       f"scale {watermark.get('scale')} · opacity {watermark.get('opacity')}"

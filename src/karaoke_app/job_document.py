@@ -129,7 +129,7 @@ def validate_job_document(value: Any) -> dict[str, Any]:
     if "intro" in value:
         intro = validate_config_object(
             value["intro"], {"enabled", "title", "artist", "logo", "start", "duration", "end", "align",
-                             "graphic_style", "title_layout", "graphic_palette"}, "intro"
+                             "graphic_style"}, "intro"
         )
         normalized_intro = {"enabled": intro.get("enabled", True)}
         if not isinstance(normalized_intro["enabled"], bool):
@@ -143,12 +143,10 @@ def validate_job_document(value: Any) -> dict[str, Any]:
             if intro["align"] not in ("start", "center", "end"):
                 raise ValueError("intro.align must be start, center or end")
             normalized_intro["align"] = intro["align"]
-        for key, choices in (("graphic_style", ("default", "fomo", "fomo-xerox")),
-                             ("title_layout", ("stacked", "wide")), ("graphic_palette", ("light", "dark"))):
-            if key in intro:
-                if intro[key] not in choices:
-                    raise ValueError(f"intro.{key} must be one of {choices}")
-                normalized_intro[key] = intro[key]
+        if "graphic_style" in intro:
+            if intro["graphic_style"] != "default":
+                raise ValueError("intro.graphic_style must be default")
+            normalized_intro["graphic_style"] = intro["graphic_style"]
         if "logo" in intro:
             normalized_intro["logo"] = _relative_path(intro["logo"], "intro.logo")
         for key in ("start", "duration", "end"):
