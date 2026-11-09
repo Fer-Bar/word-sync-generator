@@ -87,3 +87,26 @@ CTC/ASR, disponibilidad de proveedores ni velocidad de GPU. Esos escenarios requ
 pruebas separadas con cuentas, audio autorizado y referencias revisadas. Los dobles de
 modelos siguen siendo pruebas de contrato/control de flujo, no evidencia de calidad del
 modelo.
+
+## Evitar pruebas ligadas a una entrega puntual
+
+Usa títulos, artistas e identificadores sintéticos como datos de prueba.
+Una regresión debe explicar el comportamiento que protege, no conservar la apariencia
+exacta de una canción que se generó una vez.
+
+`test_poster_graphics.py` prueba los estilos reutilizables que la CLI llama `fomo` y
+`fomo-xerox`; esos nombres son opciones de la aplicación, no canciones de referencia.
+Conserva los límites de texto, alineación, transparencia, repetibilidad y contraste de
+paletas. No fija una media o desviación de ruido para imitar una portada determinada.
+Las combinaciones de límites de título/layout/alineación siguen cubiertas.
+
+El flujo de gráficos usa audio y subtítulos válidos y decodifica ambos MP4. Comprueba
+que el intro específico de cada modo llegue a sus fotogramas y que después aparezcan
+las letras. Sustituye las pruebas que solo inspeccionaban llamadas al renderizador.
+Las tolerancias de píxeles cubren pérdidas de compresión de video, no una estética por
+canción. La selección del fotograma de miniatura también usa un video real de dos colores.
+
+Los datos ficticios siguen siendo apropiados para pruebas de copiar/mover archivos o
+verificar hashes cuando su contrato no incluye decodificarlos. Los comparadores de
+alineación conservan ejemplos sintéticos y verificaciones de integridad; no se borran
+por haber nacido de un incidente concreto ni se presentan como pruebas de inferencia.

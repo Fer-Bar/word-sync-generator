@@ -6,7 +6,8 @@ from colab.karaoke_job import _resolve_song_identity
 
 
 @pytest.mark.parametrize(('title', 'artist', 'track'), [
-    ('FKJ - Little Little Voice (ft. Labrinth) (Official Audio)', 'FKJ feat. Labrinth', 'Little Little Voice'),
+    ('Main Artist - Multi Word Title (ft. Guest Singer) (Official Audio)',
+     'Main Artist feat. Guest Singer', 'Multi Word Title'),
     ('Artist – Song [Official Music Video]', 'Artist', 'Song'),
     ('Artist — Song (Lyrics)', 'Artist', 'Song'),
     ('Artist | Song (Video Oficial)', 'Artist', 'Song'),
@@ -14,7 +15,7 @@ from colab.karaoke_job import _resolve_song_identity
     ('Artist - Song feat. Guest', 'Artist feat. Guest', 'Song'),
     ('Artist - Song (Live)', 'Artist', 'Song (Live)'),
     ('Artist - Song (Remix)', 'Artist', 'Song (Remix)'),
-    ('AC-DC - Song', 'AC-DC', 'Song'),
+    ('North-South - Song', 'North-South', 'Song'),
     ('Artista - Canción (Audio Oficial)', 'Artista', 'Canción'),
 ])
 def test_infers_common_music_titles(title, artist, track, caplog):

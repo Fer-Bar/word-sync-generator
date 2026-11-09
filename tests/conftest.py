@@ -1,11 +1,15 @@
 """Small, valid media projects shared by local workflow integration tests."""
 
 import json
+import os
+import subprocess
 import wave
 
+import imageio_ffmpeg
 import numpy as np
 import pytest
 
+from colab import karaoke_job as job
 from karaoke_app.job_document import JOB_FILENAME
 from karaoke_app.lyrics_file import dump_lyrics_file
 
@@ -41,3 +45,22 @@ def prepared_project(tmp_path):
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps(document), encoding="utf-8")
     return root
+
+
+@pytest.fixture
+def media_tools(tmp_path, monkeypatch):
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "ffmpeg").symlink_to(ffmpeg)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ.get("PATH", ""))
+
+    def decoded_duration(path):
+        # The local dependency bundles FFmpeg, not FFprobe. Decode the actual input
+        # instead of returning a fabricated duration; all composition stays real.
+        pcm = subprocess.run([ffmpeg, "-v", "error", "-i", str(path), "-vn", "-ac", "1",
+                              "-ar", "16000", "-f", "s16le", "pipe:1"],
+                             capture_output=True, check=True).stdout
+        return len(pcm) / (16000 * 2)
+
+    monkeypatch.setattr(job, "_probe_duration", decoded_duration)

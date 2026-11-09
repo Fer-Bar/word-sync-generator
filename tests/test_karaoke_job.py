@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from colab.karaoke_job import (
     _align_known_lyrics,
@@ -212,16 +213,17 @@ class AssRenderingTests(unittest.TestCase):
 
 class ArtistVariantsTests(unittest.TestCase):
     def test_artist_variants_splits_comma_to_full_and_primary(self) -> None:
-        self.assertEqual(_artist_variants("Swsh, Olivia Quillin"), ["Swsh, Olivia Quillin", "Swsh"])
+        self.assertEqual(_artist_variants("Lead Singer, Guest Singer"), ["Lead Singer, Guest Singer", "Lead Singer"])
 
     def test_artist_variants_splits_feat_to_full_and_primary(self) -> None:
         self.assertEqual(_artist_variants("Artist feat. Someone"), ["Artist feat. Someone", "Artist"])
 
     def test_artist_variants_preserves_single_artist(self) -> None:
-        self.assertEqual(_artist_variants("Swsh"), ["Swsh"])
+        self.assertEqual(_artist_variants("Lead Singer"), ["Lead Singer"])
 
-    def test_artist_variants_preserves_special_artists_behavior(self) -> None:
-        self.assertEqual(_artist_variants("Earth, Wind & Fire"), ["Earth, Wind & Fire", "Earth"])
+    def test_artist_variants_keeps_full_credit_before_primary_fallback(self) -> None:
+        credit = "Lead Singer, Guest Singer & Third Singer"
+        self.assertEqual(_artist_variants(credit), [credit, "Lead Singer"])
 
     def test_artist_variants_handles_empty_or_none(self) -> None:
         self.assertEqual(_artist_variants(""), [])
@@ -231,8 +233,8 @@ class ArtistVariantsTests(unittest.TestCase):
 class TitleVariantsTests(unittest.TestCase):
     def test_title_variants_with_parentheses(self) -> None:
         self.assertEqual(
-            _title_variants("Break the Fall (Acoustic)"),
-            ["Break the Fall (Acoustic)", "Break the Fall"],
+            _title_variants("Example Track (Acoustic)"),
+            ["Example Track (Acoustic)", "Example Track"],
         )
 
     def test_title_variants_with_brackets(self) -> None:
@@ -252,7 +254,7 @@ class TitleVariantsTests(unittest.TestCase):
 
 class TitleEditionTokensTests(unittest.TestCase):
     def test_title_edition_tokens_extracts_acoustic(self) -> None:
-        self.assertEqual(_title_edition_tokens("Break the Fall (Acoustic)"), {"acoustic"})
+        self.assertEqual(_title_edition_tokens("Example Track (Acoustic)"), {"acoustic"})
 
     def test_title_edition_tokens_extracts_live(self) -> None:
         self.assertEqual(_title_edition_tokens("Song - Live"), {"live"})
@@ -273,89 +275,95 @@ class LrclibCandidateSafetyTests(unittest.TestCase):
     def test_safe_candidate_accepts_matching_metadata(self) -> None:
         candidate = {
             "id": 100,
-            "trackName": "Break the Fall (Acoustic)",
-            "artistName": "Swsh",
+            "trackName": "Example Track (Acoustic)",
+            "artistName": "Lead Singer",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertTrue(
-            _lrclib_candidate_is_safe(candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296)
+            _lrclib_candidate_is_safe(candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296)
         )
 
     def test_rejects_different_artist_even_with_matching_title_and_duration(self) -> None:
         candidate = {
             "id": 101,
-            "trackName": "Break the Fall",
+            "trackName": "Example Track",
             "artistName": "Completely Different Artist",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
-        self.assertFalse(_lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296))
+        self.assertFalse(
+            _lrclib_candidate_is_safe(candidate, track="Example Track", artist="Lead Singer", duration=296)
+        )
 
     def test_rejects_incompatible_explicit_editions(self) -> None:
         candidate = {
             "id": 102,
-            "trackName": "Break the Fall (Live)",
-            "artistName": "Swsh",
+            "trackName": "Example Track (Live)",
+            "artistName": "Lead Singer",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertFalse(
-            _lrclib_candidate_is_safe(candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296)
+            _lrclib_candidate_is_safe(candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296)
         )
 
     def test_accepts_missing_edition_with_lower_score_than_matching_edition(self) -> None:
         generic_candidate = {
             "id": 103,
-            "trackName": "Break the Fall",
-            "artistName": "Swsh",
+            "trackName": "Example Track",
+            "artistName": "Lead Singer",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
         acoustic_candidate = {
             "id": 104,
-            "trackName": "Break the Fall (Acoustic)",
-            "artistName": "Swsh",
+            "trackName": "Example Track (Acoustic)",
+            "artistName": "Lead Singer",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertTrue(
-            _lrclib_candidate_is_safe(generic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296)
+            _lrclib_candidate_is_safe(
+                generic_candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296
+            )
         )
         self.assertTrue(
             _lrclib_candidate_is_safe(
-                acoustic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296
+                acoustic_candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296
             )
         )
         score_generic = _lrclib_match_score(
-            generic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296
+            generic_candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296
         )
         score_acoustic = _lrclib_match_score(
-            acoustic_candidate, track="Break the Fall (Acoustic)", artist="Swsh", duration=296
+            acoustic_candidate, track="Example Track (Acoustic)", artist="Lead Singer", duration=296
         )
         self.assertGreater(score_acoustic, score_generic)
 
     def test_rejects_duration_delta_greater_than_10s(self) -> None:
         candidate = {
             "id": 105,
-            "trackName": "Break the Fall",
-            "artistName": "Swsh",
+            "trackName": "Example Track",
+            "artistName": "Lead Singer",
             "duration": 315.0,
             "syncedLyrics": "[00:10.00] Line",
         }
-        self.assertFalse(_lrclib_candidate_is_safe(candidate, track="Break the Fall", artist="Swsh", duration=296))
+        self.assertFalse(
+            _lrclib_candidate_is_safe(candidate, track="Example Track", artist="Lead Singer", duration=296)
+        )
 
     def test_accepts_primary_artist_when_source_has_multiple_artists(self) -> None:
         candidate = {
             "id": 106,
-            "trackName": "Break the Fall (Acoustic)",
-            "artistName": "Swsh",
+            "trackName": "Example Track (Acoustic)",
+            "artistName": "Lead Singer",
             "duration": 296.0,
             "syncedLyrics": "[00:10.00] Line",
         }
         self.assertTrue(
             _lrclib_candidate_is_safe(
-                candidate, track="Break the Fall (Acoustic)", artist="Swsh, Olivia Quillin", duration=296
+                candidate, track="Example Track (Acoustic)", artist="Lead Singer, Guest Singer", duration=296
             )
         )
 
@@ -410,15 +418,15 @@ class LrclibFetchTests(unittest.TestCase):
             self.assertEqual(result["id"], 2)
             self.assertEqual(mock_request.call_count, 2)
 
-    def test_fetch_lrclib_tier3_primary_artist_reference_case(self) -> None:
+    def test_fetch_lrclib_retries_with_primary_artist_after_full_credit_misses(self) -> None:
         def side_effect(path: str) -> Any:
-            if "Swsh%2C+Olivia+Quillin" in path or "Swsh,+Olivia+Quillin" in path:
+            if parse_qs(urlsplit(path).query).get("artist_name") == ["Lead Singer, Guest Singer"]:
                 raise OSError("HTTP 404")
-            if "artist_name=Swsh" in path:
+            if parse_qs(urlsplit(path).query).get("artist_name") == ["Lead Singer"]:
                 return {
-                    "id": 11695097,
-                    "trackName": "Break the Fall (Acoustic)",
-                    "artistName": "Swsh",
+                    "id": 1234,
+                    "trackName": "Example Track (Acoustic)",
+                    "artistName": "Lead Singer",
                     "duration": 296.0,
                     "syncedLyrics": "[00:10.00] Line",
                 }
@@ -426,15 +434,15 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall (Acoustic)",
-                "artist": "Swsh, Olivia Quillin",
-                "album": "Break the Fall",
+                "track": "Example Track (Acoustic)",
+                "artist": "Lead Singer, Guest Singer",
+                "album": "Example Track",
                 "duration": 296,
-                "title": "Break the Fall (Acoustic)",
+                "title": "Example Track (Acoustic)",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
-            self.assertEqual(result["id"], 11695097)
+            self.assertEqual(result["id"], 1234)
 
     def test_fetch_lrclib_tier4_structured_search(self) -> None:
         def side_effect(path: str) -> Any:
@@ -443,9 +451,9 @@ class LrclibFetchTests(unittest.TestCase):
             if path.startswith("/search?"):
                 return [
                     {
-                        "id": 33960717,
-                        "trackName": "Break the Fall (Acoustic)",
-                        "artistName": "Swsh",
+                        "id": 4321,
+                        "trackName": "Example Track (Acoustic)",
+                        "artistName": "Lead Singer",
                         "duration": 296.0,
                         "syncedLyrics": "[00:10.00] Line",
                     }
@@ -454,27 +462,27 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall (Acoustic)",
-                "artist": "Swsh, Olivia Quillin",
+                "track": "Example Track (Acoustic)",
+                "artist": "Lead Singer, Guest Singer",
                 "duration": 296,
-                "title": "Break the Fall (Acoustic)",
+                "title": "Example Track (Acoustic)",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
-            self.assertEqual(result["id"], 33960717)
+            self.assertEqual(result["id"], 4321)
 
     def test_fetch_lrclib_tier4_continues_to_search_b_if_search_a_empty(self) -> None:
         def side_effect(path: str) -> Any:
             if path.startswith("/get?"):
                 raise OSError("HTTP 404")
-            if "track_name=Break+the+Fall+%28Acoustic%29" in path:
+            if parse_qs(urlsplit(path).query).get("track_name") == ["Example Track (Acoustic)"]:
                 return []
-            if "track_name=Break+the+Fall" in path:
+            if parse_qs(urlsplit(path).query).get("track_name") == ["Example Track"]:
                 return [
                     {
                         "id": 999,
-                        "trackName": "Break the Fall (Acoustic)",
-                        "artistName": "Swsh",
+                        "trackName": "Example Track (Acoustic)",
+                        "artistName": "Lead Singer",
                         "duration": 296.0,
                         "syncedLyrics": "[00:10.00] Line",
                     }
@@ -483,10 +491,10 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall (Acoustic)",
-                "artist": "Swsh",
+                "track": "Example Track (Acoustic)",
+                "artist": "Lead Singer",
                 "duration": 296,
-                "title": "Break the Fall (Acoustic)",
+                "title": "Example Track (Acoustic)",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
@@ -496,12 +504,12 @@ class LrclibFetchTests(unittest.TestCase):
         def side_effect(path: str) -> Any:
             if path.startswith("/get?") or "artist_name=" in path:
                 return [] if path.startswith("/search?") else None
-            if "q=Swsh+Break+the+Fall" in path:
+            if parse_qs(urlsplit(path).query).get("q", [""])[0].startswith("Lead Singer Example Track"):
                 return [
                     {
                         "id": 888,
-                        "trackName": "Break the Fall (Acoustic)",
-                        "artistName": "Swsh",
+                        "trackName": "Example Track (Acoustic)",
+                        "artistName": "Lead Singer",
                         "duration": 296.0,
                         "syncedLyrics": "[00:10.00] Line",
                     }
@@ -510,10 +518,10 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall (Acoustic)",
-                "artist": "Swsh",
+                "track": "Example Track (Acoustic)",
+                "artist": "Lead Singer",
                 "duration": 296,
-                "title": "Break the Fall (Acoustic)",
+                "title": "Example Track (Acoustic)",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
@@ -526,8 +534,8 @@ class LrclibFetchTests(unittest.TestCase):
             return [
                 {
                     "id": 111,
-                    "trackName": "Break the Fall (Acoustic)",
-                    "artistName": "Swsh",
+                    "trackName": "Example Track (Acoustic)",
+                    "artistName": "Lead Singer",
                     "duration": 296.0,
                     "syncedLyrics": "[00:10.00] Line",
                 }
@@ -535,10 +543,10 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall (Acoustic)",
-                "artist": "Swsh",
+                "track": "Example Track (Acoustic)",
+                "artist": "Lead Singer",
                 "duration": 296,
-                "title": "Break the Fall (Acoustic)",
+                "title": "Example Track (Acoustic)",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
@@ -551,7 +559,7 @@ class LrclibFetchTests(unittest.TestCase):
             return [
                 {
                     "id": 500,
-                    "trackName": "Break the Fall",
+                    "trackName": "Example Track",
                     "artistName": "Completely Different Artist",
                     "duration": 296.0,
                     "syncedLyrics": "[00:10.00] Line",
@@ -560,10 +568,10 @@ class LrclibFetchTests(unittest.TestCase):
 
         with patch("colab.karaoke_job._lrclib_request", side_effect=side_effect):
             metadata = {
-                "track": "Break the Fall",
-                "artist": "Swsh",
+                "track": "Example Track",
+                "artist": "Lead Singer",
                 "duration": 296,
-                "title": "Break the Fall",
+                "title": "Example Track",
             }
             result = _fetch_lrclib(metadata, {})
             self.assertIsNone(result)

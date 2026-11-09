@@ -139,6 +139,7 @@ comprueba el cierre de la sesión y si necesitas rescatar archivos; consulta
 - [Fondos, estilos, miniaturas y migración de trabajos](docs/visuals.md).
 - [Autenticación, errores y recuperación](docs/troubleshooting.md).
 - [Desarrollo, pruebas y mediciones](docs/development.md).
+- [Criterio de pruebas y cobertura funcional](docs/testing.md).
 
 Para consultar todas las opciones de un comando:
 
