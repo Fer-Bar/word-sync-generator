@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from karaoke_app.resources import PACKAGE_ROOT, runtime_resource
+from karaoke_app.resources import runtime_resource
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,6 @@ def preparation_config(
         "schema_version": 1,
         "operation": "prepare",
         "job_id": runtime.name,
-        "source_bundle": str(runtime / "source.zip"),
         "source": {"kind": "file", "value": str(source), "name": source.stem, "metadata": None},
         "cookies_path": None,
         "background": {"kind": "solid", "value": "#0B1020", "overlay_opacity": 0},
@@ -87,18 +86,6 @@ def preparation_config(
         "archive_path": str(runtime / "prepared.zip"),
         **preparation_visuals(video, SimpleNamespace()),
     }
-
-
-def _write_source_bundle(destination: Path) -> None:
-    resources = {
-        "karaoke_pipeline.py": runtime_resource("karaoke_job.py"),
-        "karaoke_ass.py": PACKAGE_ROOT / "ass.py",
-        "karaoke_lyrics_file.py": PACKAGE_ROOT / "lyrics_file.py",
-        "karaoke_lyric_references.py": PACKAGE_ROOT / "lyric_references.py",
-    }
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, path in resources.items():
-            archive.write(path, name)
 
 
 def _extract_project(archive_path: Path, destination: Path) -> None:
@@ -166,7 +153,6 @@ def prepare_audio(
     runtime.mkdir(parents=True, mode=0o700)
     config_path = runtime / "karaoke_job.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    _write_source_bundle(runtime / "source.zip")
     environment = os.environ.copy()
     environment["KARAOKE_RUNTIME_DIR"] = str(runtime)
     try:

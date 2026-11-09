@@ -42,10 +42,8 @@ def test_preparation_uses_isolated_runtime_and_retains_both_runs(tmp_path, monke
         runtime = config_path.parent
         assert environment["KARAOKE_RUNTIME_DIR"] == str(runtime)
         assert config["source"]["value"] == str(source)
-        with zipfile.ZipFile(runtime / "source.zip") as archive:
-            assert set(archive.namelist()) == {
-                "karaoke_pipeline.py", "karaoke_ass.py", "karaoke_lyrics_file.py", "karaoke_lyric_references.py",
-            }
+        assert "source_bundle" not in config
+        assert not (runtime / "source.zip").exists()
         with zipfile.ZipFile(config["archive_path"], "w") as archive:
             archive.writestr("lyrics.lyricsfile.yaml", "lines: []")
         (runtime / "karaoke_status.json").write_text('{"status":"completed"}')

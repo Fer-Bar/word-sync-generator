@@ -32,15 +32,18 @@ def cuda_environment() -> dict[str, str]:
 
 
 def main(config_path: Path = Path("/content/karaoke_job.json")) -> None:
-    """Unpack the pipeline and run it outside the already-started notebook kernel."""
+    """Run uploaded code or the installed pipeline outside the notebook kernel."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", force=True)
     status_path = config_path.with_name("karaoke_status.json")
     status_path.unlink(missing_ok=True)
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
-        pipeline = config_path.with_name("karaoke_pipeline.py")
-        with zipfile.ZipFile(config["source_bundle"]) as archive:
-            pipeline.write_bytes(archive.read(pipeline.name))
+        if config.get("source_bundle"):
+            pipeline = config_path.with_name("karaoke_pipeline.py")
+            with zipfile.ZipFile(config["source_bundle"]) as archive:
+                pipeline.write_bytes(archive.read(pipeline.name))
+        else:
+            pipeline = Path(__file__).resolve().with_name("karaoke_job.py")
         environment = cuda_environment()
         environment["KARAOKE_RUNTIME_DIR"] = str(config_path.resolve().parent)
         with subprocess.Popen(

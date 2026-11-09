@@ -7,6 +7,7 @@
 - **CLI local:** adquiere el audio, abre una sesión Colab, transfiere archivos y descarga el proyecto.
 - **Notebook:** ejecuta el mismo pipeline en el runtime que ya abriste. No usa Colab CLI,
   no abre otra sesión y no necesita cookies ni credenciales de Colab. Empieza con un archivo local.
+  Usa el pipeline del paquete instalado, sin un ZIP de transferencia ni remapear sus rutas locales.
 
 El notebook prepara audio separado y letras, no el video. Después descarga el ZIP,
 extrae el proyecto, revisa la letra y usa `karaoke configure` y `karaoke render` desde la CLI.
@@ -67,6 +68,11 @@ y registros se escriben/buscan en el directorio actual, nunca en `site-packages`
 Desde un checkout se conserva la raíz del repositorio como directorio de trabajo predeterminado.
 
 ## Qué se verificó y qué falta
+
+Una prueba de integración recorre configuración real, lectura de audio/metadata y decodificación
+con FFmpeg hasta la frontera de separación GPU. Solo se reemplaza esa frontera; no se simulan
+configuración, desempaquetado, adquisición ni decodificación. Otra prueba lanza el pipeline real
+en un subproceso sin bundle y verifica un error de entrada conocido antes de inferencia.
 
 Las pruebas locales cubren configuración sin efectos secundarios, archivos de entrada fuera
 del directorio de salida, intentos aislados, errores/checkpoints, rutas del runtime y extracción
