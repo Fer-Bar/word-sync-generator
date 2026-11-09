@@ -20,7 +20,7 @@ También acepta URLs de YouTube. Se descargan primero en tu máquina y requieren
 [Deno](https://deno.com/) en el PATH; un fallo de descarga no abre una sesión GPU.
 Para una letra revisada añade `--lyrics-text ./letra.txt`.
 
-El paquete también puede instalarse desde el repositorio o un wheel, sin un checkout junto
+El paquete también puede instalarse desde un wheel construido con `uv build`, sin un checkout junto
 al ejecutable. En ese caso los archivos locales y las salidas se buscan en el directorio
 actual. [Instalación portable y notebook](docs/notebooks.md).
 
@@ -76,11 +76,12 @@ No es un borrado permanente ni libera espacio de disco. Conserva una copia del p
 ## Usar un notebook GPU
 
 [Abre o descarga `notebooks/prepare_audio.ipynb`](notebooks/prepare_audio.ipynb) y sigue sus
-celdas para preparar un archivo local dentro del runtime abierto. Produce un ZIP editable,
+celdas para subir e instalar el wheel privado construido con `uv build`, y preparar un
+archivo local dentro del runtime abierto. No necesita tokens de GitHub. Produce un ZIP editable,
 que puedes descargar y renderizar con la CLI. No crea otra sesión ni renderiza el video final.
 
-**Validado localmente:** recursos del wheel, configuración, aislamiento y pruebas del
-lanzador. **No verificado de punta a punta en Colab ni Kaggle:** la GPU, imagen Python,
+**Validado localmente:** instalación del wheel, `pip check`, recursos, configuración,
+aislamiento y pruebas del lanzador. **No verificado de punta a punta en Colab ni Kaggle:** la GPU, imagen Python,
 dependencias de modelos y cuota dependen del proveedor. El notebook comprueba requisitos
 antes de ejecutar y no anuncia esas plataformas como probadas. [Instrucciones y límites](docs/notebooks.md).
 

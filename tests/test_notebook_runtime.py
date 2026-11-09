@@ -3,10 +3,12 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from karaoke_app import notebook, resources
 
@@ -207,3 +209,46 @@ def test_launcher_sets_runtime_before_child_starts(tmp_path, monkeypatch):
     config_path.write_text(json.dumps({"source_bundle": str(archive_path)}))
     karaoke_launch.main(config_path)
     assert observed.read_text() == str(tmp_path)
+
+
+def test_notebook_install_requires_local_wheel_before_any_subprocess(tmp_path):
+    path = Path(__file__).resolve().parents[1] / "notebooks" / "prepare_audio.ipynb"
+    cells = json.loads(path.read_text())["cells"]
+    namespace = {"WHEEL_PATH": tmp_path / "missing.whl", "Path": Path, "sys": sys}
+    with pytest.raises(FileNotFoundError, match="WHEEL_PATH"):
+        exec(compile("".join(cells[3]["source"]), str(path), "exec"), namespace)
+    code = "\n".join("".join(cell["source"]) for cell in cells if cell["cell_type"] == "code")
+    assert "git+https://github.com/Fer-Bar/word-sync-generator" not in code
+    assert '"pip", "check"' in code
+
+
+def test_remote_pins_satisfy_application_requirements():
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text())
+    application = {
+        requirement.name.lower(): requirement
+        for requirement in map(Requirement, project["project"]["dependencies"])
+    }
+    for line in resources.runtime_resource("requirements.txt").read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        remote = Requirement(line)
+        local = application.get(remote.name.lower())
+        if local is None:
+            continue
+        for specifier in remote.specifier:
+            if specifier.operator == "==" and "*" not in specifier.version:
+                assert local.specifier.contains(specifier.version), f"Incompatible pin: {remote} versus {local}"
+
+
+def test_notebook_install_rejects_cudnn13_before_pip(tmp_path, monkeypatch):
+    from importlib import metadata
+
+    path = Path(__file__).resolve().parents[1] / "notebooks" / "prepare_audio.ipynb"
+    cells = json.loads(path.read_text())["cells"]
+    wheel = tmp_path / "local.whl"
+    wheel.touch()
+    monkeypatch.setattr(metadata, "version", lambda name: "9.26.0.51")
+    namespace = {"WHEEL_PATH": wheel, "Path": Path, "sys": sys}
+    with pytest.raises(RuntimeError, match="cuDNN 13"):
+        exec(compile("".join(cells[3]["source"]), str(path), "exec"), namespace)

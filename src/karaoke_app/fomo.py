@@ -104,7 +104,7 @@ def add_fomo_logo(canvas: Image.Image, logo_path: Path, *, align: str = "start",
 def apply_graphic_options(document: dict, *, graphic_style: str | None = None,
                           title_layout: str | None = None, align: str | None = None,
                           graphic_palette: str | None = None) -> dict:
-    """Persist composition preferences and apply a legible white FOMO video background."""
+    """Keep paper backgrounds consistent without resetting saved colors or branding on reload."""
     import copy
 
     result = copy.deepcopy(document)
@@ -120,10 +120,12 @@ def apply_graphic_options(document: dict, *, graphic_style: str | None = None,
                 raise ValueError(f"Invalid {key}: {value}")
             result.setdefault("intro", {})[key] = value
     if (result.get("intro") or {}).get("graphic_style") in ("fomo", "fomo-xerox"):
-        from karaoke_app.lyrics_plus import apply_plus_typography
-
         dark = (result.get("intro") or {}).get("graphic_palette", "light") == "dark"
         result["background"] = {"kind": "solid", "color": "#000000" if dark else "#FFFFFF"}
+        if graphic_style is None and graphic_palette is None:
+            return result
+        from karaoke_app.lyrics_plus import apply_plus_typography
+
         watermark = result.get("watermark")
         if watermark and watermark.get("enabled", True):
             watermark.update({"position": "bottom_right" if (result.get("intro") or {}).get("align") == "end"
