@@ -274,3 +274,10 @@ también al medir el progreso de codificación. Las pruebas de recorte y de marc
 agua vacían `PATH` para detectar dependencias accidentales de un FFmpeg del sistema.
 Las pruebas de marca de agua no instalan ni descargan fuentes del sistema.
 Esto no cambia los requisitos de FFmpeg ni la instalación de fuentes en Colab.
+
+### Media storage
+
+Uploads use audio-only inputs, compress integer WAV losslessly, and include only
+what the selected render mode needs. Successful remote runs discard their own
+scratch files after the result ZIP is committed. Original inputs, project audio
+and exported videos are preserved. See [media and cache policy](docs/media-cache.md).

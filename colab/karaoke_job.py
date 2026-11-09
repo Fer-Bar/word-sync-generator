@@ -7,11 +7,14 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -73,7 +76,68 @@ def main() -> None:
     configure_runtime_logging()
     _event("Preparing runtime", stage="runtime")
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    with _managed_workdir(Path(config["archive_path"])):
+        _run_pipeline(config)
+
+
+@contextmanager
+def _managed_workdir(archive_path: Path):
+    """Remove only this run's scratch after a new result archive is committed."""
+    global WORK_DIR, LYRICS_MODULE_PATH, REFERENCES_MODULE_PATH
+    previous = WORK_DIR, LYRICS_MODULE_PATH, REFERENCES_MODULE_PATH
     WORK_DIR.mkdir(parents=True, exist_ok=True)
+    before = archive_path.stat() if archive_path.exists() else None
+    WORK_DIR = Path(tempfile.mkdtemp(prefix="run-", dir=WORK_DIR))
+    owned = WORK_DIR
+    try:
+        yield owned
+        after = archive_path.stat() if archive_path.is_file() else None
+        unchanged = before and after and (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
+        if after is None or not after.st_size or unchanged:
+            raise RuntimeError("No new result archive; retaining the workspace for recovery")
+        if not zipfile.is_zipfile(archive_path):
+            raise RuntimeError("Result archive is not a valid ZIP; retaining workspace for recovery")
+        if archive_path.resolve().is_relative_to(owned.resolve()):
+            raise RuntimeError("Result archive must be outside disposable workspace")
+    except BaseException:
+        LOGGER.warning("Incomplete run retained for recovery: %s", owned)
+        raise
+    else:
+        shutil.rmtree(owned)
+    finally:
+        WORK_DIR, LYRICS_MODULE_PATH, REFERENCES_MODULE_PATH = previous
+
+
+def _discard_scratch_audio(*paths: Path) -> None:
+    """Release generated PCM only, excluding source inputs and deliverables."""
+    for path in paths:
+        resolved = path.resolve()
+        inside = resolved.is_relative_to(WORK_DIR.resolve())
+        generated = (resolved == (WORK_DIR / "mixture.wav").resolve()
+                     or resolved.is_relative_to((WORK_DIR / "separated").resolve()))
+        if not path.is_symlink() and inside and generated:
+            path.unlink(missing_ok=True)
+
+
+def _unpack_source(config: dict[str, Any]) -> None:
+    """Extract uploaded inputs into this run, never into a shared source folder."""
+    global LYRICS_MODULE_PATH, REFERENCES_MODULE_PATH
+    inputs = WORK_DIR / "inputs"
+    _extract_archive(Path(config["source_bundle"]), inputs)
+    for section, key in (("source", "value"), ("background", "value"),
+                         ("lyrics", "text_path"), ("lyrics", "genius_reference_path")):
+        value = config.get(section, {}).get(key)
+        if value and str(value).startswith("/content/"):
+            relative = Path(value).relative_to("/content")
+            target = inputs / relative
+            if not target.resolve().is_relative_to(inputs.resolve()) or not target.is_file():
+                raise ValueError(f"Missing or unsafe bundled {section} input")
+            config[section][key] = str(target)
+    LYRICS_MODULE_PATH = inputs / LYRICS_MODULE_PATH.name
+    REFERENCES_MODULE_PATH = inputs / REFERENCES_MODULE_PATH.name
+
+
+def _run_pipeline(config: dict[str, Any]) -> None:
     _require_commands("ffmpeg", "ffprobe")
     if config.get("operation") == "render":
         _render_existing_job(config)
@@ -81,7 +145,7 @@ def main() -> None:
 
     performance = {"stages": [], "cpu_count": os.cpu_count()}
     if config.get("source_bundle"):
-        _timed_call(performance, "unpack_source", _extract_archive, Path(config["source_bundle"]), CONFIG_PATH.parent)
+        _timed_call(performance, "unpack_source", _unpack_source, config)
     _configure_huggingface()
 
     lyrics_config = config.get("lyrics", {})
@@ -111,6 +175,7 @@ def main() -> None:
         mixture_path = _timed_call(performance, "decode_mixture", _prepare_mixture, source_path)
         vocals_path, instrumental_path = _timed_call(
             performance, "demucs", _separate_vocals, mixture_path, config["demucs_model"])
+        _discard_scratch_audio(mixture_path)
 
         safe_title = _safe_filename(metadata["title"])
         output_dir = WORK_DIR / safe_title
@@ -125,6 +190,7 @@ def main() -> None:
                     ["ffmpeg", "-y", "-i", str(vocals_path), "-c:a", "flac", str(vocals_flac)])
         _timed_call(performance, "instrumental_flac", _run,
                     ["ffmpeg", "-y", "-i", str(instrumental_path), "-c:a", "flac", str(instrumental_flac)])
+        _discard_scratch_audio(vocals_path, instrumental_path)
         preparation = {
             "demucs_model": config["demucs_model"],
             "whisper_model": config["whisper_model"],
@@ -136,7 +202,7 @@ def main() -> None:
             record, reference = reference_future.result()
             preparation["lrclib_id"] = record.get("id") if record else None
             lyrics, alignment = _prepare_lyrics(
-                vocals_path,
+                vocals_flac,
                 metadata,
                 config,
                 selected_record=record,
@@ -2639,10 +2705,20 @@ def _create_archive(output_dir: Path, archive_path: Path) -> None:
     _event("Packaging results", stage="package")
     import zipfile
 
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
-        for path in sorted(output_dir.rglob("*")):
-            if path.is_file():
-                archive.write(path, path.relative_to(output_dir).as_posix())
+    if archive_path.resolve().is_relative_to(output_dir.resolve()):
+        raise ValueError("Result archive must be outside the files being packaged")
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=f".{archive_path.name}-", suffix=".partial",
+                                     dir=archive_path.parent, delete=False) as stream:
+        partial = Path(stream.name)
+    try:
+        with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_STORED) as archive:
+            for path in sorted(output_dir.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(output_dir).as_posix())
+        partial.replace(archive_path)
+    finally:
+        partial.unlink(missing_ok=True)
     _event("Packaging results", stage="package", state="done")
 
 

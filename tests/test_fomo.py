@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from media_samples import write_audio
 from PIL import Image
 
 from karaoke_app.fomo import apply_graphic_options, title_rows
@@ -68,7 +69,7 @@ def test_fomo_bundle_contains_white_background_and_monochrome_watermark(tmp_path
 
     logo = tmp_path / "logo.png"
     Image.new("RGBA", (90, 30), (250, 240, 210, 255)).save(logo)
-    (tmp_path / "audio.wav").write_bytes(b"placeholder audio")
+    write_audio(tmp_path / "audio.wav")
     document = apply_graphic_options({
         "title": "Song", "source": {"artist": "Drake"},
         "video": {"width": 1280, "height": 720, "fps": 24},

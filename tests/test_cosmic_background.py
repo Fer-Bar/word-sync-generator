@@ -6,6 +6,7 @@ from unittest.mock import patch
 import imageio_ffmpeg
 import numpy as np
 import pytest
+from media_samples import write_audio
 from PIL import Image, ImageFilter
 
 from colab import karaoke_job
@@ -69,7 +70,7 @@ def test_job_bundle_and_remote_render_share_generator(tmp_path, monkeypatch):
         "intro": {"enabled": False}, "watermark": {"enabled": False},
     })
     assert validate_job_document(document) == document
-    (tmp_path / "audio.wav").write_bytes(b"audio")
+    write_audio(tmp_path / "audio.wav")
     bundle = tmp_path / "render.zip"
     _create_render_bundle(tmp_path, document, "both", {"lyrics": "ass", "karaoke": "ass"}, bundle)
     with zipfile.ZipFile(bundle) as archive:
