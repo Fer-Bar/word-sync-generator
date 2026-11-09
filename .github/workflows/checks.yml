@@ -19,5 +19,11 @@ jobs:
       - run: uv sync --locked --dev --python 3.12
       - run: uv run playwright install --with-deps chromium
       - run: uv run ruff check .
+      - name: Install FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - run: uv run pytest -q
       - run: uv build

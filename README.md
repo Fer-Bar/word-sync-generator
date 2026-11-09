@@ -1,159 +1,123 @@
 # Lyrics Generator
 
-Genera videos de karaoke y lyrics desde una URL de YouTube o un archivo local.
-Prepara audio y letras en Google Colab, revisa la sincronización y configura el
-proyecto desde la CLI antes de renderizar. No necesitas editar archivos de
-configuración: para corregir las letras y sus tiempos se edita el YAML del proyecto.
+Prepara audio y letras sincronizadas, revisa la letra y genera videos de **karaoke**
+(instrumental) o **lyrics** (audio original). La preparación se reutiliza: cambiar el fondo,
+la tipografía o la marca de agua no requiere separar voces ni alinear otra vez.
 
-- **Karaoke:** audio instrumental y resaltado por palabra.
-- **Lyrics:** audio original y letras en páginas fijas.
-- El render genera videos, subtítulos, miniaturas y las intros habilitadas.
+## Empezar con la CLI
 
-## Instalar
-
-Usa Python 3.12 y `uv`. Ejecuta los comandos desde la raíz del repositorio:
+Necesitas Python 3.12+, [uv](https://docs.astral.sh/uv/) y acceso a Google Colab con GPU.
+Desde el repositorio:
 
 ```bash
 uv sync --dev
-uv run colab version
 uv run colab sessions
-```
-
-Necesitas Internet y acceso a un runtime GPU de Colab. La disponibilidad de GPU
-depende de tu cuenta. Para URLs de YouTube, instala también [Deno](https://deno.com/);
-`yt-dlp` ya es una dependencia del proyecto.
-
-Las variables opcionales están en [.env.template](.env.template). Las cookies de
-YouTube se leen de `cookies.txt`; puedes cambiar la ruta con `--cookies` u omitirlas
-con `--no-cookies`. No publiques `.env`, cookies ni credenciales. Consulta
-[acceso y recuperación](docs/troubleshooting.md).
-
-## Preparar → revisar → configurar → renderizar
-
-### 1. Preparar
-
-```bash
-uv run karaoke source "https://www.youtube.com/watch?v=VIDEO_ID" --language es
 uv run karaoke source ./cancion.flac --title "Mi canción" --artist "Artista" --language es
 ```
 
-Cada comando crea un proyecto en `outputs/PROYECTO/`. La preparación separa voces e
-instrumental y genera letras con tiempos por palabra; todavía no crea el video.
-Las URLs de YouTube se descargan localmente antes de abrir Colab. Si tienes una letra
-revisada, añade `--lyrics-text ./letra.txt`.
+La preparación descarga un proyecto en `outputs/JOB_ID/`, sin renderizar aún.
+También acepta URLs de YouTube. Se descargan primero en tu máquina y requieren
+[Deno](https://deno.com/) en el PATH; un fallo de descarga no abre una sesión GPU.
+Para una letra revisada añade `--lyrics-text ./letra.txt`.
 
-### 2. Revisar las letras
+El paquete también puede instalarse desde un wheel construido con `uv build`, sin un checkout junto
+al ejecutable. En ese caso los archivos locales y las salidas se buscan en el directorio
+actual. [Instalación portable y notebook](docs/notebooks.md).
 
-Abre `lyrics.lyricsfile.yaml` junto a `vocals.flac` en
-[LyricsEditor](https://dotslashgabut.github.io/lyricseditor/), revisa texto y tiempos
-y exporta **LyricsFile YAML** a la misma carpeta. El editor es externo y opcional.
-Un nuevo render usa esos tiempos; no vuelve a transcribir ni alinear la canción.
+### 1. Revisar las letras
 
-### 3. Configurar y validar
+Abre `vocals.flac` y `lyrics.lyricsfile.yaml` del proyecto en
+[LyricsEditor](https://dotslashgabut.github.io/lyricseditor/). Corrige texto y tiempos,
+exporta **LyricsFile YAML** y reemplaza la letra del proyecto. La revisión es necesaria:
+los controles automáticos no certifican precisión acústica ni identifican cantantes.
 
-```bash
-uv run karaoke configure outputs/PROYECTO
-uv run karaoke status outputs/PROYECTO
-uv run karaoke validate outputs/PROYECTO
-```
-
-`configure` abre un menú con presets, tipografía, fondo, título y arte, marca de agua,
-video y salida. Puedes volver a cada sección, revisar los cambios y guardar. Cancelar
-o interrumpir deja el proyecto intacto. El menú no genera previews.
-
-Para scripts, usa opciones explícitas:
+### 2. Configurar y previsualizar
 
 ```bash
-uv run karaoke configure outputs/PROYECTO --preset cosmic --resolution 720p --fps 30 --mode lyrics
-uv run karaoke configure outputs/PROYECTO --title "Otro título" --artist "Artista" --no-intro
-uv run karaoke configure outputs/PROYECTO --lyrics-active-color '#FFFFFF' --font-size 64
+uv run karaoke configure outputs/JOB_ID
+uv run karaoke status outputs/JOB_ID
+uv run karaoke validate outputs/JOB_ID
 ```
 
-Los presets son `fluid`, `cosmic` y `classic`. Las opciones explícitas prevalecen sobre
-el preset; las omitidas conservan lo guardado. `status` muestra ajustes, medios y
-exportaciones. `validate` comprueba los archivos necesarios y los tiempos de letras
-sin iniciar Colab. No comprueba autenticación, cuota de GPU ni dependencias remotas.
+`configure` guarda las preferencias del proyecto; los flags de `render` afectan solo a esa
+corrida. Puedes partir de `--preset fluid`, `cosmic` o `classic`, y cambiar título, artista,
+resolución, fps y modo por secciones. No necesitas editar archivos de configuración a mano. Enter conserva el valor
+actual y cancelar el asistente no guarda cambios. `validate` y `render --dry-run` validan archivos y letras,
+sin iniciar Colab ni comprobar GPU/autenticación.
 
-La [guía de configuración](docs/project-cli.md) explica las secciones y el uso sin
-terminal. Consulta [diseño y render](docs/visuals.md) para fondos, logos y miniaturas.
-
-### 4. Renderizar
+Para una vista previa local instala Chromium una vez:
 
 ```bash
-uv run karaoke render outputs/PROYECTO
-uv run karaoke render outputs/PROYECTO --mode karaoke
+uv run playwright install --with-deps chromium
+uv run karaoke preview outputs/JOB_ID --mode lyrics --start 15 --duration 8 --output preview.mp4
 ```
 
-Sin `--mode`, se usa el modo guardado, inicialmente `both`. `--mode lyrics` usa el
-audio original y `--mode karaoke` el instrumental. Las opciones de apariencia que
-se pasan a `render` afectan solo esa ejecución; `configure` las guarda para el futuro.
+El preview muestra letras y fondo; la composición final añade intro y marca de agua.
+[Opciones visuales](docs/visuals.md).
 
-Los resultados se descargan en `outputs/PROYECTO/renders/FECHA-MODO-ID/`.
-
-**Conservación de variantes:** cada render tiene un ID único y se conserva, aunque generes
-otro video del mismo modo. No se borran ni reemplazan automáticamente versiones anteriores.
-
-Para ordenar los exports, inspecciona el inventario y selecciona IDs exactos:
+### 3. Renderizar
 
 ```bash
-uv run karaoke cleanup outputs/PROYECTO
-uv run karaoke cleanup outputs/PROYECTO RENDER_ID
-uv run karaoke cleanup outputs/PROYECTO RENDER_ID --apply
-uv run karaoke cleanup outputs/PROYECTO RENDER_ID --restore --apply
+uv run karaoke render outputs/JOB_ID --mode both
 ```
 
-Sin `--apply` solo se muestran los archivos seleccionables y su tamaño. `--apply` exige IDs
-explícitos y mueve la carpeta completa (MP4, subtítulos, miniaturas y configuración) a
-`.trash/renders/` del proyecto. `--restore` lista o recupera esos exports sin sobrescribir
-archivos existentes. La papelera es local y **sigue ocupando espacio**; el comando no borra
-permanentemente, no limpia audios fuente y rechaza enlaces simbólicos o rutas externas.
+Usa `--mode lyrics` o `--mode karaoke` para producir uno solo. Los MP4, subtítulos,
+miniaturas y datos de cada render quedan en `outputs/JOB_ID/renders/`.
+Las variantes anteriores se conservan. La limpieza es explícita y reversible:
 
-## Audio y archivos temporales
+```bash
+uv run karaoke cleanup outputs/JOB_ID                            # Inventario
+uv run karaoke cleanup outputs/JOB_ID RENDER_ID --apply          # Mover a la papelera
+uv run karaoke cleanup outputs/JOB_ID RENDER_ID --restore --apply # Recuperar
+```
 
-Las subidas contienen solo el audio necesario para el modo elegido. Los WAV enteros
-se comprimen sin pérdida y los videos de entrada se reducen a audio. Cada ejecución
-remota limpia únicamente sus archivos temporales después de guardar el ZIP de resultados.
-Los originales, el audio del proyecto y los exports se conservan; la limpieza de variantes
-es explícita mediante `karaoke cleanup`. Consulta la [política de medios y recuperación](docs/media-cache.md).
+No es un borrado permanente ni libera espacio de disco. Conserva una copia del proyecto.
 
-## Archivos del proyecto
+## Usar un notebook GPU
 
-| Archivo o carpeta | Uso |
-| --- | --- |
-| `lyrics.lyricsfile.yaml` | Letras y tiempos editables. |
-| `original_audio.*`, `instrumental.flac`, `vocals.flac` | Medios para render y revisión. |
-| `.karaoke/project.json` | Estado interno administrado por la CLI; no se edita a mano. |
-| `reference.txt`, `lyrics_reference.json` | Referencia y procedencia, cuando estén disponibles. |
-| `alignment.json`, `lyrics_validation.json` | Diagnóstico de alineación y revisión. |
-| `performance.json` | Tiempos y mediciones de la operación. |
-| `renders/` | Videos y demás resultados finales. |
+[Abre o descarga `notebooks/prepare_audio.ipynb`](notebooks/prepare_audio.ipynb) y sigue sus
+celdas para subir e instalar el wheel privado construido con `uv build`, y preparar un
+archivo local dentro del runtime abierto. No necesita tokens de GitHub. Produce un ZIP editable,
+que puedes descargar y renderizar con la CLI. No crea otra sesión ni renderiza el video final.
 
-Conserva la carpeta completa para volver a renderizar. Las carpetas antiguas con
-`job.json` no se cargan ni se convierten automáticamente: prepara un proyecto nuevo
-desde la fuente original. Ya no existe el comando `migrate`.
+**Validado localmente:** instalación del wheel, `pip check`, recursos, configuración,
+aislamiento y pruebas del lanzador. **No verificado de punta a punta en Colab ni Kaggle:** la GPU, imagen Python,
+dependencias de modelos y cuota dependen del proveedor. El notebook comprueba requisitos
+antes de ejecutar y no anuncia esas plataformas como probadas. [Instrucciones y límites](docs/notebooks.md).
 
-Si una preparación falla, `*.recovery/` conserva los datos disponibles para diagnóstico.
-Comprueba que la sesión esté detenida antes de borrar esos archivos. Los logs locales
-están en `.karaoke/logs/`; `--verbose` muestra además los detalles en la consola.
+## Archivos y credenciales
+
+- `lyrics.lyricsfile.yaml`: letra y tiempos editables.
+- `vocals.flac`, `instrumental.flac`, `original_audio.*`: material para revisión y render.
+- `alignment.json`, `lyrics_validation.json`, `performance.json`: diagnóstico y tiempos.
+- `renders/`: videos y artefactos de salida.
+
+Las variables opcionales están en [.env.template](.env.template). No publiques `.env`,
+tokens, cookies ni los archivos de tus canciones. `--no-cookies` omite cookies de YouTube.
+Las subidas grandes muestran un aviso, no una garantía sobre el límite de Colab.
+La consola muestra progreso; `--verbose` amplía los detalles. Los registros privados quedan
+en `.karaoke/logs/`. Antes de borrar una carpeta `*.recovery/`, comprueba si contiene
+archivos recuperables y si la sesión remota se cerró.
 
 ## Documentación
 
-- [Preparación y letras](docs/preparation.md).
-- [Configuración por secciones y presets](docs/project-cli.md).
-- [Diseño, logos y miniaturas](docs/visuals.md).
-- [Acceso, errores y recuperación](docs/troubleshooting.md).
-- [Desarrollo](docs/development.md) y [pruebas de integración](docs/testing.md).
+- [Preparación, referencias y letras](docs/preparation.md).
+- [Proyectos, presets y configuración por secciones](docs/project-cli.md).
+- [Fondos, tipografía, logos y previews](docs/visuals.md).
+- [Audio, temporales y recuperación](docs/media-cache.md).
+- [Notebook y paquete portable](docs/notebooks.md).
+- [Errores, autenticación y recuperación](docs/troubleshooting.md).
+- [Desarrollo y arquitectura](docs/development.md).
+- [Pruebas de integración y sus límites](docs/testing.md).
+- [Auditoría de sincronización](docs/alignment-audit-20261105.md): diagnóstico histórico,
+  no garantía de precisión. La recuperación experimental con regresiones fue revertida.
 
-Usa `uv run karaoke COMANDO --help` para las opciones de cada comando.
+Consulta `uv run karaoke --help` o `uv run karaoke COMANDO --help` para las opciones completas.
+La interfaz de la CLI está en inglés.
 
-## Límites y licencias
+## Licencias
 
-La alineación automática necesita revisión y no identifica cantantes automáticamente.
-Plus usa Braccato en Chromium; el estilo clásico usa ASS. Los subtítulos exportados no
-reproducen todas las animaciones del video. Las pruebas locales no certifican precisión
-acústica ni sustituyen una ejecución con modelos y GPU reales.
-
-El código propio usa [Apache-2.0](LICENSE). El modelo CTC predeterminado tiene licencia
-**CC-BY-NC-4.0**; revisa sus condiciones antes de usarlo comercialmente. Las bibliotecas,
-fuentes y el motor visual conservan sus licencias, recogidas en
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Código propio: [Apache-2.0](LICENSE). El modelo CTC predeterminado tiene licencia
+**CC-BY-NC-4.0**: revisa sus condiciones antes de usarlo comercialmente.
+Demucs, faster-whisper, yt-dlp, Braccato, FFmpeg, las fuentes y otras dependencias mantienen
+sus condiciones. [Atribuciones y licencias de terceros](THIRD_PARTY_NOTICES.md).

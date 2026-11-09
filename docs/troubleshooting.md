@@ -29,12 +29,11 @@ orientativo, no un límite confirmado de Colab; no bloquea la subida.
 - **HTTP 400:** la petición fue rechazada; el peso puede influir, pero ese código no confirma la causa.
 - Otros errores conservan su diagnóstico sin atribuirlos al tamaño.
 
-Si la fuente es grande, crea una copia de audio compacta (por ejemplo, FLAC en lugar
-de WAV) y prepara un proyecto nuevo con `karaoke source COPIA`. Conserva el original.
-Para reducir un fondo, elige una imagen o color con `karaoke configure PROYECTO
---background-image RUTA` o `--background-color COLOR`. No edites las referencias del
-estado interno. Si también falla una subida pequeña, revisa la sesión y el cliente
-Colab usando el error original del log.
+Si el paquete es grande, usa un fondo de menor bitrate y prepara el proyecto desde una
+fuente FLAC cuando corresponda. Cambia el fondo con `karaoke configure`, sin editar el
+estado interno. Conserva siempre el original. La preparación de transferencias y el descarte
+de archivos temporales se explican en [audio y temporales](media-cache.md).
+Si también falla una subida pequeña, revisa sesión y cliente usando el error original del log.
 
 ## Límite de sesiones de Colab
 
