@@ -26,7 +26,11 @@ def render(tmp_path, monkeypatch):
     monkeypatch.setattr("karaoke_app.lyrics_file.lyrics_to_transcript", lambda lyrics: {"segments": []})
     monkeypatch.setattr("karaoke_app.ass.generate_ass", lambda *args, **kwargs: "ass")
     monkeypatch.setattr("karaoke_app.srt.generate_srt", lambda transcript: "srt")
-    monkeypatch.setattr(cli, "_create_render_bundle", Mock())
+    def create_bundle(job_dir, document, mode, ass_by_mode, destination, **kwargs):
+        with zipfile.ZipFile(destination, "w") as archive:
+            archive.writestr("job.json", json.dumps(document))
+
+    monkeypatch.setattr(cli, "_create_render_bundle", create_bundle)
     calls = []
 
     def run(command, **kwargs):

@@ -34,6 +34,11 @@ como `HF_TOKEN` y el token de Genius. Las cookies de YouTube se leen de `cookies
 puedes indicar otra ruta con `--cookies` u omitirlas con `--no-cookies`.
 No publiques esos archivos. Consulta [problemas de acceso y recuperación](docs/troubleshooting.md).
 
+Las subidas a Colab registran el tamaño y su estimación en base64. Los paquetes de
+64 MiB o más muestran un aviso antes de crear la sesión (umbral orientativo, no un
+límite del servidor). Los errores distinguen un rechazo por tamaño de un HTTP 400
+de causa no confirmada; consulta [errores de subida](docs/troubleshooting.md#errores-al-subir-archivos).
+
 ## Preparar, revisar y renderizar
 
 ### 1. Preparar la canción

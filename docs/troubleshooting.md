@@ -18,6 +18,22 @@ Consulta [.env.template](../.env.template).
 Usa `--cookies RUTA` para otra ubicación o `--no-cookies` para no utilizarlas.
 No incluyas credenciales en commits ni resultados publicados.
 
+## Errores al subir archivos
+
+La CLI registra el tamaño de cada archivo y una estimación del payload base64
+(aproximadamente un 33 % más grande, sin contar JSON). Antes de crear la sesión,
+avisa si un paquete de preparación o render pesa al menos 64 MiB. Es un umbral
+orientativo, no un límite confirmado de Colab; no bloquea la subida.
+
+- **HTTP 413 / payload too large:** el servidor rechazó el tamaño de la petición.
+- **HTTP 400:** la petición fue rechazada; el peso puede influir, pero ese código no confirma la causa.
+- Otros errores conservan su diagnóstico sin atribuirlos al tamaño.
+
+Si el paquete es grande, reduce el bitrate del fondo o usa audio comprimido sin pérdida
+en lugar de WAV (por ejemplo, FLAC o WavPack, según el formato de muestras). Actualiza
+la ruta correspondiente en `job.json` y conserva el original. Si también falla una subida
+pequeña, revisa la sesión y el cliente Colab usando el error original del log.
+
 ## Límite de sesiones de Colab
 
 Ante `HTTP 412 Precondition Failed` o `TooManyAssignmentsError`, comprueba tus sesiones y

@@ -20,6 +20,7 @@ from dotenv import dotenv_values
 
 from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
 from karaoke_app.themes import THEMES
+from karaoke_app.upload_diagnostics import upload_failure_message, upload_size, warn_large_upload
 from karaoke_app.visual_config import BACKGROUND_STYLES, VISUAL_STYLES, preparation_visuals
 
 LOGGER = logging.getLogger(__name__)
@@ -532,6 +533,7 @@ def run_job(args: argparse.Namespace) -> Path:
             job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
             LOGGER.debug("Local Genius fallback ready for acoustic alignment; LRCLIB keeps priority")
         _create_source_bundle(resources, source_bundle)
+        warn_large_upload(source_bundle)
 
         notify("Preparing render", stage="local_render", state="stopped")
         colab = ["colab", f"--auth={args.auth}"]
@@ -734,6 +736,7 @@ def render_colab(args: argparse.Namespace) -> Path:
             transcript=transcript,
             srt_content=srt_content,
         )
+        warn_large_upload(bundle_path)
         config_path.write_text(
             json.dumps(
                 {
@@ -955,7 +958,11 @@ def _load_hf_token() -> str | None:
 
 
 def _upload(colab: list[str], session: str, local_path: Path, remote_path: Path) -> None:
-    _run([*colab, "upload", "--session", session, str(local_path), str(remote_path)])
+    LOGGER.info("Uploading to Colab (%s)", upload_size(local_path))
+    try:
+        _run([*colab, "upload", "--session", session, str(local_path), str(remote_path)])
+    except ProcessFailure as exc:
+        raise RuntimeError(upload_failure_message(local_path, str(exc))) from exc
 
 
 def _extract_archive(archive_path: Path, destination: Path) -> None:
