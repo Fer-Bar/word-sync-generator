@@ -89,7 +89,7 @@ def test_project_bundle_renders_both_modes_with_the_right_audio_and_subtitles(
         font = tmp_path / "Switzer-Semibold.otf"
         shutil.copyfile(fonts / "Montserrat.ttf", font)
         shutil.copyfile(fonts / "Montserrat-OFL.txt", font.with_name("Switzer-FFL.txt"))
-        monkeypatch.setattr(lyrics_plus, "switzer_font", lambda: font)
+        monkeypatch.setattr(lyrics_plus, "FONT_DIRECTORY", tmp_path)
         document["style"].update(lyrics_effect="word-synced", font_family="Montserrat")
         # Browser binaries are a test prerequisite, not installed during rendering.
         monkeypatch.setattr(job, "_run_installer", lambda *args, **kwargs: None)
