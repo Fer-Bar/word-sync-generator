@@ -113,6 +113,11 @@ el fondo y la paleta, conservando la fuente de las letras cantadas.
 `--graphic-style default` recupera la composición habitual; usa un preset para restaurar
 también fondo y tipografía.
 
+Los estilos de cartel mantienen su fondo de papel claro u oscuro en miniaturas y video.
+Para usar un fondo personalizado, cambia primero a `--graphic-style default`.
+Los colores de letras y ajustes del logo personalizados se conservan al volver a abrir
+el proyecto o cambiar la composición. Elegir de nuevo un estilo o paleta aplica sus valores iniciales.
+
 ## Comandos locales existentes
 
 El menú de configuración no incluye preview. Si necesitas usar los comandos locales
