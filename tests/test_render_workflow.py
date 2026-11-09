@@ -153,6 +153,7 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     from PIL import Image
 
     from karaoke_app.job_document import STATE_FILENAME
+    from karaoke_app.render_graphics import background_frame
     from karaoke_app.visual_config import resolve_options
 
     logo = prepared_project / "logo.png"
@@ -169,12 +170,17 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     assert document["style"]["lyrics_colors"] == colors
     assert document["watermark"] == saved["watermark"]
     # Editing a different section must not silently reapply the graphic preset.
-    subprocess.run([*command, "configure", str(prepared_project), "--title-layout", "wide", "--align", "end"],
+    subprocess.run([*command, "configure", str(prepared_project), "--title-layout", "wide", "--align", "end",
+                    "--background-color", "#123456"],
                    capture_output=True, text=True, check=True, env=environment)
     document, _ = resolve_options(prepared_project, {})
     assert document["style"]["lyrics_colors"] == colors
     assert document["watermark"]["position"] == "top_right"
     assert document["watermark"]["scale"] == .2
+    # This graphic style uses a fixed paper background in both local graphics
+    # and final video, including after changing unrelated background options.
+    assert document["background"] == {"kind": "solid", "color": "#FFFFFF"}
+    assert background_frame(prepared_project, document).getpixel((0, 0)) == (255, 255, 255)
     before = (prepared_project / STATE_FILENAME).read_bytes()
     transcript = lyrics_to_transcript(load_lyrics_file(prepared_project / "lyrics.yaml"))
     subtitles = generate_ass(transcript, document["video"], style=StyleConfig.from_dict(document["style"]),
@@ -192,6 +198,7 @@ def test_configured_graphic_colors_survive_reload_and_real_render(prepared_proje
     settings = json.loads((extracted / "render-settings.json").read_text())
     assert settings["style"]["lyrics_colors"] == colors
     pixels = decode_frame(extracted / "Song_karaoke.mp4", .375)
+    assert (pixels[0, 0] > 245).all()
     red, green, blue = np.moveaxis(pixels, 2, 0)
     assert np.count_nonzero((green > 150) & (red < 100) & (blue < 100)) > 15
     assert np.count_nonzero((blue > 150) & (red < 100) & (green < 100)) > 15
