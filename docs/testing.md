@@ -18,11 +18,11 @@ uv build
 ```
 
 CI descarga Switzer sin modificar desde la API oficial de Fontshare y verifica los
-SHA-256 del OTF y de su licencia ITF FFL 2.0 (17-08-2026), incluso al restaurar caché.
+SHA-256 del OTF y de su licencia ITF FFL 2.0 (17-08-2026). Cada ejecución obtiene
+su propia copia; no se guarda en el caché compartido de Actions ni como artefacto.
 Si faltan los archivos o cambian sus bytes, CI falla: los pins sólo se actualizan tras
 revisar la fuente oficial y su licencia. La fuente no se redistribuye en el repositorio
-ni en paquetes; el caché es para uso propio. La licencia permite ese uso, pero restringe
-la redistribución. Consulta la [licencia de Fontshare](https://www.fontshare.com/licenses).
+ni en paquetes. La licencia permite el uso propio, pero restringe la redistribución. Consulta la [licencia de Fontshare](https://www.fontshare.com/licenses).
 Con `CI` definido, pytest también falla antes de recopilar pruebas si falta Switzer.
 
 Para iterar sobre la preparación local y el render:
