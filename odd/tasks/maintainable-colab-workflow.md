@@ -40,6 +40,8 @@ Baseline: `22060f74bf9beea5b51ad07f45cc2640a418ebc8`; branch: `refactor/shared-c
 
 ## Current execution
 
+- Follow-up: user requested separate audio-upload and metadata-form cells after missing visible autofill. The notebook now has seven steps: upload confirms receipt, then the explicit metadata cell calls the existing validator and displays detected/missing tags plus editable fields. Preparation requires metadata validation for the current audio. Manual corrections survive repeated execution. Distributed notebook and usage instructions updated; existing wheel remains compatible. Cell compilation and real Ocean Eyes metadata extraction succeeded; no tests or browser verification performed for this change.
+
 - Commits: `7118f19` layout and `3e51068` runtime/review workflow (256 authored changed lines in the latter). Code/runtime/notebook match the final candidate; only documentation adds observed evidence.
 - Real worker `ses_e3c46257cffepEuo9oS0myvNGy` completed; session `karaoke-logs-20261110-proof` returned **Session terminated**. Full authorized song, isolated engine, automatic LRCLIB lyrics (34 lines), Whisper small, English, classic720p. Preparation 102s; final H.264/AAC MP4 duration199.545s decoded fully. No tests, other sessions or Drive.
 - The initial worker declined only because its delegation omitted `Allowed edit surfaces`; parent corrected that scope. No remote success was established by the refusal. Later user authorization expands input to the complete provided song and allows up to 60 minutes in the same runtime.

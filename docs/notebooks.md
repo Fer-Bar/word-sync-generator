@@ -9,24 +9,25 @@ Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecc
 Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
 
 1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
-2. **Tu canción:** ejecuta la celda para mostrar el formulario. Selecciona audio o vídeo
-   y confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
+2. **Subir audio:** selecciona audio o vídeo y espera la confirmación de archivo recibido.
+3. **Datos de la canción:** ejecuta la celda para leer los metadatos y mostrar el formulario.
+   Confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
    etiquetas del archivo cuando existen; tus correcciones manuales se conservan.
    El álbum y el TXT son opcionales.
    El TXT está en **Aportar mi letra · opcional**; los modelos y la búsqueda en
    **Opciones avanzadas**. La búsqueda automática está activada por defecto.
-3. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
+4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
-4. **Revisar la letra:** escucha la voz y comprueba texto, procedencia y tiempos por línea.
+5. **Revisar la letra:** escucha la voz y comprueba texto, procedencia y tiempos por línea.
    En **Descargar para corregir · opcional**, descarga las voces y el YAML por separado
    y abre LyricsEditor. Sube el YAML exportado con **Subir YAML corregido**, o continúa
-   con la letra actual. No necesitas pasar por el paso 6 para esos archivos.
-5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
+   con la letra actual. No necesitas pasar por el paso 7 para esos archivos.
+6. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
    adicional de confirmación. Cambiar el aspecto no repite la preparación.
-6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
+7. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
    si quieres conservarlo antes de cerrar Colab.
 
-El paso 4 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
+El paso 5 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
 El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
 en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
@@ -50,7 +51,7 @@ un título de ejemplo que pueda provocar una búsqueda incorrecta. El álbum es 
 El motor consulta LRCLIB y después Genius; si no hay una referencia válida, utiliza
 transcripción. No se garantiza que un proveedor tenga la canción o esté disponible.
 
-En el paso 4, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
+En el paso 5, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
 transcripción no demuestra que la búsqueda haya encontrado letras. Los tiempos se
 muestran en minutos y segundos junto a cada línea. Un resultado
 sin evidencia o con anclas insuficientes no se presenta como validado: escucha y revisa.
