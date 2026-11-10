@@ -41,7 +41,8 @@ def main() -> None:
     """Execute one notebook request and write its result only after success."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=(
-        "diagnose", "validate-input", "prepare", "inspect", "import-lyrics", "export-project", "render",
+        "diagnose", "validate-input", "youtube", "configure", "prepare", "inspect",
+        "import-lyrics", "export-project", "render",
     ))
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
@@ -50,13 +51,28 @@ def main() -> None:
     if args.operation == "diagnose":
         import torch
 
-        result = {**runtime_report(), "cuda_available": torch.cuda.is_available()}
+        result = {**runtime_report(), "cuda_available": torch.cuda.is_available(),
+                  "notebook_features": ["youtube", "configure"]}
         if result["cuda_available"]:
             result["gpu"] = torch.cuda.get_device_name(0)
     elif args.operation == "validate-input":
         from karaoke_app.notebook_inputs import validate_inputs
 
         result = validate_inputs([Path(path) for path in request["paths"]])
+    elif args.operation == "youtube":
+        from karaoke_app.notebook_sources import acquire_youtube
+        from karaoke_app.terminal import configure_logging
+
+        configure_logging(diagnostics=False)
+        result = acquire_youtube(
+            request["url"], Path(request["directory"]),
+            Path(request["cookies"]) if request.get("cookies") else None,
+        )
+    elif args.operation == "configure":
+        from karaoke_app.visual_config import configure_job
+
+        path = configure_job(Path(request["directory"]), **request.get("options", {}))
+        result = {"configuration": str(path)}
     elif args.operation == "prepare":
         for field in ("source", "output_dir", "lyrics_text"):
             if request.get(field) is not None:

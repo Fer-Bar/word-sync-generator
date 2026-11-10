@@ -9,8 +9,9 @@ Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecc
 Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
 
 1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
-2. **Subir audio:** ejecuta la celda, selecciona un audio o vídeo con el selector nativo
-   de Colab y espera **Subida terminada**. La celda permanece activa durante la transferencia.
+2. **Elegir canción:** selecciona **Archivo local** o **YouTube**. Sube el archivo o pega
+   el enlace y ejecuta la celda. YouTube descarga un MP4 de hasta 720p con audio y metadatos.
+   Espera **Archivo listo**. La celda permanece activa durante la transferencia.
    Volver a ejecutarla inicia una selección nueva y descarta los datos de la canción anterior.
 3. **Datos de la canción:** ejecuta la celda para leer los metadatos y mostrar el formulario.
    Confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
@@ -26,6 +27,10 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
    Elige **Descargar voces**, ejecútala, y repite con **Descargar letra**. Abre ambos archivos
    en LyricsEditor. Para aplicar cambios, elige **Importar YAML corregido** y sube el YAML
    exportado. Puedes omitir esta celda y continuar con la letra actual.
+   **4c · Fondo del vídeo (opcional)** permite elegir color (`#RRGGBB`), imagen, vídeo
+   subido o vídeo de origen. Los archivos se validan y guardan dentro del proyecto;
+   los vídeos cortos se repiten y su audio no sustituye la canción. Ajusta **Oscurecer**
+   para mejorar la lectura. **Según estilo** vuelve al fondo del preset seleccionado.
 5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
    adicional de confirmación. Cambiar el aspecto no repite la preparación.
 6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
@@ -37,7 +42,7 @@ El YAML corregido se valida antes de reemplazar la letra; se conserva una copia 
 en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
 
-No hace falta editar rutas ni usar tokens, cookies o Google Drive. El audio se procesa
+No hace falta editar rutas ni montar Google Drive. El audio se procesa
 en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores externos.
 Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio autorizado.
 La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
@@ -63,7 +68,13 @@ sin evidencia o con anclas insuficientes sigue indicado como pendiente de revisi
 
 Después genera el video, comprueba audio/subtítulos en la previsualización y descarga
 el MP4 y el proyecto editable. Repite solo el render si cambias el aspecto. La entrada
-YouTube/cookies está pospuesta en el notebook, no eliminada de la CLI. No hay guardado
+YouTube se adquiere con el mismo servicio que la CLI. Si solicita autenticación, selecciona
+**Subir cookies.txt** y repite el paso 2 con un archivo Netscape. Se intenta primero sin
+cookies; la copia temporal se usa solo para reintentar y no se incluye en el proyecto.
+Las cookies subidas se eliminan al terminar el intento. La CLI conserva la descarga de
+audio por defecto; el notebook solicita vídeo y reutiliza el audio para la preparación.
+Los metadatos de YouTube son sugerencias editables; pueden faltar artista o álbum.
+No hay guardado
 automático en Drive: descarga los archivos antes de desconectar el runtime.
 
 El notebook está diseñado para la interfaz de **Google Colab**. No se presenta como una
@@ -76,7 +87,7 @@ El mantenedor construye el paquete desde una revisión concreta:
 
 ```bash
 uv build --wheel
-sha256sum dist/lyrics_generator-0.1.0-py3-none-any.whl
+sha256sum dist/lyrics_generator-0.1.1-py3-none-any.whl
 ```
 
 Entrega el wheel, su checksum, la revisión y el cuaderno correspondiente por el canal

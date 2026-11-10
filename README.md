@@ -26,6 +26,9 @@ La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
 El modelo Whisper se elige en el formulario nativo del paso 4, antes de preparar la canción.
+El paso 2 acepta archivos locales o un enlace de YouTube con metadatos; si hace falta,
+puedes aportar cookies temporales. La celda opcional 4c permite usar un color, imagen
+o vídeo como fondo sin repetir la preparación del audio. Usa el notebook con el wheel 0.1.1.
 Después de la preparación, la celda opcional 4b permite descargar voces y YAML,
 corregirlos en LyricsEditor y subir la
 letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.

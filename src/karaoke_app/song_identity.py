@@ -7,7 +7,8 @@ from typing import Any
 
 def _clean_music_title(value: str) -> str:
     """Remove presentation labels while retaining remix, live and edition markers."""
-    label = r"(?:official\s+(?:music\s+)?(?:audio|video|lyric\s+video)|lyrics?|audio\s+oficial|video\s+oficial)"
+    label = (r"(?:official\s+(?:music\s+)?(?:audio|video|lyric\s+video)"
+             r"|lyrics?(?:\s+video)?|audio\s+oficial|video\s+oficial)")
     value = re.sub(rf"\s*[\[(]\s*{label}\s*[\])]", "", value, flags=re.IGNORECASE)
     return value.strip().strip('\"“”').strip()
 
