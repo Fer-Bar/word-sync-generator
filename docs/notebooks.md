@@ -16,10 +16,12 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
    Confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
    etiquetas del archivo cuando existen; tus correcciones manuales se conservan.
    El álbum y el TXT son opcionales.
-   El TXT está en **Aportar mi letra · opcional**; los modelos y la búsqueda en
-   **Opciones avanzadas**. La búsqueda automática está activada por defecto.
+   El TXT está en **Aportar mi letra · opcional**; la búsqueda automática está visible
+   y activada por defecto. Estos controles no están ocultos en acordeones.
 4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
+   Antes de ejecutar, selecciona **Modelo** en el formulario nativo: `small`, `medium` o
+   `large-v3` (predeterminado). El modelo elegido se muestra al iniciar la preparación.
    La celda independiente **4b · Revisar en LyricsEditor (opcional)** muestra el enlace al editor.
    Elige **Descargar voces**, ejecútala, y repite con **Descargar letra**. Abre ambos archivos
    en LyricsEditor. Para aplicar cambios, elige **Importar YAML corregido** y sube el YAML

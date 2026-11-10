@@ -25,6 +25,7 @@ demuestra que un proceso esté usándola en ese momento.
 La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
+El modelo Whisper se elige en el formulario nativo del paso 4, antes de preparar la canción.
 Después de la preparación, la celda opcional 4b permite descargar voces y YAML,
 corregirlos en LyricsEditor y subir la
 letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.
