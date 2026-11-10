@@ -10,20 +10,26 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
 
 1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
 2. **Tu canción:** ejecuta la celda para mostrar el formulario. Selecciona audio o vídeo
-   y completa título, artista e idioma. El álbum y el TXT son opcionales.
+   y confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
+   etiquetas del archivo cuando existen; tus correcciones manuales se conservan.
+   El álbum y el TXT son opcionales.
    El TXT está en **Aportar mi letra · opcional**; los modelos y la búsqueda en
    **Opciones avanzadas**. La búsqueda automática está activada por defecto.
 3. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
 4. **Revisar la letra:** escucha la voz y comprueba texto, procedencia y tiempos por línea.
-5. **Generar el vídeo:** elige modo, estilo y calidad. Usa la letra actual sin una casilla
+   En **Descargar para corregir · opcional**, descarga las voces y el YAML por separado
+   y abre LyricsEditor. Sube el YAML exportado con **Subir YAML corregido**, o continúa
+   con la letra actual. No necesitas pasar por el paso 6 para esos archivos.
+5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
    adicional de confirmación. Cambiar el aspecto no repite la preparación.
-6. **Descargar:** guarda los vídeos y el proyecto editable antes de cerrar Colab.
+6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
+   si quieres conservarlo antes de cerrar Colab.
 
-Para corregir tiempos en [LyricsEditor](https://dotslashgabut.github.io/lyricseditor/),
-el ZIP editable contiene `vocals.flac` y `lyrics.lyricsfile.yaml`. La importación del YAML
-corregido en el formulario y el autocompletado de metadatos siguen pendientes; este cambio
-prioriza el layout. No hay controles simulados para esas acciones.
+El paso 4 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
+El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
+en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
+se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
 
 No hace falta editar rutas ni usar tokens, cookies o Google Drive. El audio se procesa
 en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores externos.
@@ -139,6 +145,45 @@ de entradas y runtime y Ruff sobre el cuaderno. Esto no verifica el selector del
 ni la transferencia de archivos grandes en Colab.
 El layout simplificado no tiene tests por petición del usuario: solo se comprueban la
 estructura del notebook y la compilación de sus celdas. No se presenta como validación visual.
+
+### Preparación y señales de actividad
+
+La instalación del paso 1 retransmite la salida de sus comandos. El motor del notebook
+también solicita salida real de Demucs y de los instaladores del renderizador. Whisper
+muestra la descarga de los modelos ofrecidos por el formulario y el progreso real de
+transcripción. La carga de Whisper y del alineador indica el dispositivo seleccionado.
+Se conserva INFO, sin activar DEBUG ni añadir avisos periódicos de actividad. El render
+ya comunica el tiempo de vídeo codificado mediante eventos de FFmpeg.
+
+Un aviso de Colab sobre GPU sin uso no demuestra un fallo: la disponibilidad de CUDA y
+su utilización son cosas distintas. La causa de la ejecución reportada sin logs aún no
+se ha reproducido en Colab. Si no aparece ni el mensaje inicial del motor, conserva la
+salida de la celda, el wheel utilizado y la ruta de diagnóstico; no repitas preparaciones
+simultáneas. Para cancelar, usa el botón de detener la celda; el adaptador mantiene la
+terminación del grupo de procesos y conserva los archivos del intento.
+
+### Ejecución real de la canción suministrada
+
+El 10 de noviembre de 2026 se ejecutó la canción completa «Ocean Eyes» (199,545 s) en
+una Tesla T4, dentro del entorno aislado del notebook. Se leyeron título, artista y álbum;
+LRCLIB aportó 34 líneas. Se usó Whisper `small` y el estilo Clásico a 720p en esta ejecución.
+La preparación terminó en 102 s y Whisper y el alineador
+indicaron CUDA. Los registros de separación, descarga de Whisper y transcripción
+llegaron al mismo retransmisor de salida antes de terminar la preparación.
+
+Con el wheel final también se completaron la importación del YAML descargado y vuelto
+a subir, la exportación actualizada y el vídeo Lyrics H.264/AAC, 1280×720, 24 fps. El
+vídeo se decodificó completo; los hashes de MP4, voces, YAML y proyecto descargados
+coincidieron con los remotos, y el WAV original permaneció intacto. La sesión terminó.
+No se ejecutaron tests: fue procesamiento real mediante la CLI de Colab.
+
+La alineación indicó `needs_review: true`: hay que escuchar y corregir los tiempos cuando
+sea necesario. No se observó la descarga del modelo Demucs, aunque sí su separación.
+Esta ejecución no verificó los controles del navegador ni su entrega visual de logs;
+la captura de evidencia de la CLI conservó una referencia a stdout entre ejecuciones,
+por lo que sus llamadas posteriores no mostraron todo en pantalla. Los registros privados
+con marcas de tiempo preservan la llegada de salida antes de la finalización. No se
+añadió ese capturador al notebook distribuido. El modo Karaoke no se ejecutó en esta ronda.
 La ampliación de metadatos y revisión se comprueba localmente a través del adaptador del
 motor; la búsqueda en línea con una canción real todavía requiere esa prueba en Colab.
 No confundas un código de salida local de la CLI con éxito remoto.

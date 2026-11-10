@@ -632,7 +632,7 @@ def _separate_vocals(mixture_path: Path, model_name: str) -> tuple[Path, Path]:
             str(separated_dir),
             str(mixture_path),
         ],
-        capture_output=True,
+        capture_output=os.environ.get("KARAOKE_STREAM_OUTPUT") != "1",
     )
     track_dir = separated_dir / model_name / mixture_path.stem
     vocals_path = track_dir / "vocals.wav"
@@ -1955,6 +1955,8 @@ class AlignmentContext:
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             dtype = torch.float16 if device == "cuda" else torch.float32
+            if os.environ.get("KARAOKE_STREAM_OUTPUT") == "1":
+                LOGGER.info("Loading alignment model %s on %s", CTC_ALIGNER_MODEL, device)
             model_path = snapshot_download(
                 repo_id=CTC_ALIGNER_MODEL, revision=CTC_ALIGNER_MODEL_REVISION, cache_dir=WORK_DIR / "models")
             model, tokenizer = load_alignment_model(device, model_path=model_path, dtype=dtype)
@@ -2201,8 +2203,23 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
     if device == "cpu":
         _event("GPU unavailable. Transcription will use the CPU and may take longer.", kind="warning")
 
+    model_name = config["whisper_model"]
+    stream_output = os.environ.get("KARAOKE_STREAM_OUTPUT") == "1"
+    if stream_output:
+        LOGGER.info("Loading Whisper %s on %s (%s)", model_name, device, compute_type)
+        if model_name in {"small", "medium", "large-v3"}:
+            from huggingface_hub import snapshot_download
+            from tqdm import tqdm
+
+            model_name = snapshot_download(
+                repo_id=f"Systran/faster-whisper-{model_name}",
+                cache_dir=str(WORK_DIR / "models"),
+                allow_patterns=["config.json", "preprocessor_config.json", "model.bin",
+                                "tokenizer.json", "vocabulary.*"],
+                tqdm_class=tqdm,
+            )
     model = WhisperModel(
-        config["whisper_model"],
+        model_name,
         device=device,
         compute_type=compute_type,
         download_root=str(WORK_DIR / "models"),
@@ -2220,6 +2237,7 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
             "speech_pad_ms": 250,
         },
         condition_on_previous_text=False,
+        **({"log_progress": True} if stream_output else {}),
     )
 
     words = []
@@ -2828,10 +2846,10 @@ def _run(command: list[str], *, capture_output: bool = False) -> subprocess.Comp
 
 
 def _run_installer(command: list[str], *, label: str = "Package") -> subprocess.CompletedProcess[str]:
-    """Execute an installation command, capturing and reporting full output if it fails."""
+    """Install dependencies, streaming output when requested by the notebook."""
     LOGGER.debug("Running installation: %s", " ".join(command))
     try:
-        return _run(command, capture_output=True)
+        return _run(command, capture_output=os.environ.get("KARAOKE_STREAM_OUTPUT") != "1")
     except Exception as error:
         error_msg = f"{label} installation failed: {error}"
         LOGGER.error("%s", error_msg)

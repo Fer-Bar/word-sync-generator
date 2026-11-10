@@ -33,7 +33,8 @@ def validate_inputs(paths: list[Path]) -> dict:
             raise ValueError("The optional lyrics file contains no lyric lines.")
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type,codec_name",
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration,format_name:format_tags:stream=codec_type,codec_name:stream_tags",
              "-of", "json", str(source)], capture_output=True, text=True, timeout=30,
         )
     except FileNotFoundError:
@@ -53,8 +54,15 @@ def validate_inputs(paths: list[Path]) -> dict:
         duration = math.nan
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("The selected file has no valid positive duration.")
+    tags = {
+        key.casefold(): " ".join(value.split())
+        for group in (audio.get("tags", {}), report["format"].get("tags", {}))
+        for key, value in group.items() if isinstance(value, str)
+    }
     return {
         "source": str(source), "lyrics_text": str(references[0]) if references else None,
+        "metadata": {"title": tags.get("title"), "artist": tags.get("artist") or tags.get("iaar"),
+                     "album": tags.get("album")},
         "media": {"duration_seconds": duration, "format": report["format"].get("format_name"),
                   "audio_codec": audio["codec_name"],
                   "has_video": any(stream.get("codec_type") == "video" for stream in streams)},

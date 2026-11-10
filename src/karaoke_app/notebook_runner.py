@@ -40,7 +40,9 @@ def project_info(directory: Path) -> dict:
 def main() -> None:
     """Execute one notebook request and write its result only after success."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("diagnose", "validate-input", "prepare", "inspect", "render"))
+    parser.add_argument("operation", choices=(
+        "diagnose", "validate-input", "prepare", "inspect", "import-lyrics", "export-project", "render",
+    ))
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
     args = parser.parse_args()
@@ -62,6 +64,14 @@ def main() -> None:
         result = asdict(prepare_audio(**request))
     elif args.operation == "inspect":
         result = project_info(Path(request["directory"]))
+    elif args.operation == "import-lyrics":
+        from karaoke_app.notebook_review import import_lyrics
+
+        result = import_lyrics(Path(request["directory"]), Path(request["source"]))
+    elif args.operation == "export-project":
+        from karaoke_app.notebook_review import export_project
+
+        result = export_project(Path(request["directory"]))
     else:
         result = asdict(render_project(Path(request["directory"]), options=request.get("options")))
     args.result.write_text(json.dumps(result, default=str, ensure_ascii=False, indent=2), encoding="utf-8")

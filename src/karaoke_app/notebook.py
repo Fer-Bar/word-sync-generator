@@ -112,8 +112,9 @@ def _extract_project(archive_path: Path, destination: Path) -> None:
 
 def _run_preparation(config_path: Path, environment: dict[str, str]) -> None:
     """Run the shared launcher, which dispatches preparation and rendering requests."""
-    environment = {**environment, "KARAOKE_RUNTIME_LOG_LEVEL": "INFO"}
+    environment = {**environment, "KARAOKE_RUNTIME_LOG_LEVEL": "INFO", "KARAOKE_STREAM_OUTPUT": "1"}
     command = [sys.executable, "-u", str(runtime_resource("karaoke_launch.py")), str(config_path)]
+    print(f"[runtime] Starting engine. Diagnostics: {config_path.parent}", flush=True)
     with subprocess.Popen(
         command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, start_new_session=os.name == "posix",
