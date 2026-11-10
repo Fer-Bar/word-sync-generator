@@ -16,6 +16,13 @@ artista e idioma (álbum opcional), prepara y comprueba el proveedor de la letra
 tiempos antes de renderizar. El TXT es una alternativa, no un requisito. La entrada
 por URL de YouTube sigue disponible en la CLI; en el notebook queda para una etapa posterior.
 
+El paso 1 instala y comprueba la GPU. Ejecuta **2 · Tu canción** para abrir el formulario:
+el audio es la entrada principal y **Aportar mi letra · opcional** permite subir o quitar
+un TXT. El paso 3 crea las voces, el instrumental y la letra sincronizada; todavía no vídeos.
+Revisa la letra y genera el vídeo sin casillas adicionales de confirmación. Cambiar las
+entradas invalida la preparación anterior. El diagnóstico de disponibilidad de GPU no
+demuestra que un proceso esté usándola en ese momento.
+
 El notebook usa el mismo motor que la CLI, dentro de tu sesión actual. La CLI sigue
 disponible para automatización y proyectos locales. [Instalación, distribución y límites](docs/notebooks.md).
 

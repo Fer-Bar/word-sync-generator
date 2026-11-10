@@ -8,27 +8,33 @@ Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecc
 **Entorno de ejecución → Cambiar tipo de entorno de ejecución → T4 GPU**.
 Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
 
-1. Ejecuta la instalación y selecciona el `.whl` recibido.
-2. Comprueba la GPU con el diagnóstico del cuaderno.
-3. Completa título/artista/idioma (álbum opcional) y ejecuta la celda: aparecerá el selector
-   de archivos debajo. Elige un audio/video; si deseas aportar letras, selecciona también
-   un TXT en ese mismo diálogo. Mantén la búsqueda en línea activada para el flujo habitual.
-   El motor comprueba formato, duración y presencia de una pista de audio antes de continuar.
-4. Espera a que termine la preparación. La primera ejecución descarga modelos.
-5. Comprueba los datos de la canción, el origen de la letra y los tiempos por línea.
-   Escucha la voz; activa los tiempos por palabra si necesitas revisarlos con más detalle.
-   Si la letra corresponde a otra canción, corrige primero título/artista y repite la
-   preparación. Como alternativa, repite el paso 3 seleccionando audio y TXT juntos.
-6. Confirma la revisión, elige modo/aspecto y genera el video. Cambiar el aspecto no repite
-   la separación ni la transcripción. `classic` es la opción más sencilla para empezar.
-7. Descarga el MP4 o el paquete ZIP. Conserva también el proyecto editable para usarlo
-   después desde la CLI. Cierra el entorno desde Colab cuando hayas terminado.
+1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
+2. **Tu canción:** ejecuta la celda para mostrar el formulario. Selecciona audio o vídeo
+   y completa título, artista e idioma. El álbum y el TXT son opcionales.
+   El TXT está en **Aportar mi letra · opcional**; los modelos y la búsqueda en
+   **Opciones avanzadas**. La búsqueda automática está activada por defecto.
+3. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
+   y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
+4. **Revisar la letra:** escucha la voz y comprueba texto, procedencia y tiempos por línea.
+5. **Generar el vídeo:** elige modo, estilo y calidad. Usa la letra actual sin una casilla
+   adicional de confirmación. Cambiar el aspecto no repite la preparación.
+6. **Descargar:** guarda los vídeos y el proyecto editable antes de cerrar Colab.
+
+Para corregir tiempos en [LyricsEditor](https://dotslashgabut.github.io/lyricseditor/),
+el ZIP editable contiene `vocals.flac` y `lyrics.lyricsfile.yaml`. La importación del YAML
+corregido en el formulario y el autocompletado de metadatos siguen pendientes; este cambio
+prioriza el layout. No hay controles simulados para esas acciones.
 
 No hace falta editar rutas ni usar tokens, cookies o Google Drive. El audio se procesa
 en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores externos.
 Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio autorizado.
 La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
 interruptor no significa «ignorar mi archivo». La CLI conserva la semántica de sus flags.
+Los botones necesitan una sesión activa: aparecen al ejecutar **Tu canción**, no al
+abrir un cuaderno sin ejecutar. Al cambiar archivos o datos se invalida la preparación
+y revisión anterior. Para otra canción, reemplaza el audio y revisa también metadatos
+y TXT; los proyectos ya generados permanecen en disco. El formulario usa `ipywidgets`
+del entorno anfitrión de Colab; el motor conserva su entorno aislado.
 
 ### Probar el flujo real con una canción local
 
@@ -38,9 +44,9 @@ un título de ejemplo que pueda provocar una búsqueda incorrecta. El álbum es 
 El motor consulta LRCLIB y después Genius; si no hay una referencia válida, utiliza
 transcripción. No se garantiza que un proveedor tenga la canción o esté disponible.
 
-En el paso 5, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
+En el paso 4, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
 transcripción no demuestra que la búsqueda haya encontrado letras. Los tiempos se
-muestran en segundos junto a cada línea, con detalle por palabra opcional. Un resultado
+muestran en minutos y segundos junto a cada línea. Un resultado
 sin evidencia o con anclas insuficientes no se presenta como validado: escucha y revisa.
 
 Después genera el video, comprueba audio/subtítulos en la previsualización y descarga
@@ -126,6 +132,13 @@ conservaron sus hashes. La comprobación independiente de anclas ASR indicó anc
 insuficientes: no equivale a una validación completa de precisión temporal.
 
 **Sigue pendiente el recorrido real de controles, reproducción y descargas en el navegador.**
+La versión anterior del formulario se comprobó localmente con widgets reales: carga y
+persistencia de ambos archivos, eliminación del TXT, rechazo de una extensión incorrecta,
+limpieza del contenido del widget e invalidación al editar. También pasaron las 26 pruebas
+de entradas y runtime y Ruff sobre el cuaderno. Esto no verifica el selector del navegador
+ni la transferencia de archivos grandes en Colab.
+El layout simplificado no tiene tests por petición del usuario: solo se comprueban la
+estructura del notebook y la compilación de sus celdas. No se presenta como validación visual.
 La ampliación de metadatos y revisión se comprueba localmente a través del adaptador del
 motor; la búsqueda en línea con una canción real todavía requiere esa prueba en Colab.
 No confundas un código de salida local de la CLI con éxito remoto.
