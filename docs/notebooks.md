@@ -20,16 +20,15 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
    **Opciones avanzadas**. La búsqueda automática está activada por defecto.
 4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
-5. **Revisar la letra:** escucha la voz y comprueba texto, procedencia y tiempos por línea.
-   En **Descargar para corregir · opcional**, descarga las voces y el YAML por separado
-   y abre LyricsEditor. Sube el YAML exportado con **Subir YAML corregido**, o continúa
-   con la letra actual. No necesitas pasar por el paso 7 para esos archivos.
-6. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
+   Al terminar, **Revisar en LyricsEditor · opcional** permite descargar las voces y el YAML
+   y abrir LyricsEditor. Sube el YAML exportado con **Subir YAML corregido**, o continúa
+   con la letra actual. No hay una celda de revisión ni un listado de letras en texto plano.
+5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
    adicional de confirmación. Cambiar el aspecto no repite la preparación.
-7. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
+6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
    si quieres conservarlo antes de cerrar Colab.
 
-El paso 5 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
+El panel opcional del paso 4 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
 El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
 en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
@@ -39,7 +38,7 @@ en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores
 Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio autorizado.
 La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
 interruptor no significa «ignorar mi archivo». La CLI conserva la semántica de sus flags.
-Los botones necesitan una sesión activa: aparecen al ejecutar **Tu canción**, no al
+Los controles necesitan una sesión activa: aparecen al ejecutar su celda, no al
 abrir un cuaderno sin ejecutar. Al cambiar archivos o datos se invalida la preparación
 y revisión anterior. Para otra canción, reemplaza el audio y revisa también metadatos
 y TXT; los proyectos ya generados permanecen en disco. El formulario usa `ipywidgets`
@@ -53,10 +52,10 @@ un título de ejemplo que pueda provocar una búsqueda incorrecta. El álbum es 
 El motor consulta LRCLIB y después Genius; si no hay una referencia válida, utiliza
 transcripción. No se garantiza que un proveedor tenga la canción o esté disponible.
 
-En el paso 5, «Origen de la letra» distingue proveedor, TXT y transcripción. Una
-transcripción no demuestra que la búsqueda haya encontrado letras. Los tiempos se
-muestran en minutos y segundos junto a cada línea. Un resultado
-sin evidencia o con anclas insuficientes no se presenta como validado: escucha y revisa.
+Al terminar el paso 4, «Origen de la letra» distingue proveedor, TXT y transcripción.
+Una transcripción no demuestra que la búsqueda haya encontrado letras. La revisión de
+texto y tiempos se realiza en LyricsEditor con las voces y el YAML descargados. Un resultado
+sin evidencia o con anclas insuficientes sigue indicado como pendiente de revisión.
 
 Después genera el video, comprueba audio/subtítulos en la previsualización y descarga
 el MP4 y el proyecto editable. Repite solo el render si cambias el aspecto. La entrada

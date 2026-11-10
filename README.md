@@ -25,7 +25,8 @@ demuestra que un proceso esté usándola en ese momento.
 La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
-En la revisión puedes descargar voces y YAML, corregirlos en LyricsEditor y subir la
+Al terminar la preparación, un panel opcional permite descargar voces y YAML,
+corregirlos en LyricsEditor y subir la
 letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.
 
 El notebook usa el mismo motor que la CLI, dentro de tu sesión actual. La CLI sigue
