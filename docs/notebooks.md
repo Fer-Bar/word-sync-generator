@@ -181,6 +181,20 @@ terminación del grupo de procesos y conserva los archivos del intento.
 
 ### Ejecución real de la canción suministrada
 
+La ampliación de YouTube y fondos se verificó también el 10 de noviembre de 2026 con
+el wheel 0.1.1 en una T4 dedicada. YouTube rechazó la descarga anónima desde Colab; el
+reintento con las cookies aportadas descargó «What's Done Is Done», de Jorja Smith,
+con metadatos. La preparación real usó English/Whisper small y LRCLIB aportó 43 líneas.
+La recuperación dejó tiempos `estimated` de `faster-whisper`, pendientes de revisión.
+
+El adaptador compartido configuró y renderizó tres vídeos Lyrics/Clásico de 173,333 s,
+H.264/AAC a 720p, con color, imagen y un clip de ocho segundos repetido como fondo.
+Los tres se decodificaron completos; los hashes descargados coincidieron. El ZIP editable
+conservó el fondo final y la letra actual, sin cookies ni metadatos privados del descargador.
+Las cookies temporales se eliminaron y la sesión se cerró. Los archivos están en
+`dist/results/youtube-backgrounds/`. Fue ejecución real por CLI, sin tests ni mocks;
+la interacción de los selectores del navegador permanece como comprobación humana.
+
 El 10 de noviembre de 2026 se ejecutó la canción completa «Ocean Eyes» (199,545 s) en
 una Tesla T4, dentro del entorno aislado del notebook. Se leyeron título, artista y álbum;
 LRCLIB aportó 34 líneas. Se usó Whisper `small` y el estilo Clásico a 720p en esta ejecución.
