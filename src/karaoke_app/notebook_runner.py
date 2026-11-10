@@ -40,7 +40,7 @@ def project_info(directory: Path) -> dict:
 def main() -> None:
     """Execute one notebook request and write its result only after success."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("diagnose", "prepare", "inspect", "render"))
+    parser.add_argument("operation", choices=("diagnose", "validate-input", "prepare", "inspect", "render"))
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
     args = parser.parse_args()
@@ -51,6 +51,10 @@ def main() -> None:
         result = {**runtime_report(), "cuda_available": torch.cuda.is_available()}
         if result["cuda_available"]:
             result["gpu"] = torch.cuda.get_device_name(0)
+    elif args.operation == "validate-input":
+        from karaoke_app.notebook_inputs import validate_inputs
+
+        result = validate_inputs([Path(path) for path in request["paths"]])
     elif args.operation == "prepare":
         for field in ("source", "output_dir", "lyrics_text"):
             if request.get(field) is not None:

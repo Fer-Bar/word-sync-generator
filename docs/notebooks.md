@@ -10,13 +10,15 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
 
 1. Ejecuta la instalación y selecciona el `.whl` recibido.
 2. Comprueba la GPU con el diagnóstico del cuaderno.
-3. Selecciona tu audio local y completa título/artista/idioma; añade el álbum si lo conoces.
-   Deja la búsqueda en línea activada y «Tengo letra TXT» desactivado para el flujo habitual.
+3. Completa título/artista/idioma (álbum opcional) y ejecuta la celda: aparecerá el selector
+   de archivos debajo. Elige un audio/video; si deseas aportar letras, selecciona también
+   un TXT en ese mismo diálogo. Mantén la búsqueda en línea activada para el flujo habitual.
+   El motor comprueba formato, duración y presencia de una pista de audio antes de continuar.
 4. Espera a que termine la preparación. La primera ejecución descarga modelos.
 5. Comprueba los datos de la canción, el origen de la letra y los tiempos por línea.
    Escucha la voz; activa los tiempos por palabra si necesitas revisarlos con más detalle.
    Si la letra corresponde a otra canción, corrige primero título/artista y repite la
-   preparación. Como alternativa, aporta un TXT; activa «Cambiar letra» para sustituirlo.
+   preparación. Como alternativa, repite el paso 3 seleccionando audio y TXT juntos.
 6. Confirma la revisión, elige modo/aspecto y genera el video. Cambiar el aspecto no repite
    la separación ni la transcripción. `classic` es la opción más sencilla para empezar.
 7. Descarga el MP4 o el paquete ZIP. Conserva también el proyecto editable para usarlo
