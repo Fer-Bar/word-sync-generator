@@ -22,6 +22,7 @@ un TXT. El paso 3 crea las voces, el instrumental y la letra sincronizada; todav
 Revisa la letra y genera el vídeo sin casillas adicionales de confirmación. Cambiar las
 entradas invalida la preparación anterior. El diagnóstico de disponibilidad de GPU no
 demuestra que un proceso esté usándola en ese momento.
+La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
 En la revisión puedes descargar voces y YAML, corregirlos en LyricsEditor y subir la

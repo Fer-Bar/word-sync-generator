@@ -9,7 +9,9 @@ Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecc
 Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
 
 1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
-2. **Subir audio:** selecciona audio o vídeo y espera la confirmación de archivo recibido.
+2. **Subir audio:** ejecuta la celda, selecciona un audio o vídeo con el selector nativo
+   de Colab y espera **Subida terminada**. La celda permanece activa durante la transferencia.
+   Volver a ejecutarla inicia una selección nueva y descarta los datos de la canción anterior.
 3. **Datos de la canción:** ejecuta la celda para leer los metadatos y mostrar el formulario.
    Confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
    etiquetas del archivo cuando existen; tus correcciones manuales se conservan.

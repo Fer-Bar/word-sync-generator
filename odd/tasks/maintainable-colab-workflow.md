@@ -40,6 +40,8 @@ Baseline: `22060f74bf9beea5b51ad07f45cc2640a418ebc8`; branch: `refactor/shared-c
 
 ## Current execution
 
+- Upload follow-up: screenshot shows old combined six-step UI, with FileUpload count1 but receipt label unchanged. Browser callback failure is not reproduced locally. Replaced audio FileUpload with documented blocking google.colab.files.upload in step2; only commit audio state after one nonempty supported file exists on disk. New attempt invalidates prior audio/preparation/form data, including cancellation and multiple selections. Step3 retains explicit metadata validation. Native upload browser interaction remains pending; no claim that selecting a filename alone establishes reception.
+
 - Follow-up: user requested separate audio-upload and metadata-form cells after missing visible autofill. The notebook now has seven steps: upload confirms receipt, then the explicit metadata cell calls the existing validator and displays detected/missing tags plus editable fields. Preparation requires metadata validation for the current audio. Manual corrections survive repeated execution. Distributed notebook and usage instructions updated; existing wheel remains compatible. Cell compilation and real Ocean Eyes metadata extraction succeeded; no tests or browser verification performed for this change.
 
 - Commits: `7118f19` layout and `3e51068` runtime/review workflow (256 authored changed lines in the latter). Code/runtime/notebook match the final candidate; only documentation adds observed evidence.
