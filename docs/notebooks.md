@@ -20,15 +20,17 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
    **Opciones avanzadas**. La búsqueda automática está activada por defecto.
 4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
-   Al terminar, **Revisar en LyricsEditor · opcional** permite descargar las voces y el YAML
-   y abrir LyricsEditor. Sube el YAML exportado con **Subir YAML corregido**, o continúa
-   con la letra actual. No hay una celda de revisión ni un listado de letras en texto plano.
+   La celda independiente **4b · Revisar en LyricsEditor (opcional)** muestra el enlace al editor.
+   Elige **Descargar voces**, ejecútala, y repite con **Descargar letra**. Abre ambos archivos
+   en LyricsEditor. Para aplicar cambios, elige **Importar YAML corregido** y sube el YAML
+   exportado. Puedes omitir esta celda y continuar con la letra actual.
 5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
    adicional de confirmación. Cambiar el aspecto no repite la preparación.
 6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
    si quieres conservarlo antes de cerrar Colab.
 
-El panel opcional del paso 4 permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente.
+La celda 4b usa el formulario y la transferencia nativos de Colab, sin botones `ipywidgets`.
+Permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente, sin repetir el paso 4.
 El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
 en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
