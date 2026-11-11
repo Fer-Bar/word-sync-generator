@@ -154,6 +154,7 @@ def prepare_audio(
     use_lrclib: bool = True,
     whisper_model: str = "large-v3",
     demucs_model: str = "htdemucs_ft",
+    whisper_cache: Path | None = None,
 ) -> PreparedProject:
     """Prepare local audio on this runtime, preserving failed attempts for recovery.
 
@@ -172,6 +173,8 @@ def prepare_audio(
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     environment = os.environ.copy()
     environment["KARAOKE_RUNTIME_DIR"] = str(runtime)
+    if whisper_cache is not None:
+        environment["KARAOKE_WHISPER_CACHE"] = str(Path(whisper_cache).expanduser().resolve())
     try:
         _run_preparation(config_path, environment)
         status = json.loads((runtime / "karaoke_status.json").read_text(encoding="utf-8"))

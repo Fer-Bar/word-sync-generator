@@ -157,3 +157,12 @@ Código propio: [Apache-2.0](LICENSE). El modelo CTC predeterminado tiene licenc
 **CC-BY-NC-4.0**: revisa sus condiciones antes de usarlo comercialmente.
 Demucs, faster-whisper, yt-dlp, Braccato, FFmpeg, las fuentes y otras dependencias mantienen
 sus condiciones. [Atribuciones y licencias de terceros](THIRD_PARTY_NOTICES.md).
+
+## Detección de idioma con el modelo seleccionado
+
+Elige `small`, `medium` o `large-v3` en el paso 1. El paso 3 detecta el idioma antes
+del formulario usando ese mismo modelo, sin descargar otro pequeño. Puedes corregir
+el idioma; si no hay evidencia suficiente, debes seleccionarlo manualmente.
+El paso 4 respeta tu selección y reutiliza los pesos guardados en
+`/content/karaoke-notebook/models`, fuera de las carpetas de trabajo desechables.
+Cada proceso carga sus pesos en memoria; la caché dura mientras exista la sesión.

@@ -2194,7 +2194,8 @@ def _transcript_to_lyrics(transcript: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def _load_whisper_model(model_name: str, cache_dir: Path | None = None):
+    """Load selected Whisper weights, optionally outside disposable run scratch."""
     import torch
     from faster_whisper import WhisperModel
 
@@ -2203,7 +2204,7 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
     if device == "cpu":
         _event("GPU unavailable. Transcription will use the CPU and may take longer.", kind="warning")
 
-    model_name = config["whisper_model"]
+    cache = cache_dir or Path(os.environ.get("KARAOKE_WHISPER_CACHE", str(WORK_DIR / "models")))
     stream_output = os.environ.get("KARAOKE_STREAM_OUTPUT") == "1"
     if stream_output:
         LOGGER.info("Loading Whisper %s on %s (%s)", model_name, device, compute_type)
@@ -2213,17 +2214,22 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
 
             model_name = snapshot_download(
                 repo_id=f"Systran/faster-whisper-{model_name}",
-                cache_dir=str(WORK_DIR / "models"),
+                cache_dir=str(cache),
                 allow_patterns=["config.json", "preprocessor_config.json", "model.bin",
                                 "tokenizer.json", "vocabulary.*"],
                 tqdm_class=tqdm,
             )
-    model = WhisperModel(
+    return WhisperModel(
         model_name,
         device=device,
         compute_type=compute_type,
-        download_root=str(WORK_DIR / "models"),
+        download_root=str(cache),
     )
+
+
+def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    model = _load_whisper_model(config["whisper_model"])
+    stream_output = os.environ.get("KARAOKE_STREAM_OUTPUT") == "1"
     language = None if config["language"] == "auto" else config["language"]
     segments, info = model.transcribe(
         str(vocals_path),

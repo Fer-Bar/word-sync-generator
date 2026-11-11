@@ -41,7 +41,7 @@ def main() -> None:
     """Execute one notebook request and write its result only after success."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=(
-        "diagnose", "validate-input", "youtube", "configure", "prepare", "inspect",
+        "diagnose", "validate-input", "detect-language", "youtube", "configure", "prepare", "inspect",
         "import-lyrics", "export-project", "render",
     ))
     parser.add_argument("--request", required=True, type=Path)
@@ -51,14 +51,21 @@ def main() -> None:
     if args.operation == "diagnose":
         import torch
 
+        from karaoke_app.notebook_language import LANGUAGE_OPTIONS
+
         result = {**runtime_report(), "cuda_available": torch.cuda.is_available(),
-                  "notebook_features": ["youtube", "configure"]}
+                  "notebook_features": ["youtube", "configure", "detect-language"],
+                  "notebook_languages": LANGUAGE_OPTIONS}
         if result["cuda_available"]:
             result["gpu"] = torch.cuda.get_device_name(0)
     elif args.operation == "validate-input":
         from karaoke_app.notebook_inputs import validate_inputs
 
         result = validate_inputs([Path(path) for path in request["paths"]])
+    elif args.operation == "detect-language":
+        from karaoke_app.notebook_language import launch_detection
+
+        result = launch_detection(args.request, args.result)
     elif args.operation == "youtube":
         from karaoke_app.notebook_sources import acquire_youtube
         from karaoke_app.terminal import configure_logging

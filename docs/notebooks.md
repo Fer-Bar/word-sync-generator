@@ -224,3 +224,12 @@ datos de entrada o enlaces temporales. La CLI mantiene su nivel de diagnóstico 
 
 Una prueba corta demuestra funcionamiento, no precisión para toda canción ni disponibilidad
 garantizada. Revisa las letras y tiempos; conserva un resultado descargado para demostraciones.
+
+## Detección de idioma con el modelo seleccionado
+
+Elige `small`, `medium` o `large-v3` en el paso 1. El paso 3 detecta el idioma antes
+del formulario usando ese mismo modelo, sin descargar otro pequeño. Puedes corregir
+el idioma; si no hay evidencia suficiente, debes seleccionarlo manualmente.
+El paso 4 respeta tu selección y reutiliza los pesos guardados en
+`/content/karaoke-notebook/models`, fuera de las carpetas de trabajo desechables.
+Cada proceso carga sus pesos en memoria; la caché dura mientras exista la sesión.

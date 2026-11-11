@@ -67,6 +67,28 @@ def test_invalid_source_does_not_create_output(tmp_path):
     assert not output.exists()
 
 
+def test_preparation_reuses_selected_model_cache_and_manual_language(tmp_path, monkeypatch):
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"audio")
+    cache = tmp_path / "persistent-models"
+
+    def run(config_path, environment):
+        config = json.loads(config_path.read_text())
+        assert config["whisper_model"] == "medium"
+        assert config["language"] == "fr"
+        assert environment["KARAOKE_WHISPER_CACHE"] == str(cache)
+        with zipfile.ZipFile(config["archive_path"], "w") as archive:
+            archive.writestr("source.txt", "unchanged")
+        (config_path.parent / "karaoke_status.json").write_text('{"status":"completed"}')
+
+    monkeypatch.setattr(notebook, "_run_preparation", run)
+    result = notebook.prepare_audio(
+        source, output_dir=tmp_path / "output", language="fr", whisper_model="medium", whisper_cache=cache,
+    )
+    assert result.archive.is_file()
+    assert source.read_bytes() == b"audio"
+
+
 def test_preparation_uses_isolated_runtime_and_retains_both_runs(tmp_path, monkeypatch):
     source = tmp_path / "song.wav"
     source.write_bytes(b"audio")
