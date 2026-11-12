@@ -61,7 +61,7 @@ def test_full_preparation_routes(tmp_path, monkeypatch, scenario, expected_sourc
     monkeypatch.setattr(job, "_lrclib_request", request)
     monkeypatch.setattr(job, "_load_references_module", lambda: refs)
     monkeypatch.setattr(refs, "genius_reference", genius)
-    monkeypatch.setattr(job, "_transcribe", lambda *args: copy.deepcopy(speech))
+    monkeypatch.setattr(job, "_transcribe", lambda *args, **kwargs: copy.deepcopy(speech))
     monkeypatch.setattr(job, "_check_vocal_boundaries", lambda *args: {"status": "checked"})
 
     def align(vocals, document, config, *, provenance, **kwargs):

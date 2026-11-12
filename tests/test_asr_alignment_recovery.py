@@ -142,13 +142,17 @@ def test_preparation_retries_partial_anchors_and_discards_failed_candidates(samp
     config = {"language": "en", "lyrics": {"text_path": str(text)}, "whisper_model": "large-v3"}
     monkeypatch.setattr(job, "_transcribe", Mock(return_value=speech))
     monkeypatch.setattr(job, "_check_vocal_boundaries", Mock(return_value={"status": "checked"}))
-    align = Mock(side_effect=[(bad, []), (good if recovery_succeeds else bad, [])])
+    align = Mock(side_effect=lambda *args, **kwargs: (
+        copy.deepcopy(good if recovery_succeeds and kwargs.get("recovery_only") else bad), []
+    ))
     monkeypatch.setattr(job, "_align_known_lyrics", align)
     lyrics, provenance = job._prepare_lyrics(
         Path("unused.flac"), speech["song"], config, selected_record=None, artifacts_dir=tmp_path,
     )
-    assert align.call_count == 2
-    assert align.call_args.kwargs["recovery_only"]
-    assert "anchor_validation" in align.call_args.kwargs
-    assert provenance["strategy"] == ("whisper_anchored_ctc" if recovery_succeeds else "reference_text_asr_timing")
+    assert align.call_count == (2 if recovery_succeeds else 3)
+    assert align.call_args_list[1].kwargs["recovery_only"]
+    assert "anchor_validation" in align.call_args_list[1].kwargs
+    if not recovery_succeeds:
+        assert align.call_args.kwargs["anchor_transcript"] == speech
+    assert provenance["strategy"] == ("asr_window_ctc" if recovery_succeeds else "reference_text_asr_timing")
     assert lyrics["lines"][0]["start_ms"] == 1000

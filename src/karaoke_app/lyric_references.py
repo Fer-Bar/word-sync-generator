@@ -1031,18 +1031,20 @@ def apply_reference_text(
                     word.setdefault(key, line[key])
             words.append(word)
     if len(document["lines"]) == len(desired) and all(
-        normalized_units("".join(word["text"] for word in line.get("words", []))) == normalized_units(target["text"])
+        [normalized_units(word["text"]) for word in line.get("words", [])]
+        == [normalized_units(token) for token in target["text"].split() if normalized_units(token)]
         for line, target in zip(document["lines"], desired, strict=True)
     ):
         result = copy.deepcopy(document)
         for line, target in zip(result["lines"], desired, strict=True):
             # Cross-line parentheses describe vocal roles; they are not missing sung words.
-            if target["text"].count("(") == target["text"].count(")"):
+            if line["text"] != target["text"] and target["text"].count("(") == target["text"].count(")"):
                 if _apply_reference_typography(line["words"], target["text"]):
                     line["text"] = target["text"]
             _reference_agent(line, target)
         _reference_backgrounds(result, annotated_structure)
         _reference_word_annotations(result, desired)
+        result["plain"] = "\n".join(line["text"] for line in result["lines"])
         return result, {
             "method": "existing_reference_timings",
             "text_action": "reference_applied",
@@ -1067,7 +1069,7 @@ def apply_reference_text(
         raise ValueError("Audio timing span is too short for reference words")
 
     # Text repair may estimate a small typo, never an omitted verse or a repeated chorus.
-    if len(tokens) - len(anchors) > max(3, len(tokens) * 0.1):
+    if not anchors or len(tokens) - len(anchors) > max(3, len(tokens) * 0.1):
         raise ValueError("Reference needs acoustic recovery: too many unmatched words")
 
     output: list[dict[str, Any] | None] = [None] * len(tokens)

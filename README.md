@@ -182,6 +182,10 @@ describe la calidad temporal del resultado y distingue alineación, estimación 
 `asr_anchored` identifica tiempos que usan Whisper como ancla; no representa una segunda
 verificación independiente. `passed` indica que las frases independientes disponibles
 superaron la comparación, no que se haya revisado manualmente cada palabra.
+`aligned_without_independent_anchors` indica que CTC produjo tiempos, pero faltan
+frases independientes suficientes para verificarlos. Si Whisper falla, el diagnóstico
+conserva la causa aunque CTC consiga alinear la referencia. Las correcciones de formato
+mantienen los tiempos y las anotaciones de voces de fondo ya existentes.
 
 **Estado de verificación:** se comprobaron la selección de referencias y el rechazo de
 tiempos colapsados con audios reales. La sincronización completa de Loca, A Good Day y

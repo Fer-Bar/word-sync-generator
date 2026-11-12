@@ -395,9 +395,11 @@ class LrclibFetchTests(unittest.TestCase):
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
             self.assertEqual(result["id"], 1)
-            mock_request.assert_called_once()
-            self.assertIn("/get?", mock_request.call_args[0][0])
-            self.assertIn("album_name=Album", mock_request.call_args[0][0])
+            paths = [call.args[0] for call in mock_request.call_args_list]
+            self.assertTrue(paths[0].startswith("/get?"))
+            self.assertIn("album_name=Album", paths[0])
+            self.assertTrue(any(path.startswith("/search?") for path in paths))
+            self.assertEqual(len(result["selection"]["candidates"]), 1)
 
     def test_fetch_lrclib_tier2_without_album(self) -> None:
         def side_effect(path: str) -> Any:
@@ -416,7 +418,11 @@ class LrclibFetchTests(unittest.TestCase):
             result = _fetch_lrclib(metadata, {})
             self.assertIsNotNone(result)
             self.assertEqual(result["id"], 2)
-            self.assertEqual(mock_request.call_count, 2)
+            paths = [call.args[0] for call in mock_request.call_args_list]
+            self.assertIn("album_name=Different+Album", paths[0])
+            self.assertTrue(paths[1].startswith("/get?"))
+            self.assertNotIn("album_name", paths[1])
+            self.assertTrue(any(path.startswith("/search?") for path in paths))
 
     def test_fetch_lrclib_retries_with_primary_artist_after_full_credit_misses(self) -> None:
         def side_effect(path: str) -> Any:
