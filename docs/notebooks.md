@@ -6,9 +6,11 @@
 
 Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecciona
 **Entorno de ejecución → Cambiar tipo de entorno de ejecución → T4 GPU**.
-Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
+Usa el cuaderno adjunto a la release **v0.1.2**. El motor se descarga automáticamente;
+no construyas ni subas un paquete. La release debe estar publicada antes de iniciar.
 
-1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
+1. **Iniciar:** descarga el `.whl` de GitHub Releases, verifica su SHA-256,
+   instala el motor y comprueba la GPU. Un error de descarga o checksum detiene el paso.
 2. **Elegir canción:** selecciona **Archivo local** o **YouTube**. Sube el archivo o pega
    el enlace y ejecuta la celda. YouTube descarga un MP4 de hasta 720p con audio y metadatos.
    Espera **Archivo listo**. La celda permanece activa durante la transferencia.
@@ -83,21 +85,36 @@ usarse desde otros entornos con sus dependencias disponibles.
 
 ## Distribuir el cuaderno sin compartir credenciales
 
-El mantenedor construye el paquete desde una revisión concreta:
+El cuaderno fija una versión, no una rama mutable ni `latest`. El repositorio público
+distribuye el wheel, su archivo `.sha256` y el cuaderno juntos en GitHub Releases.
+El checksum detecta descargas alteradas o incompletas; no es una firma independiente.
+
+### Publicar una versión
+
+Tras revisar los cambios, ejecutar los checks y autorizar la publicación:
+
+1. Actualiza la versión en `pyproject.toml`, `uv.lock` y `RELEASE_VERSION` del cuaderno.
+2. Confirma esos cambios en la revisión que quieras distribuir.
+3. Crea y publica el tag correspondiente, por ejemplo `v0.1.2`.
+
+El workflow `.github/workflows/release.yml` comprueba que tag, paquete y cuaderno
+coincidan, verifica la exclusión de logos locales, construye el wheel y publica los tres
+archivos mediante el token del propio workflow. **Publicar el tag activa la publicación**;
+no se ejecuta por un push normal ni por abrir un PR. No requiere tokens en el cuaderno.
+Si la release ya existe, falla en vez de reemplazar sus archivos silenciosamente.
+
+Para inspeccionar el paquete localmente, sin publicar:
 
 ```bash
 uv build --wheel
-sha256sum dist/lyrics_generator-0.1.1-py3-none-any.whl
+sha256sum dist/lyrics_generator-0.1.2-py3-none-any.whl
 ```
 
-Entrega el wheel, su checksum, la revisión y el cuaderno correspondiente por el canal
-privado acordado. El usuario final solo los sube. Un cambio del paquete requiere distribuir
-el wheel nuevo junto con el cuaderno; no uses enlaces con tokens ni publiques el repositorio
-o el paquete privado sin autorización. Ninguna celda descarga código de una rama mutable.
-
-El wheel incluye módulos, scripts de runtime, recursos visuales y sus licencias. No
-incluye canciones, modelos, credenciales, Chromium ni FFmpeg del sistema. Switzer se
+El wheel incluye módulos, scripts de runtime, recursos visuales genéricos y sus licencias. No
+incluye logos personales, canciones, modelos, credenciales, Chromium ni FFmpeg del sistema. Switzer se
 obtiene de Fontshare cuando se necesita; no se redistribuye dentro del wheel.
+Los archivos de `logos/` permanecen locales e ignorados por Git, y solo se usan si se
+seleccionan explícitamente. Retirarlos del árbol actual no los elimina del historial Git.
 
 ## Un motor, dos interfaces
 

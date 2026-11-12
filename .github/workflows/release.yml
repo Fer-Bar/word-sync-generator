@@ -1,0 +1,51 @@
+name: Release wheel
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.13.4"
+      - run: uv sync --locked --dev --python 3.12
+      - name: Check release version and packaging
+        run: |
+          uv run python - <<'PYTHON'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              raise SystemExit("Tag must match the package version")
+          notebook = json.loads(Path("notebooks/generate_video.ipynb").read_text())
+          if f"RELEASE_VERSION = '{version}'" not in "".join(notebook["cells"][1]["source"]):
+              raise SystemExit("Notebook must select this release version")
+          PYTHON
+          test -z "$(git ls-files logos/)"
+          uv run pytest -q tests/test_wheel_distribution.py tests/test_neutral_branding.py
+      - name: Build release assets
+        run: |
+          uv build --wheel
+          cp notebooks/generate_video.ipynb dist/
+          cd dist
+          for wheel in *.whl; do sha256sum "$wheel" > "$wheel.sha256"; done
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --generate-notes dist/*.whl dist/*.sha256 dist/generate_video.ipynb

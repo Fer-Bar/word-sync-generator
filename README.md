@@ -7,14 +7,15 @@ la tipografía o la marca de agua no requiere separar voces ni alinear otra vez.
 ## Empezar desde el navegador
 
 Abre [Generar un video con letras](notebooks/generate_video.ipynb) en Google Colab y
-selecciona una GPU T4. Recibe el paquete `.whl` del responsable del proyecto, súbelo
-cuando el cuaderno lo pida y sigue los pasos: **audio → preparación → revisión → video → descarga**.
+selecciona una GPU T4. El paso 1 descarga automáticamente el motor desde la release
+**v0.1.2** y verifica su SHA-256; no necesitas subir un `.whl`.
+Sigue los pasos: **audio → preparación → revisión → video → descarga**.
 No necesitas terminal, construir paquetes ni escribir rutas Python.
 
-El flujo principal usa **audio local y búsqueda automática de letras**: completa título,
-artista e idioma (álbum opcional), prepara y comprueba el proveedor de la letra y los
-tiempos antes de renderizar. El TXT es una alternativa, no un requisito. La entrada
-por URL de YouTube sigue disponible en la CLI; en el notebook queda para una etapa posterior.
+Usa el cuaderno adjunto a esa misma release. El flujo acepta audio local o YouTube:
+completa título, artista e idioma (álbum opcional), prepara y revisa la letra antes
+de renderizar. El TXT es una alternativa, no un requisito. La release debe estar publicada
+antes de ejecutar el paso 1.
 
 El paso 1 instala y comprueba la GPU. Ejecuta **2 · Tu canción** para abrir el formulario:
 el audio es la entrada principal y **Aportar mi letra · opcional** permite subir o quitar
@@ -25,10 +26,11 @@ demuestra que un proceso esté usándola en ese momento.
 La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
-El modelo Whisper se elige en el formulario nativo del paso 4, antes de preparar la canción.
+El modelo Whisper se elige en el formulario nativo del paso 1 y se reutiliza al detectar
+el idioma y preparar la canción.
 El paso 2 acepta archivos locales o un enlace de YouTube con metadatos; si hace falta,
 puedes aportar cookies temporales. La celda opcional 4c permite usar un color, imagen
-o vídeo como fondo sin repetir la preparación del audio. Usa el notebook con el wheel 0.1.1.
+o vídeo como fondo sin repetir la preparación del audio. El motor se descarga en el paso 1.
 Después de la preparación, la celda opcional 4b permite descargar voces y YAML,
 corregirlos en LyricsEditor y subir la
 letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.
