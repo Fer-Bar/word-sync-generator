@@ -236,6 +236,30 @@ def _reference_backgrounds(document: dict[str, Any], desired: list[dict[str, Any
             cursor += count
 
 
+def _reference_word_annotations(document: dict[str, Any], desired: list[dict[str, Any]]) -> None:
+    """Transfer native vocal annotations onto matching acoustic words, never provider times or confidence."""
+    for line, target in zip(document["lines"], desired, strict=True):
+        sources = target.get("words")
+        if not isinstance(sources, list):
+            continue
+        units = [(unit, word) for word in sources if isinstance(word, dict) and isinstance(word.get("text"), str)
+                 for unit in normalized_units(word["text"])]
+        observed = [unit for word in line.get("words", []) for unit in normalized_units(word["text"])]
+        if observed != [unit for unit, _ in units]:
+            continue
+        if isinstance(target.get("isBackground"), bool):
+            line["isBackground"] = target["isBackground"]
+        cursor = 0
+        for word in line.get("words", []):
+            count = len(normalized_units(word["text"]))
+            span = [source for _, source in units[cursor:cursor + count]]
+            for key in ("agent", "isBackground"):
+                values = [source.get(key, target.get(key)) for source in span]
+                if values and values[0] is not None and all(value == values[0] for value in values):
+                    word[key] = values[0]
+            cursor += count
+
+
 def validate_genius_url(url: str) -> str:
     """Accept only direct HTTPS song pages on Genius."""
     parsed = urlparse(url)
@@ -371,20 +395,24 @@ def resolve_reference(
         try:
             document = record_to_document()
             evidence.update(source="lrclib", id=record.get("id"), lines=copy.deepcopy(document["lines"]))
+            native_words = any(line.get("words") for line in document["lines"])
+            if native_words:
+                evidence["selected_variant"] = "lyricsfile_authoritative"
             text = record.get("plainLyrics")
             if isinstance(text, str) and plain_lines(text):
                 evidence["original_text"] = text
                 desired = plain_lines(text)
                 current_units = normalized_units(" ".join(line["text"] for line in document["lines"]))
                 desired_units = normalized_units(" ".join(line["text"] for line in desired))
-                if current_units == desired_units:
+                if current_units == desired_units and not native_words:
                     evidence["structure_lines"] = desired
-                else:
+                elif current_units != desired_units:
                     evidence["text_conflict"] = True
                     evidence["alternative_lines"] = desired
-                    evidence["selected_variant"] = "plain_authoritative"
-                    document["lines"] = desired
-                    evidence["lines"] = copy.deepcopy(desired)
+                    evidence["selected_variant"] = "lyricsfile_authoritative" if native_words else "plain_authoritative"
+                    if not native_words:
+                        document["lines"] = desired
+                        evidence["lines"] = copy.deepcopy(desired)
             return document, evidence
         except (ValueError, KeyError, TypeError) as error:
             LOGGER.debug("LRCLIB record %r could not be converted to lyrics: %s", record.get("id"), error)
@@ -905,6 +933,7 @@ def apply_reference_text(
         for line, target in zip(result["lines"], desired, strict=True):
             _reference_agent(line, target)
         _reference_backgrounds(result, desired)
+        _reference_word_annotations(result, desired)
         return result, {
             "method": "existing_reference_timings",
             "text_action": "reference_applied",
@@ -989,6 +1018,7 @@ def apply_reference_text(
         cursor += len(line_tokens)
     result["plain"] = "\n".join(line["text"] for line in desired)
     _reference_backgrounds(result, desired)
+    _reference_word_annotations(result, desired)
     return result, {
         "method": "reference_text_with_asr_timing_fallback",
         "text_action": "reference_applied",

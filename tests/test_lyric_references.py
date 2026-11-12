@@ -11,7 +11,7 @@ import yaml
 
 from colab import karaoke_job as job
 from karaoke_app import lyric_references as refs
-from karaoke_app.lyrics_file import validate_lyrics_file
+from karaoke_app.lyrics_file import dump_lyrics_file, validate_lyrics_file
 
 
 def transcript(text="all I do is win and not forgive.", *, probability=0.95):
@@ -28,6 +28,13 @@ def transcript(text="all I do is win and not forgive.", *, probability=0.95):
 
 def timed_document(text="all I do is win and not forgive."):
     return job._transcript_to_lyrics(transcript(text))
+
+
+def native_record(document=None, **fields):
+    return {
+        "id": 42, "trackName": "Song", "artistName": "Artist", "duration": 60,
+        "lyricsfile": yaml.safe_dump(document or timed_document()), **fields,
+    }
 
 
 def resolver(record=None, options=None, fetch=None):
@@ -296,20 +303,104 @@ def preparation(tmp_path):
     return run, config, tmp_path
 
 
-def test_pipeline_validates_provided_timings_and_restructures(preparation):
-    run, _, directory = preparation
-    record = {"lyricsfile": yaml.safe_dump(timed_document()), "plainLyrics": "all I do is\nwin and not forgive."}
-    with patch.object(job, "_transcribe", return_value=transcript()) as transcribe_mock:
-        with patch.object(job, "_align_known_lyrics") as align:
-            lyrics, alignment = run(record)
-    assert len(lyrics["lines"]) == 2
-    assert alignment["word_timing"] == "provided"
-    assert not alignment["needs_review"]
+@pytest.mark.parametrize("legacy_verify", [False, True])
+def test_native_lyrics_always_use_acoustic_alignment_and_preserve_structure(preparation, legacy_verify):
+    run, config, directory = preparation
+    config["lyrics"]["verify_word_timings"] = legacy_verify
+    native = timed_document()
+    for line in native["lines"]:
+        line["start_ms"] += 9000
+        line["end_ms"] += 9000
+        for word in line["words"]:
+            word["start_ms"] += 9000
+            word["end_ms"] += 9000
+    record = native_record(native, plainLyrics="all I do is\nwin and not forgive.")
+    with (
+        patch.object(job, "_transcribe", return_value=transcript()) as transcribe_mock,
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])) as align,
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}) as boundaries,
+    ):
+        lyrics, alignment = run(record)
+    assert lyrics["lines"] == timed_document()["lines"]
+    assert lyrics["lines"] != native["lines"]
+    assert alignment["word_timing"] == "generated"
+    assert alignment["engine"] == "ctc-forced-aligner"
+    assert alignment["timing_policy"] == "acoustic"
+    assert alignment["acoustic_verification"] == "completed"
     transcribe_mock.assert_called_once()
-    align.assert_not_called()
+    align.assert_called_once()
+    boundaries.assert_called_once()
     assert json.loads((directory / "lyrics_reference.json").read_text())["structure_restored"]
+    assert json.loads((directory / "lrclib_record.json").read_text()) == record
     assert (directory / "transcription.json").is_file()
-    assert len(json.loads((directory / "lyrics_validation.json").read_text())["lines"]) == 2
+    assert (directory / "reference.txt").read_text() == native["plain"] + "\n"
+
+
+def test_native_vocal_annotations_survive_realignment_without_copying_confidence(preparation):
+    run, _, _ = preparation
+    native = timed_document()
+    native["lines"][0]["words"][-1].update(agent="Guest", isBackground=True, confidence=0.2)
+    with (
+        patch.object(job, "_transcribe", return_value=transcript()) as transcribe_mock,
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])),
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        lyrics, alignment = run(native_record(native))
+    word = lyrics["lines"][0]["words"][-1]
+    assert word["agent"] == "Guest" and word["isBackground"]
+    assert word["confidence"] == 0.95
+    assert alignment["acoustic_verification"] == "completed"
+    transcribe_mock.assert_called_once()
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"duration": 65}, "duration_mismatch"),
+    ({"duration": None}, "missing_duration"),
+    ({"duration": float("nan")}, "missing_duration"),
+    ({"trackName": "Song (Live)"}, "recording_identity_mismatch"),
+    ({"artistName": "Someone Else"}, "recording_identity_mismatch"),
+])
+def test_incompatible_native_times_use_text_alignment_without_provider_anchors(preparation, changes, reason):
+    run, _, _ = preparation
+    with (
+        patch.object(job, "_transcribe", return_value=transcript()) as transcribe_mock,
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])) as align,
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        _, alignment = run(native_record(**changes))
+    assert alignment["word_timing"] == "generated"
+    assert alignment["provided_timing_check"]["reason"] == reason
+    assert align.call_args.args[1]["lines"] == [{"text": timed_document()["plain"]}]
+    transcribe_mock.assert_called_once()
+
+
+def test_invalid_native_timings_realign_instead_of_failing_or_trusting_flag(preparation):
+    run, _, _ = preparation
+    invalid = timed_document()
+    invalid["lines"][0]["words"][1]["start_ms"] = 1000
+    with (
+        patch.object(job, "_transcribe", return_value=transcript()),
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])) as align,
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        lyrics, alignment = run(native_record(invalid, hasWordSync=True))
+    assert lyrics["lines"] == timed_document()["lines"]
+    assert alignment["provided_timing_check"]["reason"] == "invalid_word_timings"
+    align.assert_called_once()
+
+
+def test_word_only_native_lines_reconstruct_text_without_losing_timing(preparation):
+    run, _, _ = preparation
+    document = timed_document()
+    del document["lines"][0]["text"]
+    with (
+        patch.object(job, "_transcribe", return_value=transcript()),
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])),
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        lyrics, alignment = run(native_record(document))
+    assert lyrics["lines"] == timed_document()["lines"]
+    assert alignment["word_timing"] == "generated"
 
 
 def test_pipeline_recovers_with_whisper_anchors_without_retranscribing(preparation):
@@ -357,12 +448,19 @@ def test_pipeline_no_reference_has_explicit_heuristic_status(preparation):
     transcribe_mock.assert_called_once()
 
 
-def test_pipeline_missing_asr_does_not_discard_provided_timings(preparation):
+def test_pipeline_missing_asr_still_aligns_native_reference_and_reports_degradation(preparation):
     run, _, directory = preparation
-    with patch.object(job, "_transcribe", side_effect=RuntimeError("no speech")):
-        lyrics, alignment = run({"lyricsfile": yaml.safe_dump(timed_document())})
+    with (
+        patch.object(job, "_transcribe", side_effect=RuntimeError("no speech")),
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])) as align,
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        lyrics, alignment = run(native_record())
+    align.assert_called_once()
     assert lyrics["lines"]
     assert alignment["needs_review"]
+    assert alignment["word_timing"] == "generated"
+    assert alignment["acoustic_verification"] == "unavailable"
     assert json.loads((directory / "lyrics_validation.json").read_text())["status"] == "unavailable"
 
 
@@ -549,14 +647,46 @@ def test_bear_overrides_whisper_bird_even_when_ctc_fails(preparation, source):
     assert json.loads((directory / "transcription.json").read_text())["segments"][0]["words"][3]["text"] == "bird"
 
 
-def test_conflicting_lrclib_plain_overrides_word_timed_variant(preparation):
+def test_conflicting_lrclib_plain_preserves_native_variant_and_records_conflict(preparation):
+    run, _, directory = preparation
+    native = timed_document("I see a bird today")
+    record = native_record(native, plainLyrics="I see a bear today")
+    with (
+        patch.object(job, "_transcribe", return_value=transcript("I see a bird today")),
+        patch.object(job, "_align_known_lyrics", return_value=(timed_document("I see a bird today"), [])),
+        patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+    ):
+        lyrics, alignment = run(record)
+    assert lyrics["lines"] == native["lines"]
+    assert alignment["needs_review"]
+    evidence = json.loads((directory / "lyrics_reference.json").read_text())
+    assert evidence["text_conflict"]
+    assert evidence["selected_variant"] == "lyricsfile_authoritative"
+    assert evidence["alternative_lines"] == [{"text": "I see a bear today"}]
+    assert (directory / "reference.txt").read_text() == "I see a bird today\n"
+
+    from karaoke_app.lyric_repair import repair_prepared_lyrics
+
+    (directory / "lyrics.yaml").write_text(dump_lyrics_file(lyrics))
+    (directory / "alignment.json").write_text(json.dumps(alignment))
+    (directory / ".karaoke").mkdir()
+    (directory / ".karaoke/project.json").write_text(json.dumps({
+        "title": "Song", "preparation": {"lrclib_id": 42}, "media": {"lyrics": "lyrics.yaml"},
+    }))
+    before = {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+    result = repair_prepared_lyrics(directory, Path(job.__file__))
+    assert result == {"status": "skipped", "reason": "native_reference_preserved"}
+    assert before == {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+
+
+def test_native_times_are_not_silently_returned_when_acoustic_processing_fails(preparation):
     run, _, _ = preparation
-    record = {"plainLyrics": "I see a bear today", "lyricsfile": yaml.safe_dump(timed_document("I see a bird today"))}
-    with patch.object(job, "_transcribe", return_value=transcript("I see a bird today")):
-        with patch.object(job, "_align_known_lyrics", side_effect=RuntimeError("collapse")) as align:
-            lyrics, _ = run(record)
-    assert align.call_args.args[1]["lines"][0]["text"] == "I see a bear today"
-    assert lyrics["plain"] == "I see a bear today"
+    with (
+        patch.object(job, "_transcribe", side_effect=RuntimeError("ASR unavailable")),
+        patch.object(job, "_align_known_lyrics", side_effect=RuntimeError("CTC unavailable")),
+        pytest.raises(RuntimeError, match="No timed lyrics available"),
+    ):
+        run(native_record())
 
 
 def test_sanitize_text_homoglyphs_and_invisibles():

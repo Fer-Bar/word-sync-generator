@@ -136,6 +136,17 @@ def test_saved_reference_repairs_already_grouped_job_without_provider(tmp_path, 
     assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline)["reason"] == "reference_text_already_applied"
 
 
+def test_legacy_native_project_is_not_overwritten_by_conflicting_cached_plain_text(tmp_path):
+    pipeline, _ = _make_job(tmp_path, "Hello world", "Hello there")
+    (tmp_path / "reference.txt").write_text("Hello there\n")
+    (tmp_path / "alignment.json").write_text(json.dumps({"word_timing": "provided"}))
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    assert lyric_repair.repair_prepared_lyrics(tmp_path, pipeline) == {
+        "status": "skipped", "reason": "native_reference_preserved",
+    }
+    assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+
 def test_repair_adds_agents_to_unchanged_text_and_preserves_headers(tmp_path):
     from karaoke_app.lyrics_file import load_lyrics_file
 

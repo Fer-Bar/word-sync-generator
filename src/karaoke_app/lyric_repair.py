@@ -48,6 +48,9 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
     if not alignment_path.is_file():
         return {"status": "skipped", "reason": "no_alignment"}
     alignment = json.loads(alignment_path.read_text(encoding="utf-8"))
+    if (previous_reference.get("selected_variant") == "lyricsfile_authoritative"
+            or alignment.get("word_timing") == "provided"):
+        return {"status": "skipped", "reason": "native_reference_preserved"}
     saved_text = job_dir / "reference.txt"
     reference = None
     if saved_text.is_file():
