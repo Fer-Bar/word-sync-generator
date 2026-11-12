@@ -137,7 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs")
     parser.add_argument("--gpu", choices=("T4", "L4", "G4", "A100", "H100"), default="T4")
     parser.add_argument("--auth", choices=("oauth2", "adc"), default="oauth2")
-    parser.add_argument("--timeout", type=int, default=14_400, help="Remote execution timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=14_400,
+                        help="Remote dependency installation and preparation timeout in seconds")
     organize_help(parser)
     return parser
 
@@ -530,6 +531,8 @@ def run_job(args: argparse.Namespace) -> Path:
         source_bundle = temporary_path / "source-job.zip"
         resources = {
             Path('/content/karaoke_pipeline.py'): COLAB_SCRIPT,
+            Path("/content/karaoke_launch.py"): COLAB_SCRIPT.with_name("karaoke_launch.py"),
+            Path("/content/requirements.txt"): COLAB_REQUIREMENTS,
             Path("/content/karaoke_ass.py"): ASS_MODULE,
             REMOTE_LYRICS_MODULE: LYRICS_MODULE,
             REMOTE_REFERENCES_MODULE: REFERENCES_MODULE,
@@ -579,7 +582,6 @@ def run_job(args: argparse.Namespace) -> Path:
                 _upload(colab, session, cookies, Path(remote_cookies))
             if hf_token:
                 _upload(colab, session, hf_token_path, REMOTE_HF_TOKEN)
-            _run([*colab, "install", "--session", session, "--requirement", str(COLAB_REQUIREMENTS)])
             exec_error = None
             try:
                 exec_res = _run(

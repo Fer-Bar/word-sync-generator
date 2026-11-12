@@ -433,6 +433,8 @@ def _load_lyrics_module() -> Any:
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load the uploaded LyricsFile module")
     module = importlib.util.module_from_spec(spec)
+    # Standalone sibling imports must resolve after extraction into the per-run directory.
+    sys.modules["karaoke_lyric_references"] = _load_references_module()
     spec.loader.exec_module(module)
     return module
 

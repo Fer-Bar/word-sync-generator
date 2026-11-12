@@ -65,6 +65,15 @@ También acepta URLs de YouTube. Se descargan primero en tu máquina y requieren
 [Deno](https://deno.com/) en el PATH; un fallo de descarga no abre una sesión GPU.
 Para una letra revisada añade `--lyrics-text ./letra.txt`.
 
+La instalación remota y la preparación comparten `--timeout` (14 400 segundos por defecto).
+Los requisitos viajan en el paquete de entrada y se instalan dentro de `colab exec`,
+con salida de diagnóstico en tiempo real. La CLI crea `/content/karaoke-env`, comprueba
+sus dependencias y ejecuta allí el motor, sin mezclarlo con Torch/TorchVision del Python
+de Colab. El notebook instala sus requisitos en el paso 1; el lanzador reutiliza ese
+entorno aislado al preparar o renderizar.
+Las rutas `/content/...` de los logs pertenecen a Colab; los resultados se descargan
+a `outputs/` en tu máquina (o al directorio elegido con `--output-dir`).
+
 **La preparación prioriza la calidad y siempre ajusta la letra al audio:** usa Whisper
 como evidencia independiente y CTC para alinear el texto conocido, también cuando LRCLIB
 aporta un LyricsFile con word sync. Los tiempos del proveedor sirven como referencia;
