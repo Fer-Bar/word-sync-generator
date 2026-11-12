@@ -208,6 +208,9 @@ def test_transcription_preserves_existing_language_words_and_options(tmp_path, m
         "model": "medium",
         "language": "fr",
         "language_probability": 0.99,
+        "audio_source": "vocals",
+        "vad_filter": True,
+        "recovery": {"attempted": False},
     }
     assert result["segments"][0]["words"] == [
         {"id": "s0-w0", "start": 1.0, "end": 2.0, "text": "Bonjour", "probability": 0.9},

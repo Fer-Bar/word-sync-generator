@@ -251,18 +251,19 @@ def test_missing_repeated_chorus_cannot_anchor_wrong_occurrence():
     assert not any("anchor" in line for line in result["lines"])
 
 
-def test_complete_repeated_chorus_keeps_occurrences_ordered():
+def test_complete_repeated_chorus_matches_without_independent_anchors():
     result = refs.compare_reference(
         refs.plain_lines("sing it again\nsing it again"), transcript("sing it again sing it again")
     )
     assert not result["needs_review"]
-    assert result["lines"][0]["anchor"]["end_ms"] < result["lines"][1]["anchor"]["start_ms"]
+    assert all(line["matched_units"] == 3 for line in result["lines"])
+    assert not any("anchor" in line or line["anchor_spans"] for line in result["lines"])
 
 
 def test_unique_surrounding_verse_does_not_disambiguate_missing_chorus():
     result = refs.compare_reference(
-        refs.plain_lines("opening verse\nsing it again\nsing it again\nclosing verse"),
-        transcript("opening verse sing it again closing verse"),
+        refs.plain_lines("unique opening verse\nsing it again\nsing it again\nunique closing verse"),
+        transcript("unique opening verse sing it again unique closing verse"),
     )
     assert result["needs_review"]
     assert "anchor" in result["lines"][0]
@@ -326,7 +327,7 @@ def test_native_lyrics_always_use_acoustic_alignment_and_preserve_structure(prep
     assert alignment["word_timing"] == "generated"
     assert alignment["engine"] == "ctc-forced-aligner"
     assert alignment["timing_policy"] == "acoustic"
-    assert alignment["acoustic_verification"] == "completed"
+    assert alignment["acoustic_verification"] == "aligned_without_independent_anchors"
     transcribe_mock.assert_called_once()
     align.assert_called_once()
     boundaries.assert_called_once()
@@ -349,7 +350,7 @@ def test_native_vocal_annotations_survive_realignment_without_copying_confidence
     word = lyrics["lines"][0]["words"][-1]
     assert word["agent"] == "Guest" and word["isBackground"]
     assert word["confidence"] == 0.95
-    assert alignment["acoustic_verification"] == "completed"
+    assert alignment["acoustic_verification"] == "aligned_without_independent_anchors"
     transcribe_mock.assert_called_once()
 
 
@@ -403,17 +404,17 @@ def test_word_only_native_lines_reconstruct_text_without_losing_timing(preparati
     assert alignment["word_timing"] == "generated"
 
 
-def test_pipeline_recovers_with_whisper_anchors_without_retranscribing(preparation):
+def test_pipeline_recovers_with_asr_word_gaps_without_retranscribing(preparation):
     run, _, _ = preparation
     record = {"plainLyrics": "all I do is win and not forgive."}
     with patch.object(job, "_transcribe", return_value=transcript()) as transcribe_mock:
         results = [RuntimeError("collapse"), (timed_document(), [])]
         with patch.object(job, "_align_known_lyrics", side_effect=results) as align:
             _, alignment = run(record)
-    assert alignment["strategy"] == "whisper_anchored_ctc"
+    assert alignment["strategy"] == "asr_word_gap_ctc"
     transcribe_mock.assert_called_once()
-    assert align.call_args.kwargs["recovery_only"]
-    assert align.call_args.args[1]["lines"][0]["start_ms"] == 1000
+    assert align.call_args.kwargs["anchor_transcript"] == transcript()
+    assert "start_ms" not in align.call_args.args[1]["lines"][0]
 
 
 def test_pipeline_ctc_failure_still_preserves_known_verses(preparation):
@@ -569,21 +570,26 @@ def test_pipeline_fallback_copies_reference_case_and_punctuation(preparation):
 
 
 @pytest.mark.parametrize(
-    "observed,reference",
+    "observed,reference,accepted",
     [
-        ("I see a bird today", "I see a bear today"),
-        ("I see today", "I see a bear today"),
-        ("I see a small bird today", "I see a bear today"),
-        ("one two", "first one two last"),
-        ("one-two three", "one two three"),
-        ("one two three", "one-two three"),
-        ("sing it again", "sing it again\nsing it again"),
-        ("something completely different", "Bear, bear!"),
+        ("I see a bird today", "I see a bear today", True),
+        ("I see today", "I see a bear today", True),
+        ("I see a small bird today", "I see a bear today", True),
+        ("one two", "first one two last", False),
+        ("one-two three", "one two three", True),
+        ("one two three", "one-two three", True),
+        ("sing it again", "sing it again\nsing it again", False),
+        ("something completely different", "Bear, bear!", False),
     ],
 )
-def test_authoritative_fallback_reconstructs_reference_with_valid_times(observed, reference):
+def test_authoritative_fallback_requires_bounded_timing_evidence(observed, reference, accepted):
     original = timed_document(observed)
     snapshot = copy.deepcopy(original)
+    if not accepted:
+        with pytest.raises(ValueError, match="needs acoustic recovery"):
+            refs.apply_reference_text(original, refs.plain_lines(reference))
+        assert original == snapshot
+        return
     result, report = refs.apply_reference_text(original, refs.plain_lines(reference))
     result = validate_lyrics_file(result, require_words=True)
     assert result["plain"] == reference
@@ -595,15 +601,16 @@ def test_authoritative_fallback_reconstructs_reference_with_valid_times(observed
     assert all("confidence" not in words[index] for index in report["estimated_word_indexes"])
 
 
-def test_insertion_without_silence_borrows_time_without_overlap():
+def test_insertion_without_silence_requires_acoustic_recovery():
     original = timed_document("one two")
     original["lines"][0]["words"][1]["start_ms"] = original["lines"][0]["words"][0]["end_ms"]
-    result, report = refs.apply_reference_text(original, refs.plain_lines("one extra two"))
-    assert validate_lyrics_file(result, require_words=True)["plain"] == "one extra two"
-    assert report["estimated_words"] >= 2
+    snapshot = copy.deepcopy(original)
+    with pytest.raises(ValueError, match="insufficient bounded timing evidence"):
+        refs.apply_reference_text(original, refs.plain_lines("one extra two"))
+    assert original == snapshot
 
 
-def test_omitted_verse_uses_available_gap_instead_of_collapsing_at_chorus():
+def test_omitted_verse_requires_acoustic_recovery_even_with_available_gap():
     observed = transcript("intro noise chorus")
     for word, (start, end) in zip(
         observed["segments"][0]["words"], [(4.45, 6.43), (36.33, 36.65), (36.65, 37.0)], strict=True
@@ -611,17 +618,10 @@ def test_omitted_verse_uses_available_gap_instead_of_collapsing_at_chorus():
         word.update(start=start, end=end)
     original = job._transcript_to_lyrics(observed)
     missing = "\n".join(" ".join(f"verse{i}word{j}" for j in range(10)) for i in range(12))
-    result, report = refs.apply_reference_text(original, refs.plain_lines(f"intro\n{missing}\nchorus"))
-    result = validate_lyrics_file(result, require_words=True)
-
-    assert result["lines"][1]["start_ms"] == 6430
-    assert result["lines"][-2]["end_ms"] == 36650
-    assert all(line["end_ms"] - line["start_ms"] > 2000 for line in result["lines"][1:-1])
-    for key in ("start_ms", "end_ms", "confidence"):
-        assert result["lines"][0]["words"][0][key] == original["lines"][0]["words"][0][key]
-    assert result["lines"][-1]["start_ms"] == 36650
-    assert report["estimated_words"] == 120
-    assert all("confidence" not in word for line in result["lines"][1:-1] for word in line["words"])
+    snapshot = copy.deepcopy(original)
+    with pytest.raises(ValueError, match="too many unmatched words"):
+        refs.apply_reference_text(original, refs.plain_lines(f"intro\n{missing}\nchorus"))
+    assert original == snapshot
 
 
 @pytest.mark.parametrize("source", ["txt", "lrclib", "genius"])

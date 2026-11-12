@@ -87,7 +87,7 @@ def test_launcher_without_bundle_starts_real_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(karaoke_launch, "cuda_environment", lambda: os.environ.copy())
     config = tmp_path / "karaoke_job.json"
     config.write_text(json.dumps({"operation": "render", "archive_path": str(tmp_path / "result.zip")}))
-    with pytest.raises(RuntimeError, match="process exited with code"):
+    with pytest.raises(RuntimeError, match="Process exited with code"):
         karaoke_launch.main(config)
     status = json.loads((tmp_path / "karaoke_status.json").read_text())
     assert status["status"] == "failed"

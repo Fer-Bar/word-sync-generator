@@ -6,6 +6,7 @@ import sys
 import tomllib
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from packaging.requirements import Requirement
@@ -96,10 +97,12 @@ def test_preparation_uses_isolated_runtime_and_retains_both_runs(tmp_path, monke
     source.write_bytes(b"audio")
     calls = []
 
-    def run(config_path, environment):
+    def launch(command, *, env, **kwargs):
+        runtime = Path(env["KARAOKE_RUNTIME_DIR"])
+        config_path = runtime / "karaoke_job.json"
         config = json.loads(config_path.read_text())
-        runtime = config_path.parent
-        assert environment["KARAOKE_RUNTIME_DIR"] == str(runtime)
+        assert command[-1] == str(resources.runtime_resource("karaoke_launch.py"))
+        assert env["KARAOKE_STREAM_OUTPUT"] == "1"
         assert config["source"]["value"] == str(source)
         assert "source_bundle" not in config
         assert not (runtime / "source.zip").exists()
@@ -107,8 +110,13 @@ def test_preparation_uses_isolated_runtime_and_retains_both_runs(tmp_path, monke
             archive.writestr("lyrics.lyricsfile.yaml", "lines: []")
         (runtime / "karaoke_status.json").write_text('{"status":"completed"}')
         calls.append(runtime)
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.stdout = []
+        process.wait.return_value = 0
+        return process
 
-    monkeypatch.setattr(notebook, "_run_preparation", run)
+    monkeypatch.setattr(notebook.subprocess, "Popen", launch)
     first = notebook.prepare_audio(source, output_dir=tmp_path / "output")
     second = notebook.prepare_audio(source, output_dir=tmp_path / "output")
     assert first.directory != second.directory

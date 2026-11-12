@@ -728,11 +728,6 @@ def _prepare_lyrics(
             _event("Using LRCLIB lyrics as a reference; aligning word timings to the source audio")
         else:
             _event(f"Rebuilding word timings from audio: {timing_check['reason']}")
-            # Rejected provider times must not become alignment crop boundaries.
-            document = {**document, "lines": [
-                {key: value for key, value in line.items() if key not in {"words", "start_ms", "end_ms"}}
-                for line in document["lines"]
-            ]}
     alignment_context = AlignmentContext(vocals_path)
     inspect_presence = _lyric_presence_inspector(vocals_path, original_audio, config)
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
@@ -799,7 +794,7 @@ def _prepare_lyrics(
             else:
                 candidate_document = timed_reference
             candidate_validation = references.compare_reference(candidate_document["lines"], transcript) if transcript \
-                else {"needs_review": True, "lines": []}
+                else dict(validation)
             modes = [("ctc_alignment", {})]
             if timed_reference is not None:
                 modes.append(("reference_window_ctc", {"recovery_only": True}))
@@ -811,7 +806,7 @@ def _prepare_lyrics(
                     candidate_document["lines"], character_alignment=False) for token in tokens):
                     modes.append(("layered_ctc", {"anchor_transcript": transcript, "separate_backgrounds": True}))
             for mode, options in modes:
-                candidate_provenance = {}
+                candidate_provenance = {"strategy": mode}
                 try:
                     candidate_lyrics, _ = _timed_call(
                         performance, mode, _align_known_lyrics, vocals_path, candidate_document, config,
@@ -1747,6 +1742,8 @@ def _lyrics_document_from_record(
 
     references = _load_references_module()
     sanitize = getattr(references, "sanitize_text", lambda s: s)
+    requested_language = config.get("language", "auto")
+    language = requested_language if requested_language != "auto" else metadata.get("language")
 
     raw_lyrics_file = record.get("lyricsfile") or record.get("lyricsFile")
     if isinstance(raw_lyrics_file, str) and raw_lyrics_file.strip():
@@ -1786,7 +1783,6 @@ def _lyrics_document_from_record(
                     document["metadata"] = {}
                 document["metadata"].setdefault("title", record.get("trackName") or metadata["title"])
                 document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
-                language = config["language"] if config["language"] != "auto" else metadata.get("language")
                 if language:
                     document["metadata"].setdefault("language", language)
                 return document
@@ -1809,7 +1805,7 @@ def _lyrics_document_from_record(
                     "title": record.get("trackName") or metadata["title"],
                     "artist": record.get("artistName") or metadata.get("artist"),
                     "album": record.get("albumName") or metadata.get("album"),
-                    "language": config["language"] if config["language"] != "auto" else metadata.get("language"),
+                    "language": language,
                     "duration_ms": duration_ms or 0,
                 },
                 "lines": lines,
@@ -1829,7 +1825,7 @@ def _lyrics_document_from_record(
                     "title": record.get("trackName") or metadata["title"],
                     "artist": record.get("artistName") or metadata.get("artist"),
                     "album": record.get("albumName") or metadata.get("album"),
-                    "language": config["language"] if config["language"] != "auto" else metadata.get("language"),
+                    "language": language,
                     "duration_ms": round(float(metadata["duration"]) * 1000),
                 },
                 "lines": lines,
@@ -1863,8 +1859,14 @@ def _native_timing_reference(
     document: dict[str, Any], metadata: dict[str, Any], record: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Validate provider timings for recovery hints, never as final audio-aligned output."""
+    try:
+        duration = float(metadata["duration"])
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Invalid duration")
+    except (KeyError, TypeError, ValueError):
+        return None, {"status": "rejected", "reason": "missing_duration"}
     document = {**document, "metadata": {**document["metadata"],
-                                         "duration_ms": round(float(metadata["duration"]) * 1000)},
+                                         "duration_ms": round(duration * 1000)},
                 "lines": [line for line in document["lines"] if line["text"].strip()]}
     quality = _load_references_module().timing_quality(document, require_words=False)
     if quality["status"] != "checked":
@@ -1883,9 +1885,8 @@ def _native_timing_reference(
     ):
         return None, {"status": "rejected", "reason": "recording_identity_mismatch"}
     try:
-        duration = float(metadata["duration"])
         candidate_duration = float(record["duration"])
-        if not all(math.isfinite(value) and value > 0 for value in (duration, candidate_duration)):
+        if not math.isfinite(candidate_duration) or candidate_duration <= 0:
             raise ValueError("Invalid duration")
     except (KeyError, TypeError, ValueError):
         return None, {"status": "rejected", "reason": "missing_duration"}

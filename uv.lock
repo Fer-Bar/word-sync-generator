@@ -700,7 +700,7 @@ wheels = [
 
 [[package]]
 name = "lyrics-generator"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "google-colab-cli" },

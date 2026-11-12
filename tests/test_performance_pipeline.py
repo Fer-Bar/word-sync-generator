@@ -195,7 +195,7 @@ def test_ctc_recovery_uses_same_job_context(tmp_path):
                             selected_record=None, resolved_reference=(reference, {"source": "txt"}))
     assert align.call_count == 2
     assert align.call_args_list[0].kwargs["context"] is align.call_args_list[1].kwargs["context"]
-    assert align.call_args_list[1].kwargs["recovery_only"]
+    assert align.call_args_list[1].kwargs["anchor_transcript"] == transcript
 
 
 def test_browser_failure_kills_encoder_and_preserves_exception():
