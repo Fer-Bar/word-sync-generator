@@ -35,10 +35,27 @@ jobs:
               raise SystemExit("Notebook must select this release version")
           PYTHON
           test -z "$(git ls-files logos/)"
-          uv run pytest -q tests/test_wheel_distribution.py tests/test_neutral_branding.py
       - name: Build release assets
         run: |
           uv build --wheel
+          uv run python - <<'PYTHON'
+          import zipfile
+          from pathlib import Path
+
+          wheels = list(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit("Expected exactly one release wheel")
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = set(archive.namelist())
+          required = {
+              "karaoke_app/runtime/karaoke_job.py",
+              "karaoke_app/runtime/karaoke_launch.py",
+              "karaoke_app/runtime/requirements.txt",
+              "karaoke_app/THIRD_PARTY_NOTICES.md",
+          }
+          if not required <= names or any("logos" in Path(name).parts for name in names):
+              raise SystemExit("Wheel must include runtime resources without local artwork")
+          PYTHON
           cp notebooks/generate_video.ipynb dist/
           cd dist
           for wheel in *.whl; do sha256sum "$wheel" > "$wheel.sha256"; done
