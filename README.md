@@ -15,7 +15,8 @@ No necesitas terminal, construir paquetes ni escribir rutas Python.
 
 Usa siempre el cuaderno y el wheel de la misma entrega. Ejecuta las celdas individualmente:
 
-1. **Iniciar:** elige **Modelo** (`small`, `medium` o `large-v3`), instala el motor y comprueba la GPU.
+1. **Iniciar:** elige **Modelo Whisper** (`small`, `medium` o `large-v3`, con indicaciones de rapidez y precisión).
+   Instala el motor y comprueba la GPU.
 2. **Subir canción:** bajo este bloque, ejecuta **2a o 2b, solo uno**.
    En 2a pulsa ▶ y sube el archivo local; en 2b pega el enlace de
    YouTube antes de ▶. Si necesitas cookies, marca **Subir_cookies**: al ejecutar aparecerá
@@ -34,9 +35,16 @@ Usa siempre el cuaderno y el wheel de la misma entrega. Ejecuta las celdas indiv
    ni invalida el vídeo anterior. Puedes elegir un único **Fondo**: Clásico, Fluido, Cósmico, Color,
    Imagen, Vídeo o Vídeo de origen. Cada opción muestra únicamente sus ajustes;
    los colores tienen paleta, muestra visual y selector personalizado.
-   Ejecuta **4c.2** para aplicar el diseño y subir la imagen/vídeo cuando corresponda.
-5. **Generar:** elige modo y calidad antes de ▶. Conserva el diseño guardado, incluso si omites 4c.
-6. **Descargar:** elige el archivo antes de ▶; MP4 es el valor predeterminado.
+   Ejecuta **4c.2 · Aplicar fondo** para aplicar el diseño y subir la imagen/vídeo cuando corresponda.
+5. **Generar:** elige Lyrics (con voz) o Karaoke (sin voz), y la calidad antes de ▶.
+   Conserva el diseño guardado, incluso si omites 4c.
+6. **Descargar:** pulsa ▶ para descargar directamente el MP4.
+
+El cuaderno presenta instrucciones breves y etiquetas descriptivas para modelo, modo y calidad.
+Genera un modo por ejecución; para obtener ambos, genera y descarga cada uno por separado.
+No ofrece descargas ZIP ni exportación del proyecto editable: descarga el video antes de
+cerrar Colab. Las voces y el YAML siguen disponibles en 4b; la CLI conserva sus opciones
+de ambos modos y gestión de proyectos.
 
 Los formularios junto a ▶ se eligen antes de ejecutar. Los paneles del paso 3 y de 4c.1
 se editan después de abrirlos. Cambiar el diseño no repite la preparación; aplica los cambios

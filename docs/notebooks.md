@@ -11,7 +11,7 @@ El motor de una versión publicada se descarga automáticamente. Si la entrega l
 no está publicada, el paso 1 pide subir el wheel de esa misma carpeta. Nunca instala una
 versión anterior como sustituto: comprueba versión, SHA-256 y capacidades del motor.
 
-1. **Iniciar:** elige **Modelo** (`small`, `medium` o `large-v3`, predeterminado).
+1. **Iniciar:** elige **Modelo Whisper** (`small`, `medium` o `large-v3`, predeterminado).
    Descarga el `.whl` de GitHub Releases, verifica su SHA-256,
    instala el motor y comprueba la GPU. Un checksum incorrecto detiene el paso.
 2. **Subir canción:** el bloque de texto común presenta las dos alternativas: ejecuta
@@ -56,19 +56,21 @@ versión anterior como sustituto: comprueba versión, SHA-256 y capacidades del 
    se oculta al elegir un archivo o color. No simula la letra ni el movimiento.
    El fondo de color ofrece siete opciones con muestra visual y un selector personalizado.
    Solo aparecen los campos correspondientes al tipo de fondo elegido.
-   En **4c.2 · Aplicar diseño**, pulsa ▶ y sube la imagen/vídeo si se solicita. Los archivos
+   En **4c.2 · Aplicar fondo**, pulsa ▶ y sube la imagen/vídeo si se solicita. Los archivos
    se validan y guardan en el proyecto; los clips cortos se repiten sin sustituir el audio.
-   Espera **Diseño aplicado**. Cambiar cualquier valor exige aplicarlo de nuevo; el render
+   Espera **Fondo aplicado**. Cambiar cualquier valor exige aplicarlo de nuevo; el render
    rechaza cambios pendientes en vez de usar silenciosamente una selección anterior.
    Abrir los controles sin cambiar valores no exige 4c.2 ni descarta el vídeo anterior;
    volver a los valores guardados elimina el estado pendiente.
    Elegir Clásico, Fluido o Cósmico recupera ese fondo predefinido. Los fondos personalizados
    usan la tipografía clásica; no heredan una selección oculta anterior.
    Omitir 4c conserva el aspecto guardado del proyecto, sin forzar otro preset durante el render.
-5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, y la calidad. Usa la letra actual sin una casilla
-   adicional de confirmación. Cambiar el aspecto no repite la preparación.
-6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
-   si quieres conservarlo antes de cerrar Colab.
+5. **Generar el video:** elige **Lyrics (con voz)** o **Karaoke (sin voz)** y la calidad:
+   **720p (rápido)** o **1080p (mayor calidad)**. Usa la letra actual y el fondo aplicado.
+   Para obtener ambos modos, genera y descarga cada uno por separado.
+6. **Descargar:** pulsa ▶ para descargar el MP4 directamente. El cuaderno no ofrece
+   ZIP de videos ni exportación del proyecto editable. Descarga los resultados antes
+   de cerrar Colab; las voces y el YAML se pueden descargar desde 4b.
 
 Las celdas 4b usan la transferencia nativa de Colab, sin botones `ipywidgets` ni menú de acciones.
 Permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente, sin repetir el paso 4.
@@ -77,8 +79,7 @@ diferencias de mayúsculas, espacios y puntuación. La duración declarada, si e
 coincidir con el audio original y ningún tiempo puede excederlo, con un margen de un segundo
 para redondeos. Un rechazo conserva la letra actual sin crear respaldos; una importación
 válida guarda una copia anterior en `.karaoke/lyrics-history/` antes de reemplazarla.
-Importarlo no repite la separación ni la transcripción. El ZIP editable
-se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
+Importarlo no repite la separación ni la transcripción.
 
 No hace falta editar rutas ni montar Google Drive. El audio se procesa
 en la sesión de tu cuenta. Sin TXT, la búsqueda automática consulta proveedores externos;
@@ -214,8 +215,8 @@ y caché; cada proceso vuelve a cargar los pesos en memoria, pero no necesita de
 La caché no sobrevive a la eliminación del entorno de Colab.
 
 Prefiere audio frente a un video grande: la preparación del notebook conserva la fuente
-original en el proyecto. El ZIP editable contiene el proyecto preparado, no sus renders;
-descarga también el paquete de videos si necesitas ambos.
+original en el proyecto. El cuaderno no exporta el proyecto completo; al eliminar la sesión
+se pierde lo que no hayas descargado.
 
 ## Verificación y límites
 
