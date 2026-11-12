@@ -19,6 +19,7 @@ jobs:
         with:
           version: "0.13.4"
       - run: uv sync --locked --dev --python 3.12
+      - run: uv run ruff check .
       - name: Check release version
         run: |
           uv run python - <<'PYTHON'
