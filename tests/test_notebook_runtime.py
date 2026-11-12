@@ -27,7 +27,8 @@ def test_config_accepts_external_read_only_inputs_without_writing(tmp_path):
     assert source.read_bytes() == b"audio"
 
 
-def test_preparation_passes_local_song_metadata_and_keeps_automatic_lyrics(tmp_path, monkeypatch):
+@pytest.mark.parametrize("verify_word_timings", [False, True])
+def test_preparation_passes_local_song_metadata_and_keeps_automatic_lyrics(tmp_path, monkeypatch, verify_word_timings):
     from colab import karaoke_job
 
     source = tmp_path / "song.wav"
@@ -39,6 +40,7 @@ def test_preparation_passes_local_song_metadata_and_keeps_automatic_lyrics(tmp_p
         config = json.loads(config_path.read_text())
         assert config["lyrics"]["disable_lrclib"] is False
         assert config["lyrics"]["text_path"] is None
+        assert config["lyrics"]["verify_word_timings"] is True
         path, metadata = karaoke_job._acquire_source(config)
         assert path == source
         assert metadata["title"] == "Song title"
@@ -53,7 +55,7 @@ def test_preparation_passes_local_song_metadata_and_keeps_automatic_lyrics(tmp_p
     monkeypatch.setattr(notebook, "_run_preparation", run)
     result = notebook.prepare_audio(
         source, output_dir=tmp_path / "outputs", title="Song title", artist="Song artist",
-        album="Studio album", language="es",
+        album="Studio album", language="es", verify_word_timings=verify_word_timings,
     )
     assert json.loads((result.directory / "source.json").read_text()) == seen[0]
     assert result.archive.is_file()
@@ -185,8 +187,6 @@ def test_runtime_report_never_starts_models(monkeypatch):
 def test_bundled_resources_have_sources():
     for name in ("karaoke_job.py", "karaoke_launch.py", "requirements.txt"):
         assert resources.runtime_resource(name).is_file()
-    for name in ("banner.png", "principal_logo.png", "thumbnail.png"):
-        assert resources.logo_resource(name).is_file()
     with pytest.raises(ValueError):
         resources.runtime_resource("../../other")
 

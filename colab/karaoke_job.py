@@ -167,10 +167,6 @@ def _run_pipeline(config: dict[str, Any]) -> None:
         metadata.get("title"), metadata.get("track"), metadata.get("artist"), metadata.get("album"),
         metadata.get("duration"), metadata.get("language"), metadata.get("uploader"),
     )
-    if record is not None and lyrics_config.get("lrclib_id") is not None:
-        document = _lyrics_document_from_record(record, metadata, config)
-        if _has_complete_word_timings(document):
-            _load_lyrics_module().validate_lyrics_file(document, require_words=True)
     with ThreadPoolExecutor(max_workers=1) as executor:
         reference_future = executor.submit(_timed_call, performance, "reference_lookup",
                                            _prepare_reference, metadata, config, record)
@@ -199,6 +195,7 @@ def _run_pipeline(config: dict[str, Any]) -> None:
             "requested_language": config["language"],
             "lrclib_id": record.get("id") if record else None,
             "disable_lrclib": bool(lyrics_config.get("disable_lrclib")),
+            "timing_policy": "acoustic",
         }
         try:
             record, reference = reference_future.result()
@@ -719,6 +716,19 @@ def _prepare_lyrics(
     record = selected_record
     document, evidence = resolved_reference if resolved_reference is not None else _resolve_reference(
         metadata, config, record)
+    if document is not None:
+        timing_reference, timing_check = _native_timing_reference(document, metadata, record)
+        evidence["provided_timing_check"] = timing_check
+        if timing_reference is not None:
+            document = timing_reference
+            _event("Using LRCLIB lyrics as a reference; aligning word timings to the source audio")
+        elif any(line.get("words") for line in document["lines"]):
+            _event(f"Rebuilding word timings from audio: {timing_check['reason']}")
+            # Rejected provider times must not become alignment crop boundaries.
+            document = {**document, "lines": [
+                {key: value for key, value in line.items() if key not in {"words", "start_ms", "end_ms"}}
+                for line in document["lines"]
+            ]}
     alignment_context = AlignmentContext(vocals_path)
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     transcript = None
@@ -753,21 +763,17 @@ def _prepare_lyrics(
     acoustic_candidates = []
     if document is not None:
         try:
-            if _has_complete_word_timings(document):
-                lyrics = lyrics_module.validate_lyrics_file(document, require_words=True)
-                provenance.update(engine=evidence["source"], word_timing="provided", strategy="provided_word_timings")
-            else:
-                lyrics, _ = _timed_call(
-                    performance, "ctc_alignment", _align_known_lyrics, vocals_path, document, config,
-                    provenance=provenance, context=alignment_context)
-                acoustic_candidates.append(lyrics)
-                _verify_alignment_anchors(lyrics, document, validation, provenance)
-                provenance.update(
-                    engine="ctc-forced-aligner",
-                    word_timing="generated",
-                    model=CTC_ALIGNER_MODEL,
-                    model_revision=CTC_ALIGNER_MODEL_REVISION,
-                )
+            lyrics, _ = _timed_call(
+                performance, "ctc_alignment", _align_known_lyrics, vocals_path, document, config,
+                provenance=provenance, context=alignment_context)
+            acoustic_candidates.append(lyrics)
+            _verify_alignment_anchors(lyrics, document, validation, provenance)
+            provenance.update(
+                engine="ctc-forced-aligner",
+                word_timing="generated",
+                model=CTC_ALIGNER_MODEL,
+                model_revision=CTC_ALIGNER_MODEL_REVISION,
+            )
         except (AssertionError, KeyError, RuntimeError, ValueError) as error:
             fallback_reason = str(error)
             LOGGER.debug("Reference alignment failed; trying independent ASR anchors: %s", error)
@@ -801,12 +807,12 @@ def _prepare_lyrics(
                 lyrics = None
 
     if lyrics is not None:
-        desired = evidence.get("structure_lines") or document["lines"]
+        desired = evidence.get("structure_lines") or evidence.get("lines") or document["lines"]
         lyrics, grouping = references.apply_reference_text(lyrics, desired)
         lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
         evidence["grouping"] = grouping
         evidence["structure_restored"] = True
-        validation["needs_review"] |= bool(grouping["estimated_words"])
+        validation["needs_review"] |= bool(grouping["estimated_words"] or evidence.get("text_conflict"))
         if grouping["estimated_words"]:
             provenance.update(word_timing="estimated", timing_fallback="reference_text")
         if transcript:
@@ -836,7 +842,7 @@ def _prepare_lyrics(
         validation["needs_review"] = True
         validation["reference_not_applied"] = document is not None
         if document is not None:
-            desired = evidence.get("structure_lines") or document["lines"]
+            desired = evidence.get("structure_lines") or evidence.get("lines") or document["lines"]
             lyrics, grouping = references.apply_reference_text(lyrics, desired)
             lyrics, grouping = references.refine_estimated_timings(lyrics, grouping, acoustic_candidates)
             lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
@@ -870,13 +876,13 @@ def _prepare_lyrics(
                 ],
             )
 
-    if provenance.get("word_timing") != "provided":
-        boundary_check = _check_vocal_boundaries(vocals_path, lyrics["lines"])
-        provenance["vocal_boundaries"] = boundary_check
-        validation["vocal_boundaries"] = boundary_check
-        validation["needs_review"] |= boundary_check["status"] != "checked"
-        lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
+    boundary_check = _check_vocal_boundaries(vocals_path, lyrics["lines"])
+    provenance["vocal_boundaries"] = boundary_check
+    validation["vocal_boundaries"] = boundary_check
+    validation["needs_review"] |= boundary_check["status"] != "checked"
+    lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
 
+    validation["acoustic_verification"] = "completed" if transcript else "unavailable"
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
     if validation["needs_review"]:
@@ -901,6 +907,9 @@ def _prepare_lyrics(
         "reference_source": evidence["source"],
         "grouping": evidence.get("grouping"),
         "needs_review": validation["needs_review"],
+        "timing_policy": "acoustic",
+        "provided_timing_check": evidence.get("provided_timing_check"),
+        "acoustic_verification": validation["acoustic_verification"],
         "reference_file": "lyrics_reference.json",
         "validation_file": "lyrics_validation.json",
         "transcription_file": "transcription.json" if transcript else None,
@@ -993,14 +1002,22 @@ def _trim_quiet_word_tails(lines: list[dict[str, Any]], rms: Any) -> dict[str, A
 def _save_lyrics_evidence(directory: Path | None, filename: str, value: dict[str, Any]) -> None:
     if directory is not None:
         if filename == "lyrics_reference.json":
+            if value.get("lrclib_record"):
+                (directory / "lrclib_record.json").write_text(
+                    json.dumps(value["lrclib_record"], ensure_ascii=False, indent=2), encoding="utf-8",
+                )
+                value = {**value, "reference_record_file": "lrclib_record.json"}
             lines = (
                 value.get("alternative_lines")
                 if value.get("selected_variant") == "plain_confirmed_by_asr"
                 else value.get("structure_lines") or value.get("lines")
             )
             if lines:
+                text = "\n".join(line["text"] for line in lines)
+                if value.get("selected_variant") != "lyricsfile_authoritative":
+                    text = value.get("original_text") or text
                 (directory / "reference.txt").write_text(
-                    (value.get("original_text") or "\n".join(line["text"] for line in lines)).rstrip("\n") + "\n",
+                    text.rstrip("\n") + "\n",
                     encoding="utf-8",
                 )
                 value = {
@@ -1564,6 +1581,13 @@ def _lyrics_document_from_record(
 
         if document is not None:
             raw_lines = document.get("lines")
+            if isinstance(raw_lines, list):
+                for line in raw_lines:
+                    if isinstance(line, dict) and not line.get("text") and isinstance(line.get("words"), list):
+                        line["text"] = "".join(
+                            word["text"] for word in line["words"]
+                            if isinstance(word, dict) and isinstance(word.get("text"), str)
+                        )
             has_text_lines = (
                 isinstance(raw_lines, list)
                 and raw_lines
@@ -1654,6 +1678,47 @@ def _has_complete_word_timings(document: dict[str, Any]) -> bool:
         )
         for line in lyric_lines
     )
+
+
+def _native_timing_reference(
+    document: dict[str, Any], metadata: dict[str, Any], record: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Validate provider timings for recovery hints, never as final audio-aligned output."""
+    if not _has_complete_word_timings(document):
+        return None, {"status": "rejected", "reason": "incomplete_word_timings"}
+    record = record or {}
+    track = str(metadata.get("track") or metadata.get("title") or "")
+    candidate_track = str(record.get("trackName") or "")
+    title_matches = bool(track and candidate_track) and bool(
+        {_normalize_text(title) for title in _title_variants(track)}
+        & {_normalize_text(title) for title in _title_variants(candidate_track)}
+    )
+    if (
+        not title_matches or not metadata.get("artist") or not record.get("artistName")
+        or not _artist_matches(metadata["artist"], record["artistName"])
+        or _title_edition_tokens(track) != _title_edition_tokens(candidate_track)
+    ):
+        return None, {"status": "rejected", "reason": "recording_identity_mismatch"}
+    try:
+        duration = float(metadata["duration"])
+        candidate_duration = float(record["duration"])
+        if not all(math.isfinite(value) and value > 0 for value in (duration, candidate_duration)):
+            raise ValueError("Invalid duration")
+    except (KeyError, TypeError, ValueError):
+        return None, {"status": "rejected", "reason": "missing_duration"}
+    delta = abs(duration - candidate_duration)
+    if delta > 2:
+        return None, {"status": "rejected", "reason": "duration_mismatch", "duration_delta_seconds": delta}
+    try:
+        normalized = _load_lyrics_module().validate_lyrics_file(
+            {**document, "metadata": {**document["metadata"], "duration_ms": round(duration * 1000)}},
+            require_words=True,
+        )
+        if any(line["end_ms"] > round(duration * 1000) for line in normalized["lines"]):
+            raise ValueError("Provided lyrics extend beyond the source audio")
+    except (KeyError, TypeError, ValueError) as error:
+        return None, {"status": "rejected", "reason": "invalid_word_timings", "error": str(error)}
+    return normalized, {"status": "metadata_compatible", "duration_delta_seconds": delta}
 
 
 def _alignment_line_tokens(line: dict[str, Any], *, character_alignment: bool) -> list[dict[str, Any]]:

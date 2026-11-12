@@ -140,6 +140,10 @@ class RenderBundleTests(unittest.TestCase):
     def test_packages_absolute_watermark_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             job_dir = Path(temporary_directory)
+            from PIL import Image
+
+            logo = job_dir / "custom.png"
+            Image.new("RGBA", (100, 30), (255, 0, 0, 255)).save(logo)
             write_audio(job_dir / "instrumental.flac")
             write_audio(job_dir / "original.flac")
             destination = job_dir / "render.zip"
@@ -152,7 +156,7 @@ class RenderBundleTests(unittest.TestCase):
                 },
                 "background": {"kind": "solid", "color": "#0B1020"},
                 "watermark": {
-                    "path": "logos/banner.png",
+                    "path": str(logo),
                     "position": "top_left",
                     "scale": 0.18,
                     "margin": 0.05,
@@ -239,6 +243,14 @@ class SourceReliabilityTests(unittest.TestCase):
         self.assertEqual(self.payload["source"]["kind"], "file")
         self.assertEqual(self.payload["source"]["metadata"]["webpage_url"], self.args.source)
         self.assertIn("karaoke_source.webm", self.source_bundle_members)
+        self.assertTrue(self.payload["lyrics"]["verify_word_timings"])
+
+    def test_word_timing_verification_reaches_remote_runtime(self):
+        self.args = cli.build_parser().parse_args([
+            self.args.source, "--no-logo", "--no-cookies", "--output-dir", str(self.root), "--verify-word-timings",
+        ])
+        cli.run_job(self.args)
+        self.assertTrue(self.payload["lyrics"]["verify_word_timings"])
 
     def run_command(self, command, *, check=True, timeout=None):
         self.commands.append((command, timeout))

@@ -60,10 +60,11 @@ def preparation_config(
     language: str = "en",
     lyrics_text: Path | None = None,
     use_lrclib: bool = True,
+    verify_word_timings: bool = True,
     whisper_model: str = "large-v3",
     demucs_model: str = "htdemucs_ft",
 ) -> dict[str, Any]:
-    """Build a local-file preparation request without filesystem writes or sessions."""
+    """Build a preparation request; legacy verify_word_timings cannot disable acoustic checks."""
     from karaoke_app.visual_config import preparation_visuals
 
     source = Path(source).expanduser().resolve()
@@ -90,6 +91,7 @@ def preparation_config(
             "title": title, "artist": artist, "album": album, "lrclib_id": None,
             # The CLI flag disables all references; the notebook toggle only controls online lookup.
             "disable_lrclib": not use_lrclib and lyrics_text is None,
+            "verify_word_timings": True,
             "text_path": str(lyrics_text) if lyrics_text else None,
             "genius_url": None,
         },
@@ -152,6 +154,7 @@ def prepare_audio(
     language: str = "en",
     lyrics_text: Path | None = None,
     use_lrclib: bool = True,
+    verify_word_timings: bool = True,
     whisper_model: str = "large-v3",
     demucs_model: str = "htdemucs_ft",
     whisper_cache: Path | None = None,
@@ -167,6 +170,7 @@ def prepare_audio(
     config = preparation_config(
         source, runtime, title=title, artist=artist, album=album, language=language, lyrics_text=lyrics_text,
         use_lrclib=use_lrclib, whisper_model=whisper_model, demucs_model=demucs_model,
+        verify_word_timings=verify_word_timings,
     )
     runtime.mkdir(parents=True, mode=0o700)
     config_path = runtime / "karaoke_job.json"

@@ -92,7 +92,7 @@ def test_pcm_decoding_and_energy_frames():
     assert report["corrections"][0]["end_ms"] == 2600
 
 
-@pytest.mark.parametrize("engine", ["ctc", "whisper", "provided"])
+@pytest.mark.parametrize("engine", ["ctc", "whisper", "native"])
 def test_pipeline_exports_corrected_times_and_diagnostics(tmp_path, engine):
     transcript = {
         "song": {"title": "Song", "duration": 7}, "transcription": {"language": "en"},
@@ -102,8 +102,8 @@ def test_pipeline_exports_corrected_times_and_diagnostics(tmp_path, engine):
     levels[50:125] = 0.2
     document = job._transcript_to_lyrics(transcript)
     record = {"plainLyrics": "held"} if engine == "ctc" else None
-    if engine == "provided":
-        record = {"lyricsfile": yaml.safe_dump(document)}
+    if engine == "native":
+        record = {"lyricsfile": yaml.safe_dump(document), "trackName": "Song", "artistName": "Artist", "duration": 7}
     with (
         patch.object(job, "_transcribe", return_value=transcript),
         patch.object(job, "_align_known_lyrics", return_value=(document, [])),
@@ -112,15 +112,11 @@ def test_pipeline_exports_corrected_times_and_diagnostics(tmp_path, engine):
         ) as check,
     ):
         lyrics, alignment = job._prepare_lyrics(
-            Path("vocals.flac"), {"title": "Song", "duration": 7},
+            Path("vocals.flac"), {"title": "Song", "artist": "Artist", "duration": 7},
             {"lyrics": {"disable_lrclib": engine == "whisper"}, "whisper_model": "large-v3", "language": "en"},
             selected_record=record, artifacts_dir=tmp_path,
         )
-    if engine == "provided":
-        check.assert_not_called()
-        assert lyrics["lines"][0]["end_ms"] == 6000
-        assert alignment["words"][0]["end"] == 6
-        return
+    check.assert_called_once()
     assert lyrics["lines"][0]["end_ms"] == 2600
     assert alignment["words"][0]["end"] == 2.6
     saved = json.loads((tmp_path / "lyrics_validation.json").read_text())
