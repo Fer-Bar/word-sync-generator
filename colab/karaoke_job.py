@@ -734,6 +734,7 @@ def _prepare_lyrics(
                 for line in document["lines"]
             ]}
     alignment_context = AlignmentContext(vocals_path)
+    inspect_presence = _lyric_presence_inspector(vocals_path, original_audio, config)
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     transcript = None
     validation: dict[str, Any] = {"needs_review": True, "status": "unavailable", "lines": []}
@@ -744,8 +745,10 @@ def _prepare_lyrics(
     except RuntimeError as error:
         if document is None:
             raise
-        validation["error"] = str(error)
-        LOGGER.debug("Independent Whisper validation unavailable: %s", error)
+        validation.update(status="presence_verification_unavailable", error=str(error))
+        _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
+        raise RuntimeError(
+            "Independent transcription unavailable; cannot verify which reference lyrics are sung") from error
     if document is not None:
         document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
         document["metadata"]["language"] = (
@@ -762,6 +765,12 @@ def _prepare_lyrics(
         _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
         _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
 
+    if document is not None and transcript:
+        document, evidence = _adapt_recording_reference(document, evidence, transcript, metadata, inspect_presence)
+        _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
+        if not document["lines"]:
+            document = None
+
     fallback_reason = "lrclib_disabled" if config.get("lyrics", {}).get("disable_lrclib") else "no_safe_reference"
     provenance: dict[str, Any] = {}
     lyrics = None
@@ -774,6 +783,11 @@ def _prepare_lyrics(
             if alt_document is not None:
                 candidates.append((alternative, alt_document, alt_evidence))
         for candidate_record, candidate_document, candidate_evidence in candidates:
+            if candidate_document is not document and transcript:
+                candidate_document, candidate_evidence = _adapt_recording_reference(
+                    candidate_document, candidate_evidence, transcript, metadata, inspect_presence)
+                if not candidate_document["lines"]:
+                    continue
             candidate_document["metadata"] = {**candidate_document["metadata"], **document["metadata"]}
             timed_reference, check = _native_timing_reference(candidate_document, metadata, candidate_record)
             candidate_evidence["provided_timing_check"] = check
@@ -896,6 +910,11 @@ def _prepare_lyrics(
             )
 
     boundary_check = _check_vocal_boundaries(vocals_path, lyrics["lines"])
+    if evidence.get("recording_presence"):
+        validation["recording_presence"] = evidence["recording_presence"]
+        provenance["recording_presence"] = {
+            key: evidence["recording_presence"][key] for key in ("policy", "status", "omitted_lines")
+        }
     provenance["vocal_boundaries"] = boundary_check
     validation["vocal_boundaries"] = boundary_check
     validation["needs_review"] |= boundary_check["status"] != "checked"
@@ -973,6 +992,89 @@ def _verify_alignment_anchors(lyrics, document, validation, provenance):
     if check["status"] == "drift":
         provenance.setdefault("rejected_acoustic_checks", []).append(check)
         raise RuntimeError("CTC has severe timing drift against independent ASR phrases")
+
+
+def _adapt_recording_reference(document, evidence, transcript, metadata, inspect_window):
+    references = _load_references_module()
+    desired = evidence.get("structure_lines") or document["lines"]
+    selected, report = references.resolve_recording_reference(
+        desired, transcript, round(metadata["duration"] * 1000), inspect_window=inspect_window)
+    if not report["omitted_lines"]:
+        return document, {**evidence, "recording_presence": report}
+    _event(f"Omitting {report['omitted_lines']} reference lines without sufficient audio support")
+    # All alignment and text-restoration paths must consume the same adapted reference.
+    return ({**document, "lines": selected},
+            {**evidence, "structure_lines": selected, "recording_presence": report})
+
+
+def _lyric_presence_inspector(vocals_path, original_audio, config):
+    """Reuse decoded audio, one model and bounded local retries across reference candidates."""
+    import numpy as np
+
+    audio_cache, results = {}, {}
+    model = None
+    sources = {"vocals": vocals_path}
+    if original_audio is not None and original_audio != vocals_path:
+        sources["original_audio"] = original_audio
+
+    def inspect(start_ms, end_ms):
+        nonlocal model
+        key = (start_ms, end_ms)
+        if key in results:
+            return results[key]
+        _event(f"Checking unsupported lyrics against audio at {start_ms / 1000:.1f}–{end_ms / 1000:.1f}s")
+        observations = []
+        for source, path in sources.items():
+            if source not in audio_cache:
+                decoded = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+                    check=True, capture_output=True)
+                samples = np.frombuffer(decoded.stdout, dtype="<f4").copy()
+                if not samples.size or not np.isfinite(samples).all():
+                    raise RuntimeError("Cannot verify lyric presence in empty or non-finite audio")
+                frame_count = len(samples) // 320
+                if not frame_count:
+                    raise RuntimeError("Audio is too short to verify lyric presence")
+                frames = samples[:frame_count * 320].reshape(-1, 320).astype(np.float64)
+                rms = np.sqrt(np.mean(frames ** 2, axis=1))
+                threshold = max(1e-8, float(np.percentile(rms, 90)) * 10 ** (-35 / 20))
+                audio_cache[source] = samples, rms, threshold
+            samples, rms, threshold = audio_cache[source]
+            if model is None:
+                model = _load_whisper_model(config["whisper_model"])
+            words = []
+            # Overlap prevents a word cut by a chunk boundary from becoming evidence of absence.
+            for offset in range(start_ms, end_ms, 14000):
+                stop = min(offset + 16000, end_ms)
+                clip = samples[max(0, offset * 16):stop * 16]
+                if not clip.size:
+                    raise RuntimeError("Lyric presence window lies outside decoded audio")
+                segments, _ = model.transcribe(
+                    clip, language=None if config["language"] == "auto" else config["language"],
+                    beam_size=5, word_timestamps=True, vad_filter=False, condition_on_previous_text=False,
+                )
+                for segment in segments:
+                    for word in segment.words or []:
+                        if word.start is None or word.end is None or word.end <= word.start:
+                            continue
+                        item = {"text": word.word.strip(), "start": offset / 1000 + word.start,
+                                "end": offset / 1000 + word.end, "probability": float(word.probability or 0)}
+                        if item["text"] and not any(
+                            previous["text"].casefold() == item["text"].casefold()
+                            and min(previous["end"], item["end"]) > max(previous["start"], item["start"])
+                            for previous in words[-20:]
+                        ):
+                            words.append(item)
+                if stop == end_ms:
+                    break
+            levels = rms[start_ms // 20:(end_ms + 19) // 20]
+            observations.append({"source": source, "status": "checked",
+                                 "words": sorted(words, key=lambda word: word["start"]),
+                                 "active_ratio": float(np.mean(levels > threshold)) if len(levels) else 0.0})
+        results[key] = observations
+        return observations
+
+    return inspect
 
 
 def _check_vocal_boundaries(vocals_path: Path, lines: list[dict[str, Any]]) -> dict[str, Any]:

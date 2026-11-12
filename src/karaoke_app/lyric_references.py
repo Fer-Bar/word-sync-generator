@@ -710,6 +710,141 @@ def acoustic_word_anchors(tokens: list[dict[str, Any]], transcript: dict[str, An
     return anchors
 
 
+def presence_windows(lines: list[dict], transcript: dict, duration_ms: int) -> list[dict]:
+    """Locate poorly supported phrases between independent ASR anchors, ignoring provider times."""
+    diagnostics = compare_reference(lines, transcript)["lines"]
+    runs, current = [], []
+    for index, diagnostic in enumerate(diagnostics):
+        if diagnostic["total_units"] and diagnostic["matched_units"] / diagnostic["total_units"] < 0.5:
+            current.append(index)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    windows = []
+    for indexes in runs:
+        # Isolated interjections cannot be distinguished reliably by lexical coverage alone.
+        if sum(diagnostics[i]["total_units"] for i in indexes) < 2:
+            continue
+        before = [(span["end_ms"], i) for i, d in enumerate(diagnostics[:indexes[0]]) for span in d["anchor_spans"]]
+        after = [(span["start_ms"], i) for i, d in enumerate(diagnostics)
+                 if i > indexes[-1] for span in d["anchor_spans"]]
+        lo, left = max(before, default=(0, -1))
+        hi, right = min(after, default=(duration_ms, len(lines)))
+        if not 0 <= lo < hi <= duration_ms:
+            raise ValueError("Cannot locate unsupported reference phrases between ordered acoustic anchors")
+        windows.append({"line_indexes": indexes, "context_line_indexes": list(range(left + 1, right)),
+                        "start_ms": lo, "end_ms": hi})
+    return windows
+
+
+def _presence_coverage(lines: list[dict], words: list[dict]) -> list[float]:
+    """Match occurrences once, allowing small ASR spelling errors in substantial words."""
+    units = [normalized_units(line["text"]) for line in lines]
+    expected = [unit for line in units for unit in line]
+    observed = [unit for word in words for unit in normalized_units(word["text"])]
+    substitutions = {
+        (a, b): 0 if a == b else 1 if min(len(a), len(b)) >= 4
+        and SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.65 else 4
+        for a in set(expected) for b in set(observed)
+    }
+    n, m = len(expected), len(observed)
+    costs = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n, -1, -1):
+        for j in range(m, -1, -1):
+            if i == n or j == m:
+                costs[i][j] = 4 * (n - i + m - j)
+            else:
+                costs[i][j] = min(costs[i + 1][j] + 4, costs[i][j + 1] + 4,
+                                  costs[i + 1][j + 1] + substitutions[expected[i], observed[j]])
+    matched, i, j = set(), 0, 0
+    # Traverse forwards so equally plausible repetitions consume the earliest occurrence first.
+    while i < n and j < m:
+        substitution = substitutions[expected[i], observed[j]]
+        if costs[i][j] == costs[i + 1][j + 1] + substitution:
+            if substitution < 4:
+                matched.add(i)
+            i, j = i + 1, j + 1
+        elif costs[i][j] == costs[i + 1][j] + 4:
+            i += 1
+        else:
+            j += 1
+    coverage, cursor = [], 0
+    for line in units:
+        coverage.append(sum(i in matched for i in range(cursor, cursor + len(line))) / max(1, len(line)))
+        cursor += len(line)
+    return coverage
+
+
+def resolve_recording_reference(
+    lines: list[dict], transcript: dict, duration_ms: int, *, inspect_window: Callable,
+) -> tuple[list[dict], dict]:
+    """Exclude unsupported phrases after local retries; preserve the original reference as evidence."""
+    omitted, decisions, checks = set(), [], []
+    windows = presence_windows(lines, transcript, duration_ms)
+    for window in windows:
+        observations = inspect_window(window["start_ms"], window["end_ms"])
+        if not observations or any(item.get("status") != "checked" for item in observations):
+            raise RuntimeError("Local lyric presence verification unavailable; refusing to force unsupported text")
+        checks.append({**window, "observations": observations})
+        indexes = window["line_indexes"]
+        context = window["context_line_indexes"]
+        candidates = [lines[i] for i in context]
+        coverage = []
+        for observation in observations:
+            # Context outside the gap must not confirm a repeated phrase in the gap.
+            words = [w for w in observation["words"] if w.get("probability", 0) >= 0.5
+                     and window["start_ms"] <= (w["start"] + w["end"]) * 500 < window["end_ms"]]
+            coverage.append(_presence_coverage(candidates, words))
+        for index in indexes:
+            position = context.index(index)
+            corroborating_sources = {item["source"] for item, values in zip(observations, coverage, strict=True)
+                                     if values[position] >= 0.4}
+            corroborated = len(corroborating_sources) >= 2
+            supported = max(values[position] for values in coverage) >= 0.5 or corroborated
+            if not supported:
+                omitted.add(index)
+            quiet = any(item["source"] == "vocals" and item.get("active_ratio", 1) < 0.02
+                        for item in observations) and all(not item["words"] for item in observations)
+            decisions.append({
+                "line_index": index, "text": lines[index]["text"],
+                "action": "keep" if supported else "omit",
+                "reason": ("corroborated_partial_phrase" if corroborated else "recognized_on_retry")
+                if supported else "no_vocal_evidence" if quiet else "unconfirmed",
+                "start_ms": window["start_ms"], "end_ms": window["end_ms"],
+                "coverage_by_source": {item["source"]: round(values[position], 4)
+                                       for item, values in zip(observations, coverage, strict=True)},
+            })
+    selected = copy.deepcopy(lines)
+    if omitted:
+        # Parentheses can span removed lines. Close vocal-role spans within each surviving line.
+        try:
+            roles = reference_vocal_tokens(lines)
+        except ValueError:
+            roles = [[] for _ in lines]
+        for index, line in enumerate(selected):
+            if line["text"].count("(") != line["text"].count(")") and roles[index]:
+                parts, background = [], False
+                for token in roles[index]:
+                    text = token["text"].replace("(", "").replace(")", "").strip()
+                    if not text:
+                        continue
+                    if token["isBackground"] != background:
+                        parts.append("(" if token["isBackground"] else ")")
+                        background = token["isBackground"]
+                    parts.append(text)
+                if background:
+                    parts.append(")")
+                line["text"] = " ".join(parts).replace("( ", "(").replace(" )", ")")
+    selected = [line for index, line in enumerate(selected) if index not in omitted]
+    return selected, {
+        "policy": "audio_supported_v1", "status": "adapted" if omitted else "checked",
+        "original_lines": copy.deepcopy(lines), "selected_lines": copy.deepcopy(selected),
+        "omitted_lines": len(omitted), "decisions": decisions, "windows": checks,
+    }
+
+
 def _unique_phrase(phrase: list[str], expected: list[str]) -> bool:
     """A repeated refrain is not an independent location anchor, even if one LCS prefers it."""
     return sum(expected[index:index + len(phrase)] == phrase

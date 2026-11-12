@@ -448,20 +448,18 @@ def test_pipeline_no_reference_has_explicit_heuristic_status(preparation):
     transcribe_mock.assert_called_once()
 
 
-def test_pipeline_missing_asr_still_aligns_native_reference_and_reports_degradation(preparation):
+def test_pipeline_missing_asr_refuses_unverified_native_reference(preparation):
     run, _, directory = preparation
     with (
         patch.object(job, "_transcribe", side_effect=RuntimeError("no speech")),
         patch.object(job, "_align_known_lyrics", return_value=(timed_document(), [])) as align,
         patch.object(job, "_check_vocal_boundaries", return_value={"status": "checked"}),
+        pytest.raises(RuntimeError, match="Independent transcription unavailable"),
     ):
-        lyrics, alignment = run(native_record())
-    align.assert_called_once()
-    assert lyrics["lines"]
-    assert alignment["needs_review"]
-    assert alignment["word_timing"] == "generated"
-    assert alignment["acoustic_verification"] == "unavailable"
-    assert json.loads((directory / "lyrics_validation.json").read_text())["status"] == "unavailable"
+        run(native_record())
+    align.assert_not_called()
+    report = json.loads((directory / "lyrics_validation.json").read_text())
+    assert report["status"] == "presence_verification_unavailable"
 
 
 def test_pipeline_auto_language_uses_independent_asr(preparation):
@@ -684,7 +682,7 @@ def test_native_times_are_not_silently_returned_when_acoustic_processing_fails(p
     with (
         patch.object(job, "_transcribe", side_effect=RuntimeError("ASR unavailable")),
         patch.object(job, "_align_known_lyrics", side_effect=RuntimeError("CTC unavailable")),
-        pytest.raises(RuntimeError, match="No timed lyrics available"),
+        pytest.raises(RuntimeError, match="Independent transcription unavailable"),
     ):
         run(native_record())
 
