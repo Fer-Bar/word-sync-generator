@@ -14,6 +14,7 @@ from karaoke_app.lyric_references import (
     compare_reference,
     genius_reference,
     plain_lines,
+    timing_quality,
 )
 from karaoke_app.lyrics_file import dump_lyrics_file, generate_srt, load_lyrics_file, lyrics_to_transcript
 
@@ -94,6 +95,9 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
         raise ValueError("Lyrics artifact must be inside the job directory")
     original = load_lyrics_file(lyrics_path)
     merged, grouping = apply_reference_text(original, reference["lines"])
+    quality = timing_quality(merged)
+    if quality["status"] != "checked":
+        raise ValueError(f"Reference requires acoustic recovery: {quality['issues'][:3]}")
     serialized = dump_lyrics_file(merged)
     if serialized == dump_lyrics_file(original):
         return {"status": "skipped", "reason": "reference_text_already_applied"}
@@ -121,6 +125,9 @@ def repair_prepared_lyrics(job_dir: Path, pipeline_path: Path, *, genius_url: st
         reference_file="lyrics_reference.json",
         reference_text_file="reference.txt",
         validation_file="lyrics_validation.json",
+        timing_quality=quality,
+        acoustic_verification="estimated" if grouping["estimated_words"] else alignment.get(
+            "acoustic_verification", "unverified"),
     )
     alignment["words"] = [
         {**word, "text": word["text"].strip()}

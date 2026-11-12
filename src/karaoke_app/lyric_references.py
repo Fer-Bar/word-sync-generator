@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import logging
+import math
 import os
 import re
 import unicodedata
@@ -15,6 +16,64 @@ from typing import Any
 from urllib.parse import urlparse
 
 LOGGER = logging.getLogger(__name__)
+
+
+def timing_quality(document: dict[str, Any], *, require_words: bool = True) -> dict[str, Any]:
+    """Check recording bounds and impossible timing density without treating metadata as acoustic proof."""
+    duration = document.get("metadata", {}).get("duration_ms")
+    issues, timed, untimed = [], 0, []
+    if not isinstance(duration, int | float) or not math.isfinite(duration) or duration <= 0:
+        issues.append({"reason": "missing_or_invalid_audio_duration"})
+        duration = None
+    previous = -1
+    channel_starts = {}
+    for index, line in enumerate(document.get("lines", [])):
+        if not str(line.get("text") or "").strip():
+            continue
+        start, end = line.get("start_ms"), line.get("end_ms")
+        if start is None and end is None and not require_words:
+            untimed.append(index)
+            continue
+        timed += 1
+        if not all(isinstance(t, int | float) and math.isfinite(t) for t in (start, end)):
+            issues.append({"line_index": index, "reason": "missing_or_nonfinite_timing"})
+            continue
+        words = line.get("words") or []
+        if start < 0 or end <= start or (duration and end > duration + 80) or (not words and start < previous):
+            issues.append({"line_index": index, "reason": "invalid_line_bounds"})
+        previous = start
+        if require_words and not words:
+            issues.append({"line_index": index, "reason": "missing_words"})
+        if len(words) >= 3 and all("confidence" in word for word in words):
+            confidence = sum(word["confidence"] for word in words) / len(words)
+            if confidence < 0.05:
+                issues.append({"line_index": index, "reason": "insufficient_acoustic_support",
+                               "mean_confidence": round(confidence, 4)})
+        short = 0
+        channels = {}
+        for word in words:
+            lo, hi = word.get("start_ms"), word.get("end_ms")
+            if not all(isinstance(t, int | float) and math.isfinite(t) for t in (lo, hi)):
+                issues.append({"line_index": index, "reason": "missing_or_nonfinite_word_timing"})
+                continue
+            channel = (word.get("agent") or line.get("agent") or "",
+                       bool(word.get("isBackground") or line.get("isBackground")))
+            if lo < start or hi > end or hi <= lo or lo < channel_starts.get(channel, -1):
+                issues.append({"line_index": index, "reason": "invalid_word_bounds"})
+            if 0 < hi - lo < 20:
+                issues.append({"line_index": index, "reason": "sub_frame_word"})
+            channel_starts[channel] = lo
+            channels.setdefault(channel, []).append((lo, hi))
+            short += hi - lo < 40
+        for spans in channels.values():
+            if len(spans) >= 3 and max(hi for _, hi in spans) - min(lo for lo, _ in spans) < len(spans) * 50:
+                issues.append({"line_index": index, "reason": "collapsed_line"})
+        if short >= 3 and short / len(words) >= 0.3:
+            issues.append({"line_index": index, "reason": "collapsed_words"})
+    if timed and untimed:
+        issues.extend({"line_index": index, "reason": "incomplete_line_timing"} for index in untimed)
+    return {"status": "rejected" if issues else "checked" if timed else "unavailable",
+            "issues": issues, "timed_lines": timed}
 
 
 def normalized_units(text: str) -> list[str]:
@@ -222,6 +281,7 @@ def _reference_backgrounds(document: dict[str, Any], desired: list[dict[str, Any
     except ValueError:
         # Incomplete provider punctuation is not evidence that the remaining song is a chorus.
         return
+    tokenized = [tokens for target, tokens in zip(desired, tokenized, strict=True) if normalized_units(target["text"])]
     for line, tokens in zip(document["lines"], tokenized, strict=True):
         units = [(unit, token["isBackground"]) for token in tokens for unit in normalized_units(token["text"])]
         words = line.get("words", [])
@@ -558,7 +618,7 @@ def compare_reference(lines: list[dict[str, Any]], transcript: dict[str, Any]) -
             "matched_units": len(matched),
             "total_units": len(units),
             "missing_or_different": [expected[i] for i in indexes if i not in mapping],
-            "needs_review": not anchor_safe,
+            "needs_review": bool(units) and not anchor_safe,
             "differences": [
                 {"operation": tag, "reference": expected[a:b], "asr": observed[c:d]}
                 for tag, a, b, c, d in matcher.get_opcodes()
@@ -577,7 +637,7 @@ def compare_reference(lines: list[dict[str, Any]], transcript: dict[str, Any]) -
                 position == cursor + len(units) or position not in reliable
                 or (run and mapping[position] != mapping[run[-1]] + 1)
             ):
-                if len(run) >= 3:
+                if len(run) >= 3 and _unique_phrase([expected[i] for i in run], expected):
                     selected = words[owners[mapping[run[0]]]:owners[mapping[run[-1]]] + 1]
                     if all(word.get("probability", 0) >= 0.5 and word["end"] > word["start"] for word in selected):
                         spans.append({
@@ -589,7 +649,7 @@ def compare_reference(lines: list[dict[str, Any]], transcript: dict[str, Any]) -
             if position in reliable and position < cursor + len(units):
                 run.append(position)
         entry["anchor_spans"] = spans
-        if anchor_safe:
+        if anchor_safe and len(units) >= 3 and _unique_phrase(units, expected):
             start_word, end_word = owners[matched[0]], owners[matched[-1]]
             selected = words[start_word : end_word + 1]
             if all(word.get("probability", 0) >= 0.5 and word["end"] > word["start"] for word in selected):
@@ -611,6 +671,49 @@ def compare_reference(lines: list[dict[str, Any]], transcript: dict[str, Any]) -
         "needs_review": any(line["needs_review"] for line in diagnostics) or len(mapping) != len(observed),
         "lines": diagnostics,
     }
+
+
+def acoustic_word_anchors(tokens: list[dict[str, Any]], transcript: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Locate complete reference tokens inside mandatory, confident ASR phrases."""
+    expected, token_units = [], []
+    for token in tokens:
+        units = normalized_units(token["text"])
+        token_units.append(list(range(len(expected), len(expected) + len(units))))
+        expected.extend(units)
+    observed, owners = [], []
+    words = [word for segment in transcript["segments"] for word in segment.get("words", [])]
+    for index, word in enumerate(words):
+        units = normalized_units(word["text"])
+        observed.extend(units)
+        owners.extend([index] * len(units))
+    matches = _unambiguous_matches(expected, observed)
+    supported, run = set(), []
+    for index in range(len(expected) + 1):
+        if index not in matches or (run and matches[index] != matches[run[-1]] + 1):
+            if len(run) >= 3:
+                supported.update(run)
+            run = []
+        if index in matches:
+            run.append(index)
+    anchors = {}
+    for index, positions in enumerate(token_units):
+        if not positions or not all(position in supported for position in positions):
+            continue
+        lo, hi = matches[positions[0]], matches[positions[-1]]
+        if (lo and owners[lo - 1] == owners[lo]) or (hi + 1 < len(owners) and owners[hi + 1] == owners[hi]):
+            continue
+        selected = words[owners[lo]:owners[hi] + 1]
+        if all(word.get("probability", 0) >= 0.5 and word["end"] > word["start"] for word in selected):
+            anchors[index] = {"start_ms": round(selected[0]["start"] * 1000),
+                              "end_ms": round(selected[-1]["end"] * 1000),
+                              "confidence": min(word["probability"] for word in selected)}
+    return anchors
+
+
+def _unique_phrase(phrase: list[str], expected: list[str]) -> bool:
+    """A repeated refrain is not an independent location anchor, even if one LCS prefers it."""
+    return sum(expected[index:index + len(phrase)] == phrase
+               for index in range(len(expected) - len(phrase) + 1)) == 1
 
 
 def likely_incomplete(validation: dict[str, Any]) -> bool:
@@ -917,6 +1020,8 @@ def apply_reference_text(
     This is a text-based fallback, not acoustic alignment. Estimated word indexes are
     reported separately so ASR confidence is never attributed to replacement words.
     """
+    annotated_structure = desired
+    desired = [line for line in desired if normalized_units(line["text"])]
     words = []
     for line in document["lines"]:
         for source in line.get("words", []):
@@ -925,14 +1030,18 @@ def apply_reference_text(
                 if key in line:
                     word.setdefault(key, line[key])
             words.append(word)
-    if [line["text"] for line in document["lines"]] == [line["text"] for line in desired] and all(
-        normalized_units("".join(word["text"] for word in line.get("words", []))) == normalized_units(line["text"])
-        for line in document["lines"]
+    if len(document["lines"]) == len(desired) and all(
+        normalized_units("".join(word["text"] for word in line.get("words", []))) == normalized_units(target["text"])
+        for line, target in zip(document["lines"], desired, strict=True)
     ):
         result = copy.deepcopy(document)
         for line, target in zip(result["lines"], desired, strict=True):
+            # Cross-line parentheses describe vocal roles; they are not missing sung words.
+            if target["text"].count("(") == target["text"].count(")"):
+                if _apply_reference_typography(line["words"], target["text"]):
+                    line["text"] = target["text"]
             _reference_agent(line, target)
-        _reference_backgrounds(result, desired)
+        _reference_backgrounds(result, annotated_structure)
         _reference_word_annotations(result, desired)
         return result, {
             "method": "existing_reference_timings",
@@ -957,22 +1066,9 @@ def apply_reference_text(
     if end - start < len(tokens):
         raise ValueError("Audio timing span is too short for reference words")
 
-    # Insertions with no silence borrow a neighboring word's window, never extend the song.
-    while True:
-        positions = [-1, *sorted(anchors), len(tokens)]
-        for left, right in zip(positions, positions[1:], strict=False):
-            lo = words[anchors[left]]["end_ms"] if left >= 0 else start
-            hi = words[anchors[right]]["start_ms"] if right < len(tokens) else end
-            if hi - lo < right - left - 1:
-                if left >= 0:
-                    del anchors[left]
-                elif right < len(tokens):
-                    del anchors[right]
-                else:
-                    raise ValueError("Cannot allocate reference timing span")
-                break
-        else:
-            break
+    # Text repair may estimate a small typo, never an omitted verse or a repeated chorus.
+    if len(tokens) - len(anchors) > max(3, len(tokens) * 0.1):
+        raise ValueError("Reference needs acoustic recovery: too many unmatched words")
 
     output: list[dict[str, Any] | None] = [None] * len(tokens)
     for index, source_index in anchors.items():
@@ -983,15 +1079,21 @@ def apply_reference_text(
         count = right - left - 1
         if not count:
             continue
+        if count > 3:
+            raise ValueError("Reference needs acoustic recovery: unmatched phrase")
         source_start = anchors[left] + 1 if left >= 0 else 0
         source_end = anchors[right] if right < len(tokens) else len(words)
-        lo = words[source_start]["start_ms"] if source_start < source_end else words[source_start - 1]["end_ms"]
-        hi = words[source_end - 1]["end_ms"] if source_start < source_end else words[source_end]["start_ms"]
+        lo = words[anchors[left]]["end_ms"] if left >= 0 else start
+        hi = words[anchors[right]]["start_ms"] if right < len(tokens) else end
+        if source_start < source_end:
+            lo, hi = words[source_start]["start_ms"], words[source_end - 1]["end_ms"]
         # ASR can omit a verse and leave only a few words near the next chorus.
         # A 1ms validity check alone would pack the missing verse into those words.
         if hi - lo < count or (count >= 3 and hi - lo < count * 50):
             lo = words[anchors[left]]["end_ms"] if left >= 0 else start
             hi = words[anchors[right]]["start_ms"] if right < len(tokens) else end
+        if hi - lo < count * 80 or hi - lo > 3000:
+            raise ValueError("Reference needs acoustic recovery: insufficient bounded timing evidence")
         for offset in range(count):
             index = left + 1 + offset
             output[index] = {
@@ -1017,7 +1119,7 @@ def apply_reference_text(
         _reference_agent(result["lines"][-1], target)
         cursor += len(line_tokens)
     result["plain"] = "\n".join(line["text"] for line in desired)
-    _reference_backgrounds(result, desired)
+    _reference_backgrounds(result, annotated_structure)
     _reference_word_annotations(result, desired)
     return result, {
         "method": "reference_text_with_asr_timing_fallback",

@@ -40,7 +40,8 @@ def acquire_youtube(url: str, directory: Path, cookies: Path | None = None) -> d
     selection = validate_inputs([source])
     identity = resolve_song_identity(raw, {})
     metadata = {key: identity.get(key) or raw.get(key) or selection["metadata"].get(key)
-                for key in ("title", "artist", "album")}
+                for key in ("title", "track", "artist", "album", "video_title", "duration", "uploader")}
+    metadata["webpage_url"] = url
     result = {**selection, "metadata": metadata, "origin": {"kind": "youtube", "url": url}}
     # Keep only the metadata needed by the form, not signed media URLs from yt-dlp.
     source.with_suffix(".info.json").unlink(missing_ok=True)

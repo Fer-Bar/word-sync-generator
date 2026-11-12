@@ -163,6 +163,31 @@ uv run karaoke cleanup outputs/JOB_ID RENDER_ID --restore --apply # Recuperar
 
 No es un borrado permanente ni libera espacio de disco. Conserva una copia del proyecto.
 
+### Selección y recuperación de letras
+
+CLI y notebook comparan referencias con el título original y la identidad musical,
+validan sus marcas temporales contra el audio y agrupan las referencias equivalentes.
+La duración declarada es una señal de selección, no una garantía de sincronización.
+
+Cuando Whisper omite gran parte de la letra, se hace un segundo intento con ventanas
+de 15 segundos sin el filtro de voz hablada, conservando la transcripción con mayor
+cobertura. Si sigue siendo insuficiente, también se analiza la grabación original.
+Si la alineación falla, el motor intenta ventanas acústicas, recuperación entre palabras
+reconocidas, alineación separada de coros y hasta dos referencias alternativas,
+reutilizando el modelo y las voces. Una estrofa omitida no se rellena
+repartiendo tiempos estimados. Si no se recupera una sincronización válida, se conserva
+el diagnóstico y los puntos de recuperación en lugar de entregar tiempos colapsados.
+`lyrics_reference.json` registra la selección y los intentos; `lyrics_validation.json`
+describe la calidad temporal del resultado y distingue alineación, estimación y ASR.
+`asr_anchored` identifica tiempos que usan Whisper como ancla; no representa una segunda
+verificación independiente. `passed` indica que las frases independientes disponibles
+superaron la comparación, no que se haya revisado manualmente cada palabra.
+
+**Estado de verificación:** se comprobaron la selección de referencias y el rechazo de
+tiempos colapsados con audios reales. La sincronización completa de Loca, A Good Day y
+What's Done Is Done sigue pendiente: los últimos intentos completos se rechazaron y
+la recuperación por capas posterior todavía necesita validación en Colab.
+
 ## Cómo está organizado
 
 | Parte | Responsabilidad |

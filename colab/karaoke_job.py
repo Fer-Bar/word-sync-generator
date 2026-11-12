@@ -208,6 +208,7 @@ def _run_pipeline(config: dict[str, Any]) -> None:
                 artifacts_dir=output_dir,
                 resolved_reference=reference,
                 performance=performance,
+                original_audio=original_audio,
             )
         except Exception as error:
             checkpoint = {
@@ -712,6 +713,7 @@ def _prepare_lyrics(
     artifacts_dir: Path | None = None,
     resolved_reference: tuple | None = None,
     performance: dict | None = None,
+    original_audio: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     lyrics_module = _load_lyrics_module()
     references = _load_references_module()
@@ -724,7 +726,7 @@ def _prepare_lyrics(
         if timing_reference is not None:
             document = timing_reference
             _event("Using LRCLIB lyrics as a reference; aligning word timings to the source audio")
-        elif any(line.get("words") for line in document["lines"]):
+        else:
             _event(f"Rebuilding word timings from audio: {timing_check['reason']}")
             # Rejected provider times must not become alignment crop boundaries.
             document = {**document, "lines": [
@@ -736,7 +738,8 @@ def _prepare_lyrics(
     transcript = None
     validation: dict[str, Any] = {"needs_review": True, "status": "unavailable", "lines": []}
     try:
-        transcript = _timed_call(performance, "whisper", _transcribe, vocals_path, metadata, config)
+        transcript = _timed_call(performance, "whisper", _transcribe, vocals_path, metadata, config,
+                                 reference_lines=document["lines"] if document else None, original_audio=original_audio)
         _save_lyrics_evidence(artifacts_dir, "transcription.json", transcript)
     except RuntimeError as error:
         if document is None:
@@ -763,72 +766,79 @@ def _prepare_lyrics(
     provenance: dict[str, Any] = {}
     lyrics = None
     acoustic_candidates = []
+    attempts = []
     if document is not None:
-        try:
-            lyrics, _ = _timed_call(
-                performance, "ctc_alignment", _align_known_lyrics, vocals_path, document, config,
-                provenance=provenance, context=alignment_context)
-            acoustic_candidates.append(lyrics)
-            _verify_alignment_anchors(lyrics, document, validation, provenance)
-            provenance.update(
-                engine="ctc-forced-aligner",
-                word_timing="generated",
-                model=CTC_ALIGNER_MODEL,
-                model_revision=CTC_ALIGNER_MODEL_REVISION,
-            )
-        except (AssertionError, KeyError, RuntimeError, ValueError) as error:
-            fallback_reason = str(error)
-            LOGGER.debug("Reference alignment failed; trying independent ASR anchors: %s", error)
-            recovery = references.anchored_document(document, validation)
-            partial_anchors = recovery is None and sum("anchor" in line for line in validation["lines"]) >= 2
-            if recovery is not None or partial_anchors:
-                try:
-                    lyrics, _ = _timed_call(
-                        performance, "ctc_recovery", _align_known_lyrics, vocals_path,
-                        recovery or document,
-                        config,
-                        provenance=provenance,
-                        recovery_only=True,
-                        context=alignment_context,
-                        **({"anchor_validation": validation} if partial_anchors else {}),
-                    )
-                    acoustic_candidates.append(lyrics)
-                    _verify_alignment_anchors(lyrics, document, validation, provenance)
-                    provenance.update(
-                        engine="ctc-forced-aligner",
-                        word_timing="generated",
-                        model=CTC_ALIGNER_MODEL,
-                        model_revision=CTC_ALIGNER_MODEL_REVISION,
-                        strategy="whisper_anchored_ctc",
-                        anchor_source="independent_whisper",
-                    )
-                except (AssertionError, KeyError, RuntimeError, ValueError) as recovery_error:
-                    lyrics = None
-                    fallback_reason = f"{error}; ASR recovery: {recovery_error}"
+        candidates = [(record, document, evidence)]
+        for alternative in (record or {}).get("alignment_alternatives", []):
+            alt_document, alt_evidence = _resolve_reference(metadata, config, alternative)
+            if alt_document is not None:
+                candidates.append((alternative, alt_document, alt_evidence))
+        for candidate_record, candidate_document, candidate_evidence in candidates:
+            candidate_document["metadata"] = {**candidate_document["metadata"], **document["metadata"]}
+            timed_reference, check = _native_timing_reference(candidate_document, metadata, candidate_record)
+            candidate_evidence["provided_timing_check"] = check
+            if timed_reference is None:
+                candidate_document = {**candidate_document, "lines": [
+                    {key: value for key, value in line.items() if key not in {"words", "start_ms", "end_ms"}}
+                    for line in candidate_document["lines"] if line["text"].strip()
+                ]}
             else:
-                lyrics = None
+                candidate_document = timed_reference
+            candidate_validation = references.compare_reference(candidate_document["lines"], transcript) if transcript \
+                else {"needs_review": True, "lines": []}
+            modes = [("ctc_alignment", {})]
+            if timed_reference is not None:
+                modes.append(("reference_window_ctc", {"recovery_only": True}))
+            if sum(bool(_recovery_anchor(line)) for line in candidate_validation["lines"]) >= 2:
+                modes.append(("asr_window_ctc", {"recovery_only": True, "anchor_validation": candidate_validation}))
+            if transcript:
+                modes.append(("asr_word_gap_ctc", {"anchor_transcript": transcript}))
+                if any(token.get("isBackground") for _, tokens in _alignment_document_tokens(
+                    candidate_document["lines"], character_alignment=False) for token in tokens):
+                    modes.append(("layered_ctc", {"anchor_transcript": transcript, "separate_backgrounds": True}))
+            for mode, options in modes:
+                candidate_provenance = {}
+                try:
+                    candidate_lyrics, _ = _timed_call(
+                        performance, mode, _align_known_lyrics, vocals_path, candidate_document, config,
+                        provenance=candidate_provenance, context=alignment_context, **options)
+                    _save_lyrics_evidence(artifacts_dir, f"alignment_candidate_{len(attempts) + 1:02d}.json",
+                                          {"mode": mode, "lrclib_id": (candidate_record or {}).get("id"),
+                                           "lyrics": candidate_lyrics})
+                    acoustic_candidates.append(candidate_lyrics)
+                    _verify_alignment_anchors(candidate_lyrics, candidate_document, candidate_validation,
+                                              candidate_provenance)
+                    desired = candidate_evidence.get("structure_lines") or candidate_document["lines"]
+                    desired = [line for line in desired if line["text"].strip()]
+                    candidate_lyrics, candidate_grouping = references.apply_reference_text(candidate_lyrics, desired)
+                    quality = references.timing_quality(candidate_lyrics)
+                    if quality["status"] != "checked":
+                        raise ValueError(f"Final timing check rejected alignment: {quality['issues'][:3]}")
+                    lyrics, document, evidence, record = (
+                        candidate_lyrics, candidate_document, candidate_evidence, candidate_record)
+                    validation = candidate_validation
+                    grouping = candidate_grouping
+                    provenance = {**candidate_provenance, "engine": "ctc-forced-aligner", "word_timing": "generated",
+                                  "model": CTC_ALIGNER_MODEL, "model_revision": CTC_ALIGNER_MODEL_REVISION}
+                    attempts.append({"lrclib_id": (record or {}).get("id"), "mode": mode, "status": "accepted"})
+                    break
+                except (AssertionError, KeyError, RuntimeError, ValueError) as error:
+                    fallback_reason = str(error)
+                    attempts.append({"lrclib_id": (candidate_record or {}).get("id"), "mode": mode,
+                                     "status": "rejected", "reason": str(error)})
+                    LOGGER.debug("Acoustic attempt %s rejected: %s", mode, error)
+            if lyrics is not None:
+                break
+    evidence["alignment_attempts"] = attempts
+    evidence["selection"] = (selected_record or {}).get("selection")
 
     if lyrics is not None:
-        desired = evidence.get("structure_lines") or evidence.get("lines") or document["lines"]
-        lyrics, grouping = references.apply_reference_text(lyrics, desired)
         lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
         evidence["grouping"] = grouping
         evidence["structure_restored"] = True
         validation["needs_review"] |= bool(grouping["estimated_words"] or evidence.get("text_conflict"))
         if grouping["estimated_words"]:
             provenance.update(word_timing="estimated", timing_fallback="reference_text")
-        if transcript:
-            prior_review = validation["needs_review"]
-            validation = references.compare_reference(lyrics["lines"], transcript)
-            validation["line_basis"] = "output"
-            validation["needs_review"] |= prior_review
-            for line, diagnostic in zip(lyrics["lines"], validation["lines"], strict=True):
-                if "anchor" in diagnostic:
-                    drift = abs(line["start_ms"] - diagnostic["anchor"]["start_ms"])
-                    diagnostic["start_deviation_ms"] = drift
-                    if drift > 1500:
-                        diagnostic["needs_review"] = True
-                        validation["needs_review"] = True
     else:
         if transcript is None:
             raise RuntimeError(f"No timed lyrics available: {fallback_reason}")
@@ -845,7 +855,14 @@ def _prepare_lyrics(
         validation["reference_not_applied"] = document is not None
         if document is not None:
             desired = evidence.get("structure_lines") or evidence.get("lines") or document["lines"]
-            lyrics, grouping = references.apply_reference_text(lyrics, desired)
+            desired = [line for line in desired if line["text"].strip()]
+            try:
+                lyrics, grouping = references.apply_reference_text(lyrics, desired)
+            except ValueError as error:
+                validation.update(status="timing_recovery_failed", acoustic_verification="failed", error=str(error))
+                _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
+                _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
+                raise RuntimeError(f"Acoustic lyric recovery failed; checkpoints retained: {error}") from error
             lyrics, grouping = references.refine_estimated_timings(lyrics, grouping, acoustic_candidates)
             lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
             evidence["grouping"] = grouping
@@ -884,9 +901,36 @@ def _prepare_lyrics(
     validation["needs_review"] |= boundary_check["status"] != "checked"
     lyrics = lyrics_module.validate_lyrics_file(lyrics, require_words=True)
 
-    validation["acoustic_verification"] = "completed" if transcript else "unavailable"
+    if transcript:
+        output_validation = references.compare_reference(lyrics["lines"], transcript)
+        output_validation["needs_review"] |= validation["needs_review"]
+        validation.update(output_validation, line_basis="output")
+        for line, diagnostic in zip(lyrics["lines"], validation["lines"], strict=True):
+            if "anchor" in diagnostic:
+                drift = abs(line["start_ms"] - diagnostic["anchor"]["start_ms"])
+                diagnostic["start_deviation_ms"] = drift
+                if drift > 1500:
+                    diagnostic["needs_review"] = True
+                    validation["needs_review"] = True
+    quality = references.timing_quality(lyrics)
+    if document is not None and transcript:
+        anchor_check = references.alignment_anchor_check(lyrics, lyrics["lines"], validation)
+        provenance["asr_anchor_check"] = anchor_check
+        if anchor_check["status"] == "drift":
+            quality["status"] = "rejected"
+            quality["issues"].append({"reason": "independent_asr_drift"})
+    validation["timing_quality"] = quality
+    validation["acoustic_verification"] = (
+        "failed" if quality["status"] != "checked" else
+        "estimated" if provenance.get("word_timing") == "estimated" else
+        "asr_anchored" if provenance.get("asr_anchor_words") else
+        "passed" if provenance.get("asr_anchor_check", {}).get("status") == "checked" else
+        "aligned_without_independent_anchors" if provenance.get("engine") == "ctc-forced-aligner" else "asr_only"
+    )
     _save_lyrics_evidence(artifacts_dir, "lyrics_reference.json", evidence)
     _save_lyrics_evidence(artifacts_dir, "lyrics_validation.json", validation)
+    if quality["status"] != "checked":
+        raise RuntimeError(f"Final lyric timing rejected; checkpoints retained: {quality['issues'][:3]}")
     if validation["needs_review"]:
         LOGGER.debug("Lyrics diagnostics saved to lyrics_validation.json (reference: %s)", evidence["source"])
     words = []
@@ -912,6 +956,7 @@ def _prepare_lyrics(
         "timing_policy": "acoustic",
         "provided_timing_check": evidence.get("provided_timing_check"),
         "acoustic_verification": validation["acoustic_verification"],
+        "timing_quality": quality,
         "reference_file": "lyrics_reference.json",
         "validation_file": "lyrics_validation.json",
         "transcription_file": "transcription.json" if transcript else None,
@@ -1110,6 +1155,11 @@ def _title_edition_tokens(title: str | None) -> set[str]:
     for pattern, token in EDITION_PATTERNS:
         if pattern.search(title):
             found.add(token)
+    for language in re.findall(
+        r"\b(english|spanish|french|german|portuguese|italian|japanese|korean|chinese|arabic)\s+version\b",
+        title.casefold(),
+    ):
+        found.add(f"language:{language}")
     return found
 
 
@@ -1134,6 +1184,10 @@ def _usable_lrclib_record(record: dict[str, Any]) -> bool:
         isinstance(record.get(key), str) and record[key].strip()
         for key in ("lyricsfile", "lyricsFile", "syncedLyrics", "plainLyrics")
     )
+
+
+def _comparison_title(title: str, artist: str | None) -> str:
+    return _resolve_song_identity({"title": title, "artist": _primary_artist(artist)}, {})["track"]
 
 
 def _lrclib_candidate_is_safe(
@@ -1162,6 +1216,8 @@ def _lrclib_candidate_is_safe(
         return False
 
     # 2. Title matching
+    track = _comparison_title(track, artist)
+    candidate_track = _comparison_title(candidate_track, candidate_artist)
     source_titles = _title_variants(track)
     cand_titles = _title_variants(candidate_track)
     source_base = _normalize_text(source_titles[-1]) if source_titles else ""
@@ -1230,8 +1286,8 @@ def _lrclib_match_score(
         artist = artist if artist is not None else metadata.get("artist")
         duration = duration if duration is not None else metadata.get("duration")
 
-    expected_title = track or ""
-    candidate_title = str(record.get("trackName") or "")
+    expected_title = _comparison_title(track or "", artist)
+    candidate_title = _comparison_title(str(record.get("trackName") or ""), record.get("artistName"))
     norm_expected = _normalize_text(expected_title)
     norm_candidate = _normalize_text(candidate_title)
 
@@ -1315,6 +1371,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     duration = metadata.get("duration")
     duration_str = str(round(float(duration))) if duration else ""
     primary_artist = _primary_artist(artist)
+    candidates_by_id: dict[int, dict[str, Any]] = {}
     LOGGER.debug(
         "Searching LRCLIB: track=%r artist=%r primary_artist=%r album=%r duration=%r",
         track, artist, primary_artist, album, duration,
@@ -1342,8 +1399,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-exact", value.get("id"), score)
-                return value
+                LOGGER.debug("LRCLIB candidate id=%s score=%.2f via get-exact", value.get("id"), score)
+                candidates_by_id[value["id"]] = value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 1 failed: %s", error)
 
@@ -1366,8 +1423,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-without-album", value.get("id"), score)
-                return value
+                candidates_by_id[value["id"]] = value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 2 failed: %s", error)
 
@@ -1390,16 +1446,16 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
                 value, track=track, artist=artist, duration=duration
             ):
                 score = _lrclib_match_score(value, metadata, track=track, artist=artist, duration=duration)
-                LOGGER.debug("LRCLIB selected id=%s score=%.2f via get-primary-artist", value.get("id"), score)
-                return value
+                candidates_by_id[value["id"]] = value
         except OSError as error:
             LOGGER.debug("LRCLIB GET Tier 3 failed: %s", error)
 
-    candidates_by_id: dict[int, dict[str, Any]] = {}
     title_variants = _title_variants(track)
     base_track = title_variants[-1] if len(title_variants) > 1 else None
 
     search_queries: list[dict[str, str]] = []
+    if metadata.get("video_title"):
+        search_queries.append({"q": metadata["video_title"]})
     target_artist = primary_artist or artist
     if target_artist:
         search_queries.append({"track_name": track, "artist_name": target_artist})
@@ -1408,6 +1464,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         if artist and primary_artist and _normalize_text(artist) != _normalize_text(primary_artist):
             search_queries.append({"track_name": track, "artist_name": artist})
 
+    safe_candidates = []
     for params in search_queries:
         LOGGER.debug("LRCLIB SEARCH structured: %s", params)
         try:
@@ -1427,14 +1484,6 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             if _lrclib_candidate_is_safe(c, track=track, artist=artist, duration=duration)
         ]
         LOGGER.debug("LRCLIB structured search: %d safe candidates", len(safe_candidates))
-        if safe_candidates:
-            selected = max(
-                safe_candidates,
-                key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
-            )
-            score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
-            LOGGER.debug("LRCLIB selected id=%s score=%.2f via structured-search", selected.get("id"), score)
-            return selected
 
     q_queries: list[str] = []
     if target_artist:
@@ -1465,17 +1514,43 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             if _lrclib_candidate_is_safe(c, track=track, artist=artist, duration=duration)
         ]
         LOGGER.debug("LRCLIB q-search: %d safe candidates", len(safe_candidates))
-        if safe_candidates:
-            selected = max(
-                safe_candidates,
-                key=lambda c: _lrclib_match_score(c, metadata, track=track, artist=artist, duration=duration),
-            )
-            score = _lrclib_match_score(selected, metadata, track=track, artist=artist, duration=duration)
-            LOGGER.debug("LRCLIB selected id=%s score=%.2f via q-search", selected.get("id"), score)
-            return selected
-
-    LOGGER.debug("No safe LRCLIB match found")
-    return None
+    ranked = []
+    diagnostics = []
+    references = _load_references_module()
+    for candidate in candidates_by_id.values():
+        if not _lrclib_candidate_is_safe(candidate, track=track, artist=artist, duration=duration):
+            continue
+        try:
+            document = _lyrics_document_from_record(candidate, metadata, config)
+        except (ValueError, TypeError, KeyError) as error:
+            diagnostics.append({"id": candidate["id"], "rejected": str(error)})
+            continue
+        check = references.timing_quality(document, require_words=False)
+        score = _lrclib_match_score(candidate, metadata)
+        # In-bounds timing is evidence; contradictory timing ranks below text-only data.
+        timing_rank = 2 if check["status"] == "checked" else 0 if check["status"] == "rejected" else 1
+        diagnostics.append({"id": candidate["id"], "score": score, "timing": check})
+        ranked.append((timing_rank, score, candidate, document))
+    ranked.sort(key=lambda item: (item[0], item[1], -abs(float(item[2].get("duration") or 0)
+                                                       - float(duration or 0)), -item[2]["id"]), reverse=True)
+    unique, seen = [], set()
+    for _, _, candidate, document in ranked:
+        signature = tuple((tuple(references.normalized_units(line["text"])),
+                           line.get("start_ms"), line.get("end_ms")) for line in document["lines"]
+                          if line["text"].strip())
+        if signature not in seen:
+            unique.append(candidate)
+            seen.add(signature)
+    if not unique:
+        LOGGER.debug("No safe LRCLIB match found")
+        return None
+    selected = dict(unique[0])
+    selected["selection"] = {"method": "ranked_identity_and_timeline", "candidates": diagnostics,
+                             "distinct_references": len(unique)}
+    selected["alignment_alternatives"] = unique[1:3]
+    LOGGER.debug("LRCLIB selected id=%s after comparing %d candidates (%d distinct)",
+                 selected["id"], len(diagnostics), len(unique))
+    return selected
 
 
 def _lrclib_candidate_summaries(results: list[Any]) -> list[dict[str, Any]]:
@@ -1608,7 +1683,7 @@ def _lyrics_document_from_record(
                 if not isinstance(document.get("metadata"), dict):
                     document["metadata"] = {}
                 document["metadata"].setdefault("title", record.get("trackName") or metadata["title"])
-                document["metadata"].setdefault("duration_ms", round(float(metadata["duration"]) * 1000))
+                document["metadata"]["duration_ms"] = round(float(metadata["duration"]) * 1000)
                 language = config["language"] if config["language"] != "auto" else metadata.get("language")
                 if language:
                     document["metadata"].setdefault("language", language)
@@ -1686,11 +1761,15 @@ def _native_timing_reference(
     document: dict[str, Any], metadata: dict[str, Any], record: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Validate provider timings for recovery hints, never as final audio-aligned output."""
-    if not _has_complete_word_timings(document):
-        return None, {"status": "rejected", "reason": "incomplete_word_timings"}
+    document = {**document, "metadata": {**document["metadata"],
+                                         "duration_ms": round(float(metadata["duration"]) * 1000)},
+                "lines": [line for line in document["lines"] if line["text"].strip()]}
+    quality = _load_references_module().timing_quality(document, require_words=False)
+    if quality["status"] != "checked":
+        return None, {"status": "rejected", "reason": "invalid_or_missing_timeline", "quality": quality}
     record = record or {}
-    track = str(metadata.get("track") or metadata.get("title") or "")
-    candidate_track = str(record.get("trackName") or "")
+    track = _comparison_title(str(metadata.get("track") or metadata.get("title") or ""), metadata.get("artist"))
+    candidate_track = _comparison_title(str(record.get("trackName") or ""), record.get("artistName"))
     title_matches = bool(track and candidate_track) and bool(
         {_normalize_text(title) for title in _title_variants(track)}
         & {_normalize_text(title) for title in _title_variants(candidate_track)}
@@ -1714,7 +1793,7 @@ def _native_timing_reference(
     try:
         normalized = _load_lyrics_module().validate_lyrics_file(
             {**document, "metadata": {**document["metadata"], "duration_ms": round(duration * 1000)}},
-            require_words=True,
+            require_words=False,
         )
         if any(line["end_ms"] > round(duration * 1000) for line in normalized["lines"]):
             raise ValueError("Provided lyrics extend beyond the source audio")
@@ -1900,16 +1979,21 @@ def _group_lines_into_macro_sections(
     return sections
 
 
+def _recovery_anchor(diagnostic):
+    return diagnostic.get("anchor") or next(
+        (span for span in diagnostic.get("anchor_spans", []) if span["start_unit"] == 0), None)
+
+
 def _asr_recovery_sections(tokenized_lines, raw_lines, validation, duration_ms):
     """Bound unmatched verses between reliable ASR phrases without estimating word timestamps."""
     references = _load_references_module()
     diagnostics = {id(line): diagnostic for line, diagnostic in zip(raw_lines, validation["lines"], strict=True)}
     anchors = []
-    for index, (line, tokens) in enumerate(tokenized_lines):
-        anchor = diagnostics[id(line)].get("anchor")
+    for index, (line, _tokens) in enumerate(tokenized_lines):
+        anchor = _recovery_anchor(diagnostics[id(line)])
         if (
             anchor and len(references.normalized_units(line["text"])) >= 3
-            and not any(token.get("isBackground") for token in tokens)
+            and not line.get("isBackground")
         ):
             anchors.append((index, anchor))
     if len(anchors) < 2 or any(
@@ -1924,7 +2008,8 @@ def _asr_recovery_sections(tokenized_lines, raw_lines, validation, duration_ms):
     for (start, lo), (end, hi) in zip(boundaries, boundaries[1:], strict=False):
         if hi <= lo:
             raise ValueError("ASR recovery window has no audio")
-        section = [(dict(line), tokens) for line, tokens in tokenized_lines[start:end]]
+        section = [({key: value for key, value in line.items() if key not in {"start_ms", "end_ms", "words"}}, tokens)
+                   for line, tokens in tokenized_lines[start:end]]
         section[0][0]["start_ms"] = lo
         section[-1][0]["end_ms"] = hi
         sections.append(section)
@@ -2007,6 +2092,111 @@ def _align_tokenized_lines(
     return output_lines
 
 
+def _align_asr_word_gaps(tokenized_lines, transcript, model, tokenizer, waveform, language, character_alignment):
+    """Recover missing phrases acoustically between ASR words, preserving recognized timestamps."""
+    from ctc_forced_aligner import generate_emissions, get_alignments, get_spans, postprocess_results, preprocess_text
+
+    tokens = [token for _, group in tokenized_lines for token in group]
+    anchors = _load_references_module().acoustic_word_anchors(tokens, transcript)
+    if len(anchors) < 6:
+        raise ValueError("Insufficient reliable ASR words for acoustic gap recovery")
+    duration_ms = round(waveform.shape[-1] / 16)
+    output = [None] * len(tokens)
+    for index, timing in anchors.items():
+        output[index] = {**timing, **{key: value for key, value in tokens[index].items() if key != "alignment_units"}}
+    boundaries = [-1, *sorted(anchors), len(tokens)]
+    gaps = [(left, right) for left, right in zip(boundaries, boundaries[1:], strict=False) if right - left > 1]
+    if len(gaps) > 64:
+        raise ValueError("Too many unsupported phrases for bounded acoustic recovery")
+    sections = []
+    for left, right in gaps:
+        start, end = max(0, left), min(len(tokens), right + 1)
+        if sections and start < sections[-1][1]:
+            sections[-1] = (sections[-1][0], end)
+        else:
+            sections.append((start, end))
+    for start, end in sections:
+        group = tokens[start:end]
+        # ASR often assigns a missing short word's audio to its neighbor. Re-align
+        # both boundary words acoustically instead of inventing space between them.
+        lo = anchors[start]["start_ms"] if start in anchors else 0
+        hi = anchors[end - 1]["end_ms"] if end - 1 in anchors else duration_ms
+        if hi - lo < len(group) * 50:
+            raise ValueError(f"Reference phrase cannot fit its acoustic anchors: {len(group)} words in {hi - lo} ms")
+        clip = waveform[..., max(0, lo * 16):min(waveform.shape[-1], hi * 16)]
+        recovered = _align_tokenized_lines(
+            model=model, tokenizer=tokenizer, waveform=clip,
+            tokenized_lines=[({"text": " ".join(token["text"] for token in group)}, group)],
+            language=language, character_alignment=character_alignment, generate_emissions=generate_emissions,
+            preprocess_text=preprocess_text, get_alignments=get_alignments, get_spans=get_spans,
+            postprocess_results=postprocess_results, time_offset_sec=lo / 1000, batch_size=1,
+        )[0]["words"]
+        output[start:end] = recovered
+    lines, cursor = [], 0
+    for raw, group in tokenized_lines:
+        words = output[cursor:cursor + len(group)]
+        cursor += len(group)
+        for index, word in enumerate(words):
+            word["text"] = group[index]["text"] + (" " if index + 1 < len(words) and not character_alignment else "")
+        text = raw["text"]
+        if text.count("(") != text.count(")"):
+            text = "".join(word["text"] for word in words)
+        lines.append({"text": text, "words": words, "agent": raw.get("agent") or "v1",
+                      "start_ms": min(word["start_ms"] for word in words),
+                      "end_ms": max(word["end_ms"] for word in words)})
+    return lines, len(anchors)
+
+
+def _align_layered_lyrics(tokenized_lines, transcript, model, tokenizer, waveform, language, character_alignment):
+    """Align lead and background voices independently inside acoustically located lines."""
+    from ctc_forced_aligner import generate_emissions, get_alignments, get_spans, postprocess_results, preprocess_text
+
+    lead = []
+    lead_indexes = []
+    for index, (raw, tokens) in enumerate(tokenized_lines):
+        foreground = [token for token in tokens if not token.get("isBackground")]
+        if foreground:
+            lead_indexes.append(index)
+            lead.append(({**raw, "text": " ".join(token["text"] for token in foreground)}, foreground))
+    if not lead:
+        raise ValueError("Layered alignment requires a lead vocal")
+    aligned_lead, anchor_count = _align_asr_word_gaps(
+        lead, transcript, model, tokenizer, waveform, language, character_alignment)
+    lead_by_index = dict(zip(lead_indexes, aligned_lead, strict=True))
+    duration_ms = round(waveform.shape[-1] / 16)
+    output = []
+    for index, (raw, tokens) in enumerate(tokenized_lines):
+        foreground = lead_by_index.get(index)
+        background = [token for token in tokens if token.get("isBackground")]
+        background_words = []
+        if background:
+            previous = next((lead_by_index[i] for i in reversed(lead_indexes) if i < index), None)
+            following = next((lead_by_index[i] for i in lead_indexes if i > index), None)
+            lo = foreground["start_ms"] if foreground else previous["end_ms"] if previous else 0
+            hi = foreground["end_ms"] if foreground else following["start_ms"] if following else duration_ms
+            lo, hi = max(0, lo - 800), min(duration_ms, hi + 800)
+            background_words = _align_tokenized_lines(
+                model=model, tokenizer=tokenizer, waveform=waveform[..., lo * 16:hi * 16],
+                tokenized_lines=[({"text": " ".join(token["text"] for token in background)}, background)],
+                language=language, character_alignment=character_alignment, generate_emissions=generate_emissions,
+                preprocess_text=preprocess_text, get_alignments=get_alignments, get_spans=get_spans,
+                postprocess_results=postprocess_results, time_offset_sec=lo / 1000, batch_size=1,
+            )[0]["words"]
+        leads = iter(foreground["words"] if foreground else [])
+        backgrounds = iter(background_words)
+        words = [next(backgrounds if token.get("isBackground") else leads) for token in tokens]
+        for position, word in enumerate(words):
+            word["text"] = tokens[position]["text"] + (
+                " " if position + 1 < len(words) and not character_alignment else "")
+        text = raw["text"]
+        if text.count("(") != text.count(")"):
+            text = "".join(word["text"] for word in words)
+        output.append({"text": text, "words": words, "agent": raw.get("agent") or "v1",
+                       "start_ms": min(word["start_ms"] for word in words),
+                       "end_ms": max(word["end_ms"] for word in words)})
+    return output, anchor_count
+
+
 class AlignmentContext:
     """Lazily load one CTC model and waveform for all alignment attempts of a job."""
 
@@ -2041,6 +2231,8 @@ def _align_known_lyrics(
     recovery_only: bool = False,
     context: AlignmentContext | None = None,
     anchor_validation: dict[str, Any] | None = None,
+    anchor_transcript: dict[str, Any] | None = None,
+    separate_backgrounds: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from ctc_forced_aligner import (
         generate_emissions,
@@ -2077,10 +2269,23 @@ def _align_known_lyrics(
 
     metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
     raw_lines_for_check = [line for line, _ in tokenized_lines]
+    if anchor_validation is not None:
+        raw_lines_for_check = None
     output_lines: list[dict[str, Any]] = []
 
     global_succeeded = False
-    if not recovery_only:
+    if anchor_transcript is not None:
+        align = _align_layered_lyrics if separate_backgrounds else _align_asr_word_gaps
+        output_lines, anchor_count = align(
+            tokenized_lines, anchor_transcript, model, tokenizer, waveform, language, character_alignment)
+        if not _is_alignment_healthy(output_lines):
+            raise RuntimeError("ASR word-gap acoustic recovery failed health checks")
+        global_succeeded = True
+        if provenance is not None:
+            provenance.update(strategy="layered_ctc" if separate_backgrounds else "asr_word_gap_ctc",
+                              asr_anchor_words=anchor_count,
+                              ctc_recovered_words=len(flat_tokens) - anchor_count)
+    if not recovery_only and not global_succeeded:
         try:
             candidate_lines = _align_tokenized_lines(
                 model=model,
@@ -2175,7 +2380,7 @@ def _align_known_lyrics(
         else:
             raise RuntimeError("Global alignment unhealthy and no reference timestamps available for macro-sections")
     lyrics_module = _load_lyrics_module()
-    sanitized_lines = lyrics_module.sanitize_lyrics_lines(output_lines)
+    sanitized_lines = lyrics_module.sanitize_lyrics_lines(output_lines, max_start_shift_ms=80)
     lyrics = {"version": "1.0", "metadata": metadata, "lines": sanitized_lines}
     alignment_words = []
     for line_idx, line in enumerate(sanitized_lines):
@@ -2294,39 +2499,58 @@ def _load_whisper_model(model_name: str, cache_dir: Path | None = None):
     )
 
 
-def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def _transcribe(
+    vocals_path: Path, metadata: dict[str, Any], config: dict[str, Any], *, reference_lines: list | None = None,
+    original_audio: Path | None = None,
+) -> dict[str, Any]:
     model = _load_whisper_model(config["whisper_model"])
     stream_output = os.environ.get("KARAOKE_STREAM_OUTPUT") == "1"
     language = None if config["language"] == "auto" else config["language"]
-    segments, info = model.transcribe(
-        str(vocals_path),
-        language=language,
-        beam_size=5,
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters={
-            "threshold": 0.25,
-            "min_silence_duration_ms": 500,
-            "speech_pad_ms": 250,
-        },
-        condition_on_previous_text=False,
-        **({"log_progress": True} if stream_output else {}),
-    )
+    def decode(vad: bool, audio: Path = vocals_path, chunk_seconds: int = 15):
+        segments, info = model.transcribe(
+            str(audio), language=language, beam_size=5, word_timestamps=True, vad_filter=vad,
+            vad_parameters={"threshold": 0.25, "min_silence_duration_ms": 500, "speech_pad_ms": 250},
+            condition_on_previous_text=False,
+            **({} if vad else {"chunk_length": chunk_seconds}),
+            **({"log_progress": True} if stream_output else {}),
+        )
+        words = [
+            {"start": round(float(word.start), 3), "end": round(float(word.end), 3),
+             "text": word.word.strip(), "probability": round(float(word.probability or 0), 4)}
+            for segment in segments for word in segment.words or []
+            if word.word.strip() and word.start is not None and word.end is not None and word.end > word.start
+        ]
+        return words, info
 
-    words = []
-    for segment in segments:
-        for word in segment.words or []:
-            text = word.word.strip()
-            if not text or word.start is None or word.end is None:
-                continue
-            words.append(
-                {
-                    "start": round(float(word.start), 3),
-                    "end": round(float(word.end), 3),
-                    "text": text,
-                    "probability": round(float(word.probability or 0), 4),
-                }
-            )
+    words, info = decode(True)
+    vad_used, audio_source, recovery = True, "vocals", {"attempted": False}
+    if reference_lines:
+        references = _load_references_module()
+        initial = references.compare_reference(reference_lines, {"segments": [{"words": words}]})
+        if initial["reference_coverage"] < 0.8:
+            _event("Recovering missing vocals with independent 15-second Whisper windows (without speech VAD)")
+            try:
+                recovered, recovered_info = decode(False)
+            except RuntimeError as error:
+                LOGGER.debug("Whisper window recovery unavailable; retaining initial transcript: %s", error)
+                recovered, recovered_info = [], info
+            checked = references.compare_reference(reference_lines, {"segments": [{"words": recovered}]})
+            recovery = {"attempted": True, "initial_coverage": initial["reference_coverage"],
+                        "recovered_coverage": checked["reference_coverage"], "chunk_seconds": 15}
+            if checked["reference_coverage"] > initial["reference_coverage"]:
+                words, info, vad_used = recovered, recovered_info, False
+            best_coverage = max(checked["reference_coverage"], initial["reference_coverage"])
+            if best_coverage < 0.8 and original_audio is not None:
+                _event("Checking missing vocals against the original recording")
+                try:
+                    mixed, mixed_info = decode(False, original_audio, 30)
+                    mixed_check = references.compare_reference(reference_lines, {"segments": [{"words": mixed}]})
+                    recovery["original_audio_coverage"] = mixed_check["reference_coverage"]
+                    if mixed_check["reference_coverage"] > best_coverage:
+                        words, info, vad_used, audio_source = mixed, mixed_info, False, "original_audio"
+                except RuntimeError as error:
+                    recovery["original_audio_error"] = str(error)
+                    LOGGER.debug("Original-recording ASR unavailable: %s", error)
     if not words:
         raise RuntimeError("Faster Whisper did not produce word timestamps")
 
@@ -2345,6 +2569,9 @@ def _transcribe(vocals_path: Path, metadata: dict[str, Any], config: dict[str, A
             "model": config["whisper_model"],
             "language": info.language,
             "language_probability": round(float(info.language_probability), 4),
+            "vad_filter": vad_used,
+            "audio_source": audio_source,
+            "recovery": recovery,
         },
         "segments": grouped_segments,
     }

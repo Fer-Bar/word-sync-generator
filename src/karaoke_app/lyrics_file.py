@@ -175,6 +175,7 @@ def sanitize_lyrics_lines(
     *,
     min_word_duration_ms: int = 20,
     min_line_duration_ms: int = 20,
+    max_start_shift_ms: int | None = None,
 ) -> list[dict[str, Any]]:
     """Repair invalid model timings without collapsing gaps or independent vocal channels."""
     sanitized_lines: list[dict[str, Any]] = []
@@ -216,6 +217,11 @@ def sanitize_lyrics_lines(
                         if start_ms >= prev_word["start_ms"] + min_word_duration_ms:
                             prev_word["end_ms"] = start_ms
                         else:
+                            if max_start_shift_ms is not None and prev_end - start_ms > max_start_shift_ms:
+                                raise ValueError(
+                                    f"Acoustic word order requires shifting {word_text.strip()!r} "
+                                    f"by {prev_end - start_ms} ms; realignment required"
+                                )
                             start_ms = prev_end
                             end_ms = max(end_ms, start_ms + min_word_duration_ms)
 

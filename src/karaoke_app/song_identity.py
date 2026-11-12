@@ -25,7 +25,7 @@ def resolve_song_identity(
 ) -> dict[str, Any]:
     """Prefer explicit values to conservative title inference, preserving edition names."""
     logger = logger if logger is not None else logging.getLogger(__name__)
-    video_title = raw.get("title") or "karaoke"
+    video_title = raw.get("video_title") or raw.get("title") or "karaoke"
     track = overrides.get("title") or raw.get("track")
     artist = overrides.get("artist") or raw.get("artist") or raw.get("creator")
     title = _clean_music_title(video_title)

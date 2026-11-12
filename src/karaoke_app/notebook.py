@@ -63,6 +63,7 @@ def preparation_config(
     verify_word_timings: bool = True,
     whisper_model: str = "large-v3",
     demucs_model: str = "htdemucs_ft",
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a preparation request; legacy verify_word_timings cannot disable acoustic checks."""
     from karaoke_app.visual_config import preparation_visuals
@@ -82,7 +83,7 @@ def preparation_config(
         "schema_version": 1,
         "operation": "prepare",
         "job_id": runtime.name,
-        "source": {"kind": "file", "value": str(source), "name": source.stem, "metadata": None},
+        "source": {"kind": "file", "value": str(source), "name": source.stem, "metadata": source_metadata},
         "cookies_path": None,
         "background": {"kind": "solid", "value": "#0B1020", "overlay_opacity": 0},
         "watermark": {"enabled": False},
@@ -159,6 +160,7 @@ def prepare_audio(
     whisper_model: str = "large-v3",
     demucs_model: str = "htdemucs_ft",
     whisper_cache: Path | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> PreparedProject:
     """Prepare local audio on this runtime, preserving failed attempts for recovery.
 
@@ -172,12 +174,12 @@ def prepare_audio(
         source, runtime, title=title, artist=artist, album=album, language=language, lyrics_text=lyrics_text,
         use_lrclib=use_lrclib, whisper_model=whisper_model, demucs_model=demucs_model,
         verify_word_timings=verify_word_timings,
+        source_metadata=source_metadata,
     )
     runtime.mkdir(parents=True, mode=0o700)
     config_path = runtime / "karaoke_job.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     environment = os.environ.copy()
-    environment["KARAOKE_RUNTIME_DIR"] = str(runtime)
     if whisper_cache is not None:
         environment["KARAOKE_WHISPER_CACHE"] = str(Path(whisper_cache).expanduser().resolve())
     try:
@@ -219,7 +221,6 @@ def render_project(
     config_path = runtime / "karaoke_job.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     environment = os.environ.copy()
-    environment["KARAOKE_RUNTIME_DIR"] = str(runtime)
     try:
         create_render_bundle(
             request.root, request.document, request.mode, subtitles.ass_by_mode,
