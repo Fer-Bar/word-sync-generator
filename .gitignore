@@ -30,9 +30,6 @@ frontend/.astro/
 inputs/
 reports/
 logos/*
-!logos/banner.png
-!logos/principal_logo.png
-!logos/thumbnail.png
 references/
 .env.*
 !.env.template

@@ -14,11 +14,3 @@ def runtime_resource(name: str) -> Path:
         raise ValueError(f"Unknown runtime resource: {name}")
     root = _CHECKOUT / "colab" if IS_CHECKOUT else PACKAGE_ROOT / "runtime"
     return root / name
-
-
-def logo_resource(name: str) -> Path:
-    """Return a bundled logo without writing inside the installed package."""
-    if name not in {"banner.png", "principal_logo.png", "thumbnail.png"}:
-        raise ValueError(f"Unknown bundled logo: {name}")
-    root = _CHECKOUT / "logos" if IS_CHECKOUT else PACKAGE_ROOT / "assets" / "logos"
-    return root / name

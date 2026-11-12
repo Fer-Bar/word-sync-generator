@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
-from karaoke_app.branding import THUMBNAIL_LOGO
 from karaoke_app.resources import PROJECT_ROOT
 
 FONTS = Path(__file__).parent / "assets" / "fonts"
@@ -226,7 +225,7 @@ def create_thumbnail(
     align: str = "start",
     graphic_style: str = "default",
     background_path: Path | Image.Image = REFERENCES / "background.png",
-    logo_path: Path | None = THUMBNAIL_LOGO,
+    logo_path: Path | None = None,
     title_font: Path | None = None,
     artist_font: Path = FONTS / "Montserrat.ttf",
     width: int = 1280,

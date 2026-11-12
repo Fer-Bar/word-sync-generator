@@ -50,8 +50,9 @@ comentario redundante: reserva las regresiones para comportamientos y errores re
 | `src/karaoke_app/assets/` | Motor visual, fuentes y licencias. |
 | `tests/` | Pruebas unitarias e integración. |
 
-El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/` y los logos como
-recursos de paquete, sin duplicar sus fuentes. `resources.py` separa esos archivos de los
+El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/`, sin duplicar sus
+fuentes. Los logos personales son archivos locales opcionales y no se distribuyen.
+`resources.py` separa los recursos de paquete de los
 datos editables del usuario. `KARAOKE_RUNTIME_DIR` permite ejecutar el pipeline fuera de
 `/content`; la CLI remota mantiene ese valor predeterminado. El notebook construye la
 solicitud y utiliza el mismo lanzador/pipeline, sin gestionar sesiones. La resolución de

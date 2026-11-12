@@ -185,8 +185,6 @@ def test_runtime_report_never_starts_models(monkeypatch):
 def test_bundled_resources_have_sources():
     for name in ("karaoke_job.py", "karaoke_launch.py", "requirements.txt"):
         assert resources.runtime_resource(name).is_file()
-    for name in ("banner.png", "principal_logo.png", "thumbnail.png"):
-        assert resources.logo_resource(name).is_file()
     with pytest.raises(ValueError):
         resources.runtime_resource("../../other")
 

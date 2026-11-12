@@ -135,7 +135,9 @@ def test_explicit_missing_watermark_never_uses_available_default(tmp_path, monke
     (tmp_path / "logos").mkdir()
     banner = tmp_path / "logos/banner.png"
     banner.write_bytes(b"image")
-    assert resolve_watermark_path(tmp_path) == banner
+    with pytest.raises(ValueError, match="watermark.path"):
+        resolve_watermark_path(tmp_path)
+    assert resolve_watermark_path(tmp_path, "logos/banner.png") == banner
     for path in ("missing.png", str(tmp_path / "missing.png")):
         with pytest.raises(FileNotFoundError):
             resolve_watermark_path(tmp_path, path)

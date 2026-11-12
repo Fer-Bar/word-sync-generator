@@ -3,11 +3,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from karaoke_app.resources import PROJECT_ROOT, logo_resource
+from karaoke_app.resources import PROJECT_ROOT
 from karaoke_app.style import StyleConfig, validate_color, validate_config_object, validate_number
 
 STATE_FILENAME = ".karaoke/project.json"
-DEFAULT_BANNER_RELATIVE = "logos/banner.png"
 
 
 def load_job_document(job_dir: Path) -> dict[str, Any]:
@@ -195,7 +194,7 @@ def _relative_path(value: Any, label: str) -> str:
 
 def resolve_watermark_path(job_dir: Path, path_str: str | None = None) -> Path:
     """Resolve explicit local/project/external images without substituting a default."""
-    requested = DEFAULT_BANNER_RELATIVE if path_str is None else path_str
+    requested = path_str
     if not isinstance(requested, str) or not requested.strip() or "\x00" in requested:
         raise ValueError("watermark.path must be a path string")
     candidate = Path(requested).expanduser()
@@ -211,6 +210,4 @@ def resolve_watermark_path(job_dir: Path, path_str: str | None = None) -> Path:
             resolved = (root / candidate).resolve()
             if resolved.is_relative_to(root) and resolved.is_file():
                 return resolved
-    if requested == DEFAULT_BANNER_RELATIVE and logo_resource("banner.png").is_file():
-        return logo_resource("banner.png")
     raise FileNotFoundError(f"Missing watermark asset: {requested}")

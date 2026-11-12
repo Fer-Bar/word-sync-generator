@@ -84,7 +84,8 @@ uv run playwright install --with-deps chromium
 uv run karaoke preview outputs/JOB_ID --mode lyrics --start 15 --duration 8 --output preview.mp4
 ```
 
-El preview muestra letras y fondo; la composición final añade intro y marca de agua.
+El preview muestra letras y fondo; la composición final añade intro y, solo si eliges
+`--logo ./mi-logo.png`, tu marca de agua. No se distribuyen logos personales.
 [Opciones visuales](docs/visuals.md).
 
 ### 3. Renderizar

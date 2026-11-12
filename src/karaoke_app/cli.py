@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 from dotenv import dotenv_values
 
 from karaoke_app.rendering import create_render_bundle as _create_render_bundle
-from karaoke_app.resources import PACKAGE_ROOT, PROJECT_ROOT, logo_resource, runtime_resource
+from karaoke_app.resources import PACKAGE_ROOT, PROJECT_ROOT, runtime_resource
 from karaoke_app.terminal import ProcessFailure, configure_logging, failure_summary, notify, run_process
 from karaoke_app.themes import THEMES
 from karaoke_app.upload_diagnostics import upload_failure_message, upload_size, warn_large_upload
@@ -31,7 +31,6 @@ LYRICS_MODULE = PACKAGE_ROOT / "lyrics_file.py"
 REFERENCES_MODULE = PACKAGE_ROOT / "lyric_references.py"
 COLAB_REQUIREMENTS = runtime_resource("requirements.txt")
 DEFAULT_COOKIES = PROJECT_ROOT / "cookies.txt"
-DEFAULT_LOGO = logo_resource("banner.png")
 REMOTE_JOB = Path("/content/karaoke_job.json")
 REMOTE_ARCHIVE = Path("/content/karaoke_result.zip")
 REMOTE_STATUS = Path("/content/karaoke_status.json")
@@ -102,8 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--watermark",
         dest="logo",
         type=Path,
-        default=DEFAULT_LOGO if DEFAULT_LOGO.is_file() else None,
-        help="Local image file to overlay as a watermark or logo (default: logos/banner.png if present)",
+        default=None,
+        help="Local image file to overlay as a watermark or logo (default: no logo)",
     )
     parser.add_argument(
         "--no-logo",
@@ -417,8 +416,6 @@ def run_job(args: argparse.Namespace) -> Path:
         logo_path = None
     else:
         logo_path = args.logo.resolve() if getattr(args, "logo", None) else None
-        if not logo_path and DEFAULT_LOGO.is_file():
-            logo_path = DEFAULT_LOGO
         if logo_path:
             _validate_image(logo_path, "Logo")
 

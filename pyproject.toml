@@ -42,9 +42,6 @@ packages = ["src/karaoke_app"]
 "colab/karaoke_job.py" = "karaoke_app/runtime/karaoke_job.py"
 "colab/karaoke_launch.py" = "karaoke_app/runtime/karaoke_launch.py"
 "colab/requirements.txt" = "karaoke_app/runtime/requirements.txt"
-"logos/banner.png" = "karaoke_app/assets/logos/banner.png"
-"logos/principal_logo.png" = "karaoke_app/assets/logos/principal_logo.png"
-"logos/thumbnail.png" = "karaoke_app/assets/logos/thumbnail.png"
 
 [tool.ruff]
 line-length = 120

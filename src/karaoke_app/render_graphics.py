@@ -9,7 +9,6 @@ from typing import Any
 import imageio_ffmpeg
 from PIL import Image, ImageEnhance, ImageOps
 
-from karaoke_app.branding import THUMBNAIL_LOGO
 from karaoke_app.job_document import resolve_job_asset, resolve_watermark_path
 from karaoke_app.thumbnail import add_thumbnail_logo, create_title_overlay
 
@@ -34,8 +33,7 @@ def graphic_logo(job_dir: Path, document: dict[str, Any]) -> Path | None:
         return None
     if watermark.get("path"):
         return resolve_watermark_path(job_dir, watermark["path"])
-    reference = THUMBNAIL_LOGO
-    return reference if reference.is_file() else None
+    return None
 
 
 def background_frame(job_dir: Path, document: dict[str, Any], *, time: float = 0) -> Image.Image:
