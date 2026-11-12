@@ -141,6 +141,12 @@ def test_preparation_retries_partial_anchors_and_discards_failed_candidates(samp
     text.write_text("\n".join(line["text"] for line in desired))
     config = {"language": "en", "lyrics": {"text_path": str(text)}, "whisper_model": "large-v3"}
     monkeypatch.setattr(job, "_transcribe", Mock(return_value=speech))
+    monkeypatch.setattr(job, "_lyric_presence_inspector", lambda *args: lambda *_: [{
+        "source": "vocals", "status": "checked", "words": [
+            {"text": word, "start": 4 + i * 0.5, "end": 4.4 + i * 0.5, "probability": 0.99}
+            for i, word in enumerate("missing whole verse".split())
+        ],
+    }])
     monkeypatch.setattr(job, "_check_vocal_boundaries", Mock(return_value={"status": "checked"}))
     align = Mock(side_effect=lambda *args, **kwargs: (
         copy.deepcopy(good if recovery_succeeds and kwargs.get("recovery_only") else bad), []
