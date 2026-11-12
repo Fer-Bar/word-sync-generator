@@ -18,6 +18,21 @@ from urllib.parse import urlparse
 LOGGER = logging.getLogger(__name__)
 
 
+def _reference_event(message: str) -> None:
+    LOGGER.info(message, extra={"user_event": {"kind": "message", "message": message}})
+
+
+def _provider_failure(error: Exception) -> dict[str, Any]:
+    """Describe HTTP failures without including a provider's HTML response body."""
+    status = getattr(getattr(error, "response", None), "status_code", None) or getattr(error, "code", None)
+    message = str(error).split("Response body:", 1)[0].split("<", 1)[0].strip()
+    if not isinstance(status, int):
+        match = re.search(r"(?:HTTP(?:Error)?[: ]*|status(?: code)?[:= ]+)([45]\d\d)\b", message, re.IGNORECASE)
+        status = int(match[1]) if match else None
+    reason = {403: "access_denied", 429: "rate_limited"}.get(status, "provider_error")
+    return {"error": f"{type(error).__name__}: {message[:300]}", "http_status": status, "reason": reason}
+
+
 def timing_quality(document: dict[str, Any], *, require_words: bool = True) -> dict[str, Any]:
     """Check recording bounds and impossible timing density without treating metadata as acoustic proof."""
     duration = document.get("metadata", {}).get("duration_ms")
@@ -403,6 +418,7 @@ def genius_reference(
             if song.get("id") not in {item.get("id") for item in candidates}:
                 candidates.append(song)
     LOGGER.debug("Genius search returned %d hits; %d safe unique matches", seen_hits, len(candidates))
+    _reference_event(f"Genius: {seen_hits} resultados; {len(candidates)} coincidencias compatibles únicas.")
     if len(candidates) != 1:
         LOGGER.debug("Genius reference unavailable: expected one unambiguous match, got %d", len(candidates))
         return None
@@ -437,6 +453,7 @@ def resolve_reference(
     """Resolve explicit TXT, LRCLIB, then Genius; keep failures and source evidence."""
     evidence: dict[str, Any] = {"attempts": []}
     if options.get("disable_lrclib"):
+        _reference_event("Referencias desactivadas: se usará Whisper.")
         LOGGER.debug("Lyric references disabled; using Whisper")
         evidence["source"] = "whisper"
         return None, evidence
@@ -447,6 +464,7 @@ def resolve_reference(
         if not lines:
             raise ValueError("Lyrics TXT contains no lyric lines")
         evidence.update(source="txt", filename=path.name, original_text=text, lines=lines)
+        _reference_event(f"Referencia TXT: {path.name} · {len(lines)} líneas; no se consultan LRCLIB/Genius.")
         return {"version": "1.0", "metadata": dict(metadata), "lines": lines}, evidence
     if record:
         LOGGER.debug("Resolving LRCLIB record: id=%r track=%r artist=%r", record.get("id"),
@@ -473,9 +491,11 @@ def resolve_reference(
                     if not native_words:
                         document["lines"] = desired
                         evidence["lines"] = copy.deepcopy(desired)
+            _reference_event(f"LRCLIB: referencia disponible, id={record.get('id')} · {len(document['lines'])} líneas.")
             return document, evidence
         except (ValueError, KeyError, TypeError) as error:
             LOGGER.debug("LRCLIB record %r could not be converted to lyrics: %s", record.get("id"), error)
+            _reference_event(f"LRCLIB: referencia id={record.get('id')} inválida; se intentará Genius.")
             evidence["attempts"].append({"source": "lrclib", "error": str(error)})
     if options.get("genius_reference_path"):
         try:
@@ -484,10 +504,15 @@ def resolve_reference(
                 url=options.get("genius_url"), candidate_is_safe=candidate_is_safe,
             )
             evidence.update(reference)
+            _reference_event(f"Genius: referencia local disponible, id={reference.get('id')}.")
             return {"version": "1.0", "metadata": dict(metadata), "lines": reference["lines"]}, evidence
         except (OSError, ValueError, KeyError, TypeError) as error:
             evidence["attempts"].append({"source": "genius", "acquisition": "local", "error": str(error)})
     try:
+        _reference_event(
+            f"Genius: buscando título={metadata.get('track') or metadata.get('title')!r}, "
+            f"artista={metadata.get('artist')!r}."
+        )
         reference = (fetch_genius or genius_reference)(
             metadata,
             url=options.get("genius_url"),
@@ -497,13 +522,26 @@ def resolve_reference(
             LOGGER.debug("Using Genius lyric reference: id=%r title=%r artist=%r", reference.get("id"),
                         (reference.get("metadata") or {}).get("title"), (reference.get("metadata") or {}).get("artist"))
             evidence.update(reference)
+            _reference_event(
+                f"Genius: referencia encontrada, id={reference.get('id')} · {len(reference['lines'])} líneas."
+            )
             return {"version": "1.0", "metadata": dict(metadata), "lines": reference["lines"]}, evidence
         evidence["attempts"].append({"source": "genius", "error": "no_unambiguous_metadata_match"})
+        _reference_event("Genius: sin una referencia utilizable e inequívoca para estos metadatos.")
     except Exception as error:
         # A provider failure must not discard the already acquired audio.
-        evidence["attempts"].append({"source": "genius", "error": f"{type(error).__name__}: {error}"[:2000]})
+        failure = _provider_failure(error)
+        evidence["attempts"].append({"source": "genius", **failure})
+        if failure["http_status"] == 403:
+            _reference_event(
+                "Genius: HTTP 403, acceso denegado por el servidor; no significa que la canción no exista. "
+                "La respuesta no identifica la causa exacta del bloqueo."
+            )
+        else:
+            _reference_event(f"Genius: consulta fallida ({failure['reason']}): {failure['error']}")
     evidence["source"] = "whisper"
     LOGGER.debug("No usable LRCLIB or Genius reference; using Whisper")
+    _reference_event("Sin referencia utilizable de LRCLIB/Genius: Whisper transcribirá y agrupará las líneas.")
     return None, evidence
 
 

@@ -66,8 +66,13 @@ def preparation_config(
     source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a preparation request; legacy verify_word_timings cannot disable acoustic checks."""
+    from karaoke_app.song_identity import swapped_identity_warning
     from karaoke_app.visual_config import preparation_visuals
 
+    if use_lrclib and lyrics_text is None:
+        warning = swapped_identity_warning(source_metadata or {}, title, artist)
+        if warning:
+            raise ValueError(warning)
     source = Path(source).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"Upload a local audio/video file first: {source}")

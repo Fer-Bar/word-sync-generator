@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from difflib import SequenceMatcher
@@ -685,13 +686,15 @@ def _prepare_reference(metadata, config, record):
         except LyricsProviderUnavailable as error:
             attempt = {"source": "lrclib", "status": "unavailable", "error": str(error)}
             record = None
-            LOGGER.debug("LRCLIB unavailable; trying remaining reference sources: %s", error)
+            _event(f"LRCLIB: servicio no disponible ({error}); se intentará Genius.")
     document, evidence = _resolve_reference(metadata, config, record)
     if document is None:
         _event("No usable lyric reference. Using speech transcription.")
     else:
         _event(f"Lyrics found: {evidence['source'].upper()} · {len(document['lines'])} lines")
     if attempt is not None:
+        attempt["query"] = {"title": metadata.get("track") or metadata.get("title"),
+                            "artist": metadata.get("artist"), "duration": metadata.get("duration")}
         evidence.setdefault("attempts", []).insert(0, attempt)
     return record, (document, evidence)
 
@@ -1287,19 +1290,24 @@ def _comparison_title(title: str, artist: str | None) -> str:
     return _resolve_song_identity({"title": title, "artist": _primary_artist(artist)}, {})["track"]
 
 
-def _lrclib_candidate_is_safe(
+def _lrclib_candidate_is_safe(candidate: dict[str, Any], *, track: str, artist: str | None,
+                              duration: float | int | None) -> bool:
+    return _lrclib_candidate_rejection(candidate, track=track, artist=artist, duration=duration) is None
+
+
+def _lrclib_candidate_rejection(
     candidate: dict[str, Any],
     *,
     track: str,
     artist: str | None,
     duration: float | int | None,
-) -> bool:
+) -> str | None:
     if not isinstance(candidate, dict) or not _usable_lrclib_record(candidate):
-        return False
+        return "no_usable_lyrics"
 
     candidate_track = str(candidate.get("trackName") or "")
     if not candidate_track.strip():
-        return False
+        return "missing_title"
 
     # 1. Strict artist matching (score must not compensate for an artist mismatch)
     candidate_artist = candidate.get("artistName")
@@ -1310,7 +1318,7 @@ def _lrclib_candidate_is_safe(
             candidate_artist,
             artist,
         )
-        return False
+        return "artist_mismatch"
 
     # 2. Title matching
     track = _comparison_title(track, artist)
@@ -1338,7 +1346,7 @@ def _lrclib_candidate_is_safe(
             candidate_track,
             track,
         )
-        return False
+        return "title_mismatch"
 
     # 3. Edition conflict check: incompatible explicit editions must be rejected
     source_editions = _title_edition_tokens(track)
@@ -1350,7 +1358,7 @@ def _lrclib_candidate_is_safe(
             source_editions,
             candidate_editions,
         )
-        return False
+        return "edition_mismatch"
 
     # 4. Duration check: reject if difference > 10 seconds when both are present
     candidate_duration = candidate.get("duration")
@@ -1363,11 +1371,11 @@ def _lrclib_candidate_is_safe(
                     candidate.get("id"),
                     delta,
                 )
-                return False
+                return "duration_mismatch"
         except (TypeError, ValueError):
             pass
 
-    return True
+    return None
 
 
 def _lrclib_match_score(
@@ -1462,13 +1470,14 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         LOGGER.debug("Using requested LRCLIB id %s: %s", value.get("id"), value.get("trackName"))
         return value
 
-    track = str(metadata.get("track") or metadata["title"])
     artist = metadata.get("artist")
+    track = _comparison_title(str(metadata.get("track") or metadata["title"]), artist)
     album = metadata.get("album")
     duration = metadata.get("duration")
     duration_str = str(round(float(duration))) if duration else ""
     primary_artist = _primary_artist(artist)
     candidates_by_id: dict[int, dict[str, Any]] = {}
+    _event(f"LRCLIB: buscando título={track!r}, artista={artist!r}, duración={duration}s.")
     LOGGER.debug(
         "Searching LRCLIB: track=%r artist=%r primary_artist=%r album=%r duration=%r",
         track, artist, primary_artist, album, duration,
@@ -1551,8 +1560,6 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     base_track = title_variants[-1] if len(title_variants) > 1 else None
 
     search_queries: list[dict[str, str]] = []
-    if metadata.get("video_title"):
-        search_queries.append({"q": metadata["video_title"]})
     target_artist = primary_artist or artist
     if target_artist:
         search_queries.append({"track_name": track, "artist_name": target_artist})
@@ -1560,6 +1567,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             search_queries.append({"track_name": base_track, "artist_name": target_artist})
         if artist and primary_artist and _normalize_text(artist) != _normalize_text(primary_artist):
             search_queries.append({"track_name": track, "artist_name": artist})
+    if metadata.get("video_title"):
+        search_queries.append({"q": metadata["video_title"]})
 
     safe_candidates = []
     for params in search_queries:
@@ -1570,6 +1579,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             LOGGER.debug("LRCLIB SEARCH structured %s failed: %s", params, error)
             continue
         if isinstance(results, list):
+            _event(f"LRCLIB: consulta {params} → {len(results)} resultados.")
             LOGGER.debug("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
             for record in results:
                 if isinstance(record, dict) and isinstance(record.get("id"), int):
@@ -1590,6 +1600,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     q_queries.append(track)
     if base_track and base_track != track:
         q_queries.append(base_track)
+    q_queries.append(_normalize_text(f"{target_artist or ''} {base_track or track}"))
     q_queries = list(dict.fromkeys(q_queries))
 
     for query in q_queries:
@@ -1600,6 +1611,7 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
             LOGGER.debug("LRCLIB SEARCH q=%r failed: %s", query, error)
             continue
         if isinstance(results, list):
+            _event(f"LRCLIB: consulta libre {query!r} → {len(results)} resultados.")
             LOGGER.debug("LRCLIB SEARCH returned %d candidates: %s", len(results), _lrclib_candidate_summaries(results))
             for record in results:
                 if isinstance(record, dict) and isinstance(record.get("id"), int):
@@ -1613,31 +1625,44 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
         LOGGER.debug("LRCLIB q-search: %d safe candidates", len(safe_candidates))
     ranked = []
     diagnostics = []
+    rejected = Counter()
     references = _load_references_module()
     for candidate in candidates_by_id.values():
-        if not _lrclib_candidate_is_safe(candidate, track=track, artist=artist, duration=duration):
+        reason = _lrclib_candidate_rejection(candidate, track=track, artist=artist, duration=duration)
+        if reason:
+            rejected[reason] += 1
+            diagnostics.append({"id": candidate.get("id"), "rejected": reason})
             continue
         try:
             document = _lyrics_document_from_record(candidate, metadata, config)
         except (ValueError, TypeError, KeyError) as error:
             diagnostics.append({"id": candidate["id"], "rejected": str(error)})
+            rejected["invalid_lyrics"] += 1
             continue
         check = references.timing_quality(document, require_words=False)
         score = _lrclib_match_score(candidate, metadata)
         # In-bounds timing is evidence; contradictory timing ranks below text-only data.
         timing_rank = 2 if check["status"] == "checked" else 0 if check["status"] == "rejected" else 1
-        diagnostics.append({"id": candidate["id"], "score": score, "timing": check})
-        ranked.append((timing_rank, score, candidate, document))
-    ranked.sort(key=lambda item: (item[0], item[1], -abs(float(item[2].get("duration") or 0)
-                                                       - float(duration or 0)), -item[2]["id"]), reverse=True)
+        exact_identity = (
+            _normalize_text(_comparison_title(str(candidate.get("trackName") or ""), candidate.get("artistName")))
+            == _normalize_text(track)
+            and _normalize_text(_primary_artist(candidate.get("artistName"))) == _normalize_text(target_artist)
+        )
+        diagnostics.append({"id": candidate["id"], "score": score, "timing": check,
+                            "identity_match": "exact" if exact_identity else "similar"})
+        ranked.append((exact_identity, timing_rank, score, candidate, document))
+    ranked.sort(key=lambda item: (item[0], item[1], item[2], -abs(float(item[3].get("duration") or 0)
+                                                               - float(duration or 0)), -item[3]["id"]), reverse=True)
     unique, seen = [], set()
-    for _, _, candidate, document in ranked:
+    for _, _, _, candidate, document in ranked:
         signature = tuple((tuple(references.normalized_units(line["text"])),
                            line.get("start_ms"), line.get("end_ms")) for line in document["lines"]
                           if line["text"].strip())
         if signature not in seen:
             unique.append(candidate)
             seen.add(signature)
+    _event(f"LRCLIB: {len(candidates_by_id)} candidatos únicos; {len(unique)} referencias compatibles distintas. "
+           f"Descartes: {dict(rejected) or 'ninguno'}.")
     if not unique:
         LOGGER.debug("No safe LRCLIB match found")
         return None
@@ -1645,6 +1670,8 @@ def _fetch_lrclib(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str,
     selected["selection"] = {"method": "ranked_identity_and_timeline", "candidates": diagnostics,
                              "distinct_references": len(unique)}
     selected["alignment_alternatives"] = unique[1:3]
+    _event(f"LRCLIB: seleccionado id={selected['id']}, título={selected.get('trackName')!r}, "
+           f"artista={selected.get('artistName')!r}, duración={selected.get('duration')}s.")
     LOGGER.debug("LRCLIB selected id=%s after comparing %d candidates (%d distinct)",
                  selected["id"], len(diagnostics), len(unique))
     return selected

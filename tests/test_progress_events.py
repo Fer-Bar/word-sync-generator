@@ -1,4 +1,4 @@
-"""Progress describes outcomes instead of exposing provider attempts and diagnostics."""
+"""Provider attempts remain visible without announcing a premature transcription fallback."""
 
 import json
 import logging
@@ -23,7 +23,9 @@ def test_reference_recovery_has_no_premature_whisper_or_warning(monkeypatch, cap
     with caplog.at_level(logging.DEBUG):
         job._prepare_reference({}, {'lyrics': {}}, None)
     messages = [e.get('message', '') for e in events(caplog)]
-    assert messages == [f'Lyrics found: {reference_source.upper()} · 1 lines']
+    assert messages[-1] == f'Lyrics found: {reference_source.upper()} · 1 lines'
+    assert any('LRCLIB: servicio no disponible' in message for message in messages)
+    assert not any('Whisper' in message for message in messages)
     assert not any(e['kind'] == 'warning' for e in events(caplog))
 
 

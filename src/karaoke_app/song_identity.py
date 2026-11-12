@@ -7,9 +7,16 @@ from typing import Any
 
 def _clean_music_title(value: str) -> str:
     """Remove presentation labels while retaining remix, live and edition markers."""
-    label = (r"(?:official\s+(?:music\s+)?(?:audio|video|lyric\s+video)"
-             r"|lyrics?(?:\s+video)?|audio\s+oficial|video\s+oficial)")
+    label = (r"(?:official\s+(?:music\s+)?(?:audio|video|lyrics?(?:\s+video)?)"
+             r"|lyrics?(?:\s+(?:video|version))?|video\s+lyrics?|audio\s+oficial|video\s+oficial|visualizer)")
+    # A presentation label marks the boundary before promotional/album text.
+    suffix = re.search(rf"(?:[\[(]\s*{label}\s*[\])]|\b{label})\s*\|\s*.+$", value, re.IGNORECASE)
+    if suffix:
+        prefix = value[:suffix.start()].strip()
+        if len(re.split(r"\s+[-–—|]\s+", prefix)) == 2:
+            value = prefix
     value = re.sub(rf"\s*[\[(]\s*{label}\s*[\])]", "", value, flags=re.IGNORECASE)
+    value = re.sub(rf"\s+(?:[-–—|]\s+)?{label}$", "", value, flags=re.IGNORECASE)
     return value.strip().strip('\"“”').strip()
 
 
@@ -72,3 +79,23 @@ def resolve_song_identity(
                      "Use --artist to specify the artist.", raw.get("uploader"))
     logger.debug("Resolved song: track=%r artist=%r", track, artist)
     return {"title": track, "track": track, "artist": artist, "video_title": video_title}
+
+
+def swapped_identity_warning(raw: dict[str, Any], title: str | None, artist: str | None) -> str | None:
+    """Flag an exact reversal of source identity without changing explicit user fields."""
+    if not raw or not title or not artist:
+        return None
+    expected = resolve_song_identity(raw, {})
+
+    def comparable(value: str | None) -> str:
+        return " ".join(re.findall(r"\w+", _clean_music_title(value or "").casefold()))
+
+    expected_title, expected_artist = comparable(expected["track"]), comparable(expected["artist"])
+    if (expected_title and expected_artist and expected_title != expected_artist
+            and comparable(title) == expected_artist and comparable(artist) == expected_title):
+        return (
+            "Título y artista parecen invertidos respecto del origen. "
+            f"Revisa el paso 3: título «{expected['track']}», artista «{expected['artist']}». "
+            "No se modificaron tus campos."
+        )
+    return None
