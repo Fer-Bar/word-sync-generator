@@ -105,7 +105,7 @@ def preparation_config(
         "demucs_model": demucs_model,
         "video": video,
         "archive_path": str(runtime / "prepared.zip"),
-        **preparation_visuals(video, SimpleNamespace()),
+        **preparation_visuals(video, SimpleNamespace(preset="classic")),
     }
 
 

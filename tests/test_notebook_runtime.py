@@ -24,6 +24,8 @@ def test_config_accepts_external_read_only_inputs_without_writing(tmp_path):
     assert config["lyrics"]["disable_lrclib"] is True
     assert config["archive_path"] == str(runtime / "prepared.zip")
     assert config["watermark"] == {"enabled": False}
+    assert config["render_style"]["lyrics_effect"] == "classic"
+    assert config["render_background"] == {"kind": "solid", "color": "#0B1020"}
     assert not runtime.exists()
     assert source.read_bytes() == b"audio"
 
