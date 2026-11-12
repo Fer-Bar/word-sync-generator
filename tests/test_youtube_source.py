@@ -37,9 +37,9 @@ def test_cookie_retry_and_metadata_filter(tmp_path, monkeypatch):
 
 def test_download_failure_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr(youtube_source.shutil, "which", lambda _: "/bin/deno")
-    runner = Mock(return_value=subprocess.CompletedProcess([], 1, "", "bot"))
+    runner = Mock(return_value=subprocess.CompletedProcess([], 1, "", "ERROR: Sign in to confirm you're not a bot"))
     monkeypatch.setattr(youtube_source, "stream_process", runner)
-    with pytest.raises(RuntimeError, match="no Colab session started"):
+    with pytest.raises(RuntimeError, match="YouTube download failed.*Sign in"):
         youtube_source.download_youtube("https://youtu.be/test", tmp_path)
 
 

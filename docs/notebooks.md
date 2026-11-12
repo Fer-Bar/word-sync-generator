@@ -72,8 +72,12 @@ versión anterior como sustituto: comprueba versión, SHA-256 y capacidades del 
 
 Las celdas 4b usan la transferencia nativa de Colab, sin botones `ipywidgets` ni menú de acciones.
 Permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente, sin repetir el paso 4.
-El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
-en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
+El YAML corregido debe conservar el título y el artista conocido del proyecto; se ignoran
+diferencias de mayúsculas, espacios y puntuación. La duración declarada, si existe, debe
+coincidir con el audio original y ningún tiempo puede excederlo, con un margen de un segundo
+para redondeos. Un rechazo conserva la letra actual sin crear respaldos; una importación
+válida guarda una copia anterior en `.karaoke/lyrics-history/` antes de reemplazarla.
+Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
 
 No hace falta editar rutas ni montar Google Drive. El audio se procesa
@@ -133,7 +137,9 @@ Edita únicamente `notebooks/generate_video.ipynb`. Para regenerar su motor desd
 `src/karaoke_app/` y `colab/`, usa `uv run python scripts/build_notebook.py`.
 El comando construye en un directorio temporal, valida el contenido y deja un único wheel
 en `notebooks/`, con versión y SHA-256 actualizados en el cuaderno. `--check` detecta un
-wheel desactualizado respecto al código local o mezclado con otro cuaderno.
+wheel desactualizado respecto al código local, requisitos de Python, dependencias o extras,
+además de mezclas con otro cuaderno. Compara requisitos analizados, sin depender de su orden
+ni de diferencias de formato.
 
 ### Publicar una versión
 
@@ -145,10 +151,14 @@ Tras revisar los cambios, ejecutar los checks y autorizar la publicación:
 3. Confirma el código, el lockfile y el cuaderno de esa misma revisión.
 4. Crea y publica el tag correspondiente a la versión del paquete.
 
-El workflow `.github/workflows/release.yml` comprueba que tag, paquete y cuaderno
+El workflow `Checks` ejecuta las validaciones para el commit del tag. Solo si termina
+correctamente llama a `.github/workflows/release.yml`, mediante `needs: local-pipeline`.
+La publicación usa ese mismo commit y no repite la suite de pruebas.
+El workflow reutilizable comprueba que tag, paquete y cuaderno
 coincidan, verifica la exclusión de logos locales y ejecuta el mismo constructor. Rechaza
 la publicación si reconstruir cambia el cuaderno confirmado en Git. Publica los dos
-archivos de `notebooks/` mediante el token del propio workflow. **Publicar el tag activa la publicación**;
+archivos de `notebooks/` mediante el token del propio workflow. **Publicar el tag inicia los checks y,
+si pasan, la publicación**;
 no se ejecuta por un push normal ni por abrir un PR. No requiere tokens en el cuaderno.
 Si la release ya existe, falla en vez de reemplazar sus archivos silenciosamente.
 

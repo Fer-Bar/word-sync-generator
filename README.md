@@ -28,6 +28,8 @@ Usa siempre el cuaderno y el wheel de la misma entrega. Ejecuta las celdas indiv
 4. **Preparar:** reutiliza el modelo y sus pesos descargados; respeta el idioma final del formulario.
    La revisión opcional **4b** sigue este orden:
    descargar voces → descargar YAML → abrir LyricsEditor → subir corrección.
+   La importación comprueba título, artista conocido, duración y límites de tiempos contra
+   el audio del proyecto antes de reemplazar la letra; conserva un respaldo de la anterior.
    En **4c.1**, pulsa ▶ para abrir el diseño guardado. Abrirlo sin editar no requiere aplicarlo
    ni invalida el vídeo anterior. Puedes elegir un único **Fondo**: Clásico, Fluido, Cósmico, Color,
    Imagen, Vídeo o Vídeo de origen. Cada opción muestra únicamente sus ajustes;
@@ -96,7 +98,9 @@ uv run python scripts/build_notebook.py --check
 
 La versión se cambia solo en `pyproject.toml`; el comando genera el wheel y actualiza
 la versión y su SHA-256 en el cuaderno. Elimina wheels anteriores de esa carpeta y
-comprueba que el paquete contiene el código actual. CI y publicación usan el mismo comando.
+comprueba código, requisitos de Python, dependencias y extras del paquete.
+CI y publicación usan el mismo comando. Un tag solo publica cuando todos los checks
+de ese mismo commit pasan; el workflow de publicación reutiliza ese resultado.
 Los audios locales se conservan en `inputs/notebook-examples/` y los resultados en
 `outputs/notebook-examples/`, separados de la entrega.
 

@@ -13,6 +13,11 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+from packaging.markers import Marker
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -38,13 +43,36 @@ def source_bytes(path: Path) -> bytes:
     return content
 
 
+def validate_metadata(metadata, project: dict) -> None:
+    """Compare installation requirements semantically, including optional extras."""
+    if canonicalize_name(metadata.get("Name", "")) != canonicalize_name(project["name"]):
+        raise ValueError("Wheel package name does not match pyproject.toml")
+    if SpecifierSet(metadata.get("Requires-Python", "")) != SpecifierSet(project.get("requires-python", "")):
+        raise ValueError("Wheel Python requirement is stale. Rebuild the notebook delivery.")
+    expected = {Requirement(value) for value in project.get("dependencies", [])}
+    extras = project.get("optional-dependencies", {})
+    for extra, values in extras.items():
+        for value in values:
+            requirement = Requirement(value)
+            marker = f'extra == "{canonicalize_name(extra)}"'
+            requirement.marker = Marker(f"({requirement.marker}) and {marker}" if requirement.marker else marker)
+            expected.add(requirement)
+    if {canonicalize_name(value) for value in metadata.get_all("Provides-Extra", [])} != {
+        canonicalize_name(extra) for extra in extras
+    }:
+        raise ValueError("Wheel optional extras are stale. Rebuild the notebook delivery.")
+    if {Requirement(value) for value in metadata.get_all("Requires-Dist", [])} != expected:
+        raise ValueError("Wheel dependencies are stale. Rebuild the notebook delivery.")
+
+
 def validate_wheel(root: Path, wheel: Path, project: dict) -> None:
-    """Reject wheels whose version or packaged sources differ from this checkout."""
+    """Reject wheels whose version, requirements or sources differ from this checkout."""
     version = project["project"]["version"]
     with zipfile.ZipFile(wheel) as archive:
         metadata = BytesParser().parsebytes(archive.read(f"lyrics_generator-{version}.dist-info/METADATA"))
         if metadata["Version"] != version:
             raise ValueError("Wheel version does not match pyproject.toml")
+        validate_metadata(metadata, project["project"])
         if any("logos" in Path(name).parts for name in archive.namelist()):
             raise ValueError("Local artwork must not be packaged")
         sources = package_sources(root, project)
