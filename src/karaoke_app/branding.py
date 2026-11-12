@@ -4,10 +4,9 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from karaoke_app.resources import PROJECT_ROOT, logo_resource
+from karaoke_app.resources import PROJECT_ROOT
 
 LOGOS = PROJECT_ROOT / "logos"
-THUMBNAIL_LOGO = logo_resource("thumbnail.png")
 
 
 def store_shared_logo(path: Path, *, dry_run: bool = False) -> str:

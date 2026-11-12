@@ -88,10 +88,15 @@ los PNG correspondientes; usa `thumbnail --output-dir` para conservar variantes.
 ## Logo
 
 ```bash
-uv run karaoke configure outputs/PROYECTO --logo logos/banner.png --logo-position top_left
+uv run karaoke configure outputs/PROYECTO --logo ./mi-logo.png --logo-position top_left
 uv run karaoke configure outputs/PROYECTO --logo-scale 0.18 --logo-opacity 0.85
 uv run karaoke configure outputs/PROYECTO --no-logo
 ```
+
+No se incluye ni se selecciona ninguna marca por defecto, aunque existan imágenes locales
+en `logos/`. Usa `--logo` para elegir una propia; `logos/` permanece fuera de Git y del wheel.
+Las intros y miniaturas se generan también sin logo. El ZIP de vídeos incluye sus PNG;
+la descarga de MP4 por separado no incluye las miniaturas.
 
 Las posiciones son `top_left`, `top_right`, `bottom_left` y `bottom_right`. La escala
 va de 0.01 a 0.5 del ancho del video y la opacidad de 0 a 1. Conserva el archivo de logo

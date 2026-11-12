@@ -9,3 +9,6 @@
 *.js text eol=lf
 *.css text eol=lf
 *.html text eol=lf
+*.txt text eol=lf
+*.ipynb text eol=lf
+LICENSE text eol=lf

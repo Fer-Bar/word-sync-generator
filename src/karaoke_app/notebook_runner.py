@@ -3,6 +3,7 @@
 import argparse
 import json
 from dataclasses import asdict
+from importlib.metadata import version
 from pathlib import Path
 
 from karaoke_app.job_document import load_job_document, resolve_job_asset
@@ -30,6 +31,7 @@ def project_info(directory: Path) -> dict:
         "review": {
             "reference_source": alignment.get("reference_source") or alignment.get("text_source"),
             "alignment_engine": alignment.get("engine"), "word_timing": alignment.get("word_timing"),
+            "acoustic_verification": alignment.get("acoustic_verification"),
             "needs_review": alignment.get("needs_review"),
             "anchor_status": anchor_check.get("status") if isinstance(anchor_check, dict) else None,
         },
@@ -55,7 +57,8 @@ def main() -> None:
         from karaoke_app.notebook_language import LANGUAGE_OPTIONS
 
         result = {**runtime_report(), "cuda_available": torch.cuda.is_available(),
-                  "notebook_features": ["youtube", "configure", "detect-language"],
+                  "engine_version": version("lyrics-generator"),
+                  "notebook_features": ["youtube", "configure", "detect-language", "inspect-design"],
                   "notebook_languages": LANGUAGE_OPTIONS}
         if result["cuda_available"]:
             result["gpu"] = torch.cuda.get_device_name(0)

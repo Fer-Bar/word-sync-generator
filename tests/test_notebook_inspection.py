@@ -11,6 +11,18 @@ import pytest
 from karaoke_app.job_document import STATE_FILENAME
 
 
+def test_inspect_exposes_saved_design_without_changing_project(prepared_project):
+    from karaoke_app.job_document import load_job_document
+    from karaoke_app.notebook_runner import project_info
+
+    before = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
+    document = load_job_document(prepared_project)
+    result = project_info(prepared_project)
+    assert result['design'] == {'background': document['background'], 'style': document.get('style', {})}
+    after = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
+    assert after == before
+
+
 @pytest.mark.parametrize("provider", ["lrclib", "genius", "txt", "whisper", None])
 def test_inspect_reports_song_evidence_and_timings_without_writes(prepared_project, tmp_path, provider):
     state = prepared_project / STATE_FILENAME
@@ -20,6 +32,7 @@ def test_inspect_reports_song_evidence_and_timings_without_writes(prepared_proje
         document["alignment"] = {
             "reference_source": provider, "engine": "ctc-forced-aligner", "word_timing": "generated",
             "needs_review": True, "asr_anchor_check": {"status": "insufficient_anchors"},
+            "acoustic_verification": "completed",
         }
     state.write_text(json.dumps(document))
     before = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob("*") if p.is_file()}
@@ -41,6 +54,7 @@ def test_inspect_reports_song_evidence_and_timings_without_writes(prepared_proje
         "reference_source": provider,
         "alignment_engine": "ctc-forced-aligner" if provider else None,
         "word_timing": "generated" if provider else None,
+        "acoustic_verification": "completed" if provider else None,
         "needs_review": True if provider else None,
         "anchor_status": "insufficient_anchors" if provider else None,
     }
@@ -79,16 +93,4 @@ def test_inspect_unknown_anchor_keeps_project_readable(prepared_project, tmp_pat
     assert info["timed_lines"][0]["start_ms"] == 200
     assert info["timed_lines"][0]["words"][1]["end_ms"] == 800
     after = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob("*") if p.is_file()}
-    assert after == before
-
-
-def test_inspect_exposes_saved_design_without_changing_project(prepared_project):
-    from karaoke_app.job_document import load_job_document
-    from karaoke_app.notebook_runner import project_info
-
-    before = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
-    document = load_job_document(prepared_project)
-    result = project_info(prepared_project)
-    assert result['design'] == {'background': document['background'], 'style': document.get('style', {})}
-    after = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
     assert after == before

@@ -47,11 +47,16 @@ comentario redundante: reserva las regresiones para comportamientos y errores re
 | `src/karaoke_app/notebook.py` | Configuración y ejecución dentro de un runtime existente. |
 | `src/karaoke_app/notebook_runner.py` | Adaptador JSON entre controles y entorno aislado del motor. |
 | `notebooks/generate_video.ipynb` | Controles de Colab, revisión, reproducción y descargas. |
+| `scripts/build_notebook.py` | Genera y verifica el único wheel junto al cuaderno; fija versión y SHA-256. |
 | `src/karaoke_app/assets/` | Motor visual, fuentes y licencias. |
 | `tests/` | Pruebas unitarias e integración. |
 
-El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/` y los logos como
-recursos de paquete, sin duplicar sus fuentes. `resources.py` separa esos archivos de los
+El wheel incluye los scripts de `colab/` como `karaoke_app/runtime/`, sin duplicar sus
+fuentes. Los logos personales son archivos locales opcionales y no se distribuyen.
+La única entrega está en `notebooks/`: un cuaderno editable y un wheel generado.
+Usa `uv run python scripts/build_notebook.py` y `uv run python scripts/build_notebook.py --check`;
+no copies el cuaderno a `dist/` ni construyas entregas por separado con `uv build`.
+`resources.py` separa los recursos de paquete de los
 datos editables del usuario. `KARAOKE_RUNTIME_DIR` permite ejecutar el pipeline fuera de
 `/content`; la CLI remota mantiene ese valor predeterminado. El notebook construye la
 solicitud y utiliza el mismo lanzador/pipeline, sin gestionar sesiones. La resolución de

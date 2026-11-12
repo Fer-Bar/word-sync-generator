@@ -14,7 +14,8 @@ uv run playwright install --with-deps chromium
 uv run python -c "from karaoke_app.lyrics_plus import switzer_font; switzer_font()"
 uv run ruff check .
 uv run pytest -q -rs
-uv build
+uv run python scripts/build_notebook.py
+uv run python scripts/build_notebook.py --check
 ```
 
 CI descarga Switzer sin modificar desde la API oficial de Fontshare y verifica los

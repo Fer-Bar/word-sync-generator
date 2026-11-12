@@ -91,7 +91,7 @@ por otra referencia. La escritura usa respaldo temporal para revertir fallos, no
 | `--background-image` | none | Local image; no dimming by default. |
 | `--background-color` | none | Solid background color; ignored when an image is supplied. |
 | `--resolution` | `1080p` | Resolution stored in the prepared job. |
-| `--logo`, `--watermark` | repository banner if present | Local image file to overlay as a watermark or logo. |
+| `--logo`, `--watermark` | none | Explicit local image file to overlay as a watermark or logo. |
 | `--no-logo`, `--no-watermark` | disabled | Persistently disable the watermark for this job. |
 | `--logo-position` | `top_left` | Corner placement (`top_left`, `top_right`, `bottom_left`, `bottom_right`). |
 | `--logo-scale` | `0.18` | Logo width relative to video width (maintains aspect ratio). |

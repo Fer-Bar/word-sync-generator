@@ -7,33 +7,42 @@ la tipografía o la marca de agua no requiere separar voces ni alinear otra vez.
 ## Empezar desde el navegador
 
 Abre [Generar un video con letras](notebooks/generate_video.ipynb) en Google Colab y
-selecciona una GPU T4. Recibe el paquete `.whl` del responsable del proyecto, súbelo
-cuando el cuaderno lo pida y sigue los pasos: **audio → preparación → revisión → video → descarga**.
+selecciona una GPU T4. El paso 1 descarga el motor de su versión y verifica el SHA-256
+fijado en el cuaderno. Si la entrega local aún no está publicada, pide subir el wheel
+que está junto al cuaderno en `notebooks/`.
+Sigue los pasos: **audio → preparación → revisión → video → descarga**.
 No necesitas terminal, construir paquetes ni escribir rutas Python.
 
-El flujo principal usa **audio local y búsqueda automática de letras**: completa título,
-artista e idioma (álbum opcional), prepara y comprueba el proveedor de la letra y los
-tiempos antes de renderizar. El TXT es una alternativa, no un requisito. La entrada
-por URL de YouTube sigue disponible en la CLI; en el notebook queda para una etapa posterior.
+Usa siempre el cuaderno y el wheel de la misma entrega. Ejecuta las celdas individualmente:
 
-El paso 1 instala y comprueba la GPU. Ejecuta **2 · Tu canción** para abrir el formulario:
-el audio es la entrada principal y **Aportar mi letra · opcional** permite subir o quitar
-un TXT. El paso 3 crea las voces, el instrumental y la letra sincronizada; todavía no vídeos.
-Revisa la letra y genera el vídeo sin casillas adicionales de confirmación. Cambiar las
-entradas conserva los resultados, pero bloquea el render si ya no corresponden. El diagnóstico de disponibilidad de GPU no
-demuestra que un proceso esté usándola en ese momento.
-La subida usa el selector nativo de Colab y espera a terminar la transferencia.
-La subida del audio y el formulario están en celdas separadas: después de recibir el
-archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
-El modelo Whisper se elige al iniciar; detección y preparación reutilizan sus pesos.
-El paso 2 acepta archivos locales o un enlace de YouTube con metadatos; si hace falta,
-puedes aportar cookies temporales. En **4c.1**, abre el diseño guardado: puedes elegir Clásico,
-Fluido, Cósmico, Color, Imagen, Vídeo o Vídeo de origen. Abrirlo sin editar no exige aplicarlo.
-Los cambios se aplican en **4c.2** antes de generar. El render conserva el diseño guardado
-sin forzar otro preset; personalizarlo no repite la preparación del audio.
-Después de la preparación, la celda opcional 4b permite descargar voces y YAML,
-corregirlos en LyricsEditor y subir la
-letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.
+1. **Iniciar:** elige **Modelo** (`small`, `medium` o `large-v3`), instala el motor y comprueba la GPU.
+2. **Subir canción:** bajo este bloque, ejecuta **2a o 2b, solo uno**.
+   En 2a pulsa ▶ y sube el archivo local; en 2b pega el enlace de
+   YouTube antes de ▶. Si necesitas cookies, marca **Subir_cookies**: al ejecutar aparecerá
+   el botón nativo para subir `cookies.txt`. Espera **Archivo listo**.
+3. **Datos:** pulsa ▶ para detectar el idioma y después edita título, artista e idioma;
+   álbum y TXT son opcionales. La detección usa el modelo elegido al iniciar, sin otro modelo
+   pequeño. Si no encuentra evidencia suficiente, selecciona el idioma manualmente.
+   La letra se busca automáticamente. **Subir letra TXT** permite aportar tu archivo
+   en su lugar; **Quitar** aparece solo cuando hay uno recibido y restaura la búsqueda.
+4. **Preparar:** reutiliza el modelo y sus pesos descargados; respeta el idioma final del formulario.
+   La revisión opcional **4b** sigue este orden:
+   descargar voces → descargar YAML → abrir LyricsEditor → subir corrección.
+   En **4c.1**, pulsa ▶ para abrir el diseño guardado. Abrirlo sin editar no requiere aplicarlo
+   ni invalida el vídeo anterior. Puedes elegir un único **Fondo**: Clásico, Fluido, Cósmico, Color,
+   Imagen, Vídeo o Vídeo de origen. Cada opción muestra únicamente sus ajustes;
+   los colores tienen paleta, muestra visual y selector personalizado.
+   Ejecuta **4c.2** para aplicar el diseño y subir la imagen/vídeo cuando corresponda.
+5. **Generar:** elige modo y calidad antes de ▶. Conserva el diseño guardado, incluso si omites 4c.
+6. **Descargar:** elige el archivo antes de ▶; MP4 es el valor predeterminado.
+
+Los formularios junto a ▶ se eligen antes de ejecutar. Los paneles del paso 3 y de 4c.1
+se editan después de abrirlos. Cambiar el diseño no repite la preparación; aplica los cambios
+en 4c.2 antes de generar.
+
+Editar los datos no borra el último proyecto ni vídeo completos. Si ya no corresponden
+a los datos actuales, revierte los cambios o repite el paso 4 antes de generar.
+Un intento fallido conserva los resultados anteriores para descargarlos.
 
 El notebook usa el mismo motor que la CLI, dentro de tu sesión actual. La CLI sigue
 disponible para automatización y proyectos locales. [Instalación, distribución y límites](docs/notebooks.md).
@@ -54,9 +63,42 @@ También acepta URLs de YouTube. Se descargan primero en tu máquina y requieren
 [Deno](https://deno.com/) en el PATH; un fallo de descarga no abre una sesión GPU.
 Para una letra revisada añade `--lyrics-text ./letra.txt`.
 
-El paquete también puede instalarse desde un wheel construido con `uv build`, sin un checkout junto
+**La preparación prioriza la calidad y siempre ajusta la letra al audio:** usa Whisper
+como evidencia independiente y CTC para alinear el texto conocido, también cuando LRCLIB
+aporta un LyricsFile con word sync. Los tiempos del proveedor sirven como referencia;
+no se aceptan como resultado final solo porque coincidan los metadatos. Los tiempos
+incompatibles se excluyen de las ventanas de recuperación, pero se conserva la letra.
+Se preservan el texto y la estructura de la variante seleccionada; `plainLyrics` no
+sobrescribe un LyricsFile nativo. El registro original queda en `lrclib_record.json`.
+Sin letra utilizable, se transcribe. Un TXT explícito mantiene prioridad. Las recuperaciones
+con tiempos estimados se identifican en el diagnóstico. Voces e instrumental se generan
+para la revisión y ambos modos de vídeo. La comprobación acústica ya no es opcional:
+no hace falta una casilla ni un flag. El antiguo `--verify-word-timings` sigue aceptándose.
+Para usar un YAML ya terminado sin repetir este procesamiento, renderiza el proyecto existente.
+
+El paquete también puede instalarse desde el wheel de `notebooks/`, sin un checkout junto
 al ejecutable. En ese caso los archivos locales y las salidas se buscan en el directorio
 actual. [Instalación portable y notebook](docs/notebooks.md).
+
+### Una sola entrega
+
+`notebooks/` contiene únicamente `generate_video.ipynb` (fuente editable) y su
+`lyrics_generator-<versión>-py3-none-any.whl` (motor generado, ignorado por Git).
+Conserva la interfaz de pasos separados **2a/2b**, revisión **4b** y diseño **4c**.
+No se mantienen copias del cuaderno en `dist/`.
+
+Después de cambiar el motor o preparar una versión, ejecuta:
+
+```bash
+uv run python scripts/build_notebook.py
+uv run python scripts/build_notebook.py --check
+```
+
+La versión se cambia solo en `pyproject.toml`; el comando genera el wheel y actualiza
+la versión y su SHA-256 en el cuaderno. Elimina wheels anteriores de esa carpeta y
+comprueba que el paquete contiene el código actual. CI y publicación usan el mismo comando.
+Los audios locales se conservan en `inputs/notebook-examples/` y los resultados en
+`outputs/notebook-examples/`, separados de la entrega.
 
 ### 1. Revisar las letras
 
@@ -86,7 +128,8 @@ uv run playwright install --with-deps chromium
 uv run karaoke preview outputs/JOB_ID --mode lyrics --start 15 --duration 8 --output preview.mp4
 ```
 
-El preview muestra letras y fondo; la composición final añade intro y marca de agua.
+El preview muestra letras y fondo; la composición final añade intro y, solo si eliges
+`--logo ./mi-logo.png`, tu marca de agua. No se distribuyen logos personales.
 [Opciones visuales](docs/visuals.md).
 
 ### 3. Renderizar
@@ -159,16 +202,3 @@ Código propio: [Apache-2.0](LICENSE). El modelo CTC predeterminado tiene licenc
 **CC-BY-NC-4.0**: revisa sus condiciones antes de usarlo comercialmente.
 Demucs, faster-whisper, yt-dlp, Braccato, FFmpeg, las fuentes y otras dependencias mantienen
 sus condiciones. [Atribuciones y licencias de terceros](THIRD_PARTY_NOTICES.md).
-
-## Detección de idioma con el modelo seleccionado
-
-Elige `small`, `medium` o `large-v3` en el paso 1. El paso 3 detecta el idioma antes
-del formulario usando ese mismo modelo, sin descargar otro pequeño. Puedes corregir
-el idioma; si no hay evidencia suficiente, debes seleccionarlo manualmente.
-El paso 4 respeta tu selección y reutiliza los pesos guardados en
-`/content/karaoke-notebook/models`, fuera de las carpetas de trabajo desechables.
-Cada proceso carga sus pesos en memoria; la caché dura mientras exista la sesión.
-
-Editar los datos no borra el último proyecto ni vídeo completos. Si ya no corresponden
-a los datos actuales, revierte los cambios o repite el paso 4 antes de generar.
-Un intento fallido conserva los resultados anteriores para descargarlos.

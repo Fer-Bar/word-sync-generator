@@ -6,54 +6,91 @@
 
 Abre [generate_video.ipynb](../notebooks/generate_video.ipynb) en Colab y selecciona
 **Entorno de ejecución → Cambiar tipo de entorno de ejecución → T4 GPU**.
-Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete tú.
+`notebooks/` es la única carpeta de entrega: contiene el cuaderno editable y su wheel.
+El motor de una versión publicada se descarga automáticamente. Si la entrega local aún
+no está publicada, el paso 1 pide subir el wheel de esa misma carpeta. Nunca instala una
+versión anterior como sustituto: comprueba versión, SHA-256 y capacidades del motor.
 
-1. **Iniciar:** sube el `.whl`; se instala el motor y se comprueba la GPU.
-2. **Elegir canción:** selecciona **Archivo local** o **YouTube**. Sube el archivo o pega
-   el enlace y ejecuta la celda. YouTube descarga un MP4 de hasta 720p con audio y metadatos.
+1. **Iniciar:** elige **Modelo** (`small`, `medium` o `large-v3`, predeterminado).
+   Descarga el `.whl` de GitHub Releases, verifica su SHA-256,
+   instala el motor y comprueba la GPU. Un checksum incorrecto detiene el paso.
+2. **Subir canción:** el bloque de texto común presenta las dos alternativas: ejecuta
+   **2a o 2b**, no ambos. Cada celda contiene solo su propia entrada.
+   En **2a**, pulsa ▶ para mostrar el
+   botón nativo y subir el archivo local. En **2b**, pega el enlace antes de ▶;
+   YouTube descarga un MP4 de hasta 720p con audio y metadatos.
    Espera **Archivo listo**. La celda permanece activa durante la transferencia.
    Volver a ejecutarla inicia una selección nueva y descarta los datos de la canción anterior.
-3. **Datos de la canción:** ejecuta la celda para leer los metadatos y mostrar el formulario.
+3. **Datos de la canción:** ejecuta la celda para leer los metadatos, detectar el idioma
+   y mostrar el formulario. Usa el mismo modelo elegido al iniciar; sus pesos se descargan
+   aquí la primera vez, sin añadir un modelo pequeño. Compara fragmentos separados con voz;
+   si la evidencia es débil, contradictoria o de un idioma no admitido, pide selección manual.
+   El detector puede omitir voz cantada: no se presenta como una identificación infalible.
+   Se ofrecen español, inglés, portugués, francés, italiano y alemán, compatibles con la cadena
+   actual de transcripción y alineación. Siempre puedes corregir la sugerencia y volver a ejecutar
+   el paso 3 no sobrescribe tu selección manual. Un fallo de detección tampoco impide editarla.
    Confirma título, artista e idioma. Título, artista y álbum se sugieren desde las
    etiquetas del archivo cuando existen; tus correcciones manuales se conservan.
    El álbum y el TXT son opcionales.
-   El TXT está en **Aportar mi letra · opcional**; la búsqueda automática está visible
-   y activada por defecto. Estos controles no están ocultos en acordeones.
+   **Subir letra TXT** permite aportar una letra propia. Al recibirla aparecen nombre,
+   tamaño y las acciones **Cambiar TXT** y **Quitar**. Sin archivo, se busca la letra
+   automáticamente; con archivo, no se consulta a los proveedores. No hay casilla de búsqueda.
 4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
-   y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
-   Selecciona **Modelo** al iniciar el cuaderno: `small`, `medium` o `large-v3` (predeterminado).
-   Detección y preparación reutilizan ese modelo y sus pesos descargados.
-   La celda independiente **4b · Revisar en LyricsEditor (opcional)** muestra el enlace al editor.
-   Elige **Descargar voces**, ejecútala, y repite con **Descargar letra**. Abre ambos archivos
-   en LyricsEditor. Para aplicar cambios, elige **Importar YAML corregido** y sube el YAML
-   exportado. Puedes omitir esta celda y continuar con la letra actual.
-   **4c.1 · Elegir fondo** abre los controles con el diseño guardado. Clásico, Fluido y Cósmico
-   tienen muestras; Color ofrece paleta y selector. Imagen, Vídeo y Vídeo de origen muestran
-   únicamente sus ajustes. Abrir el panel sin editar no exige aplicarlo ni descarta el vídeo.
-   **4c.2 · Aplicar diseño** guarda los cambios y solicita el archivo cuando corresponde.
-   Los vídeos cortos se repiten sin sustituir la canción. Cambiar valores bloquea el render
-   hasta aplicarlos; volver a los valores guardados elimina ese estado pendiente.
-5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos** y calidad. Usa la letra actual sin una casilla
-   adicional de confirmación. Conserva el aspecto guardado, sin forzar otro preset.
-   Cambiar el aspecto no repite la preparación.
+   y letra con tiempos. Reutiliza los pesos de Whisper descargados en el paso 3;
+   otros modelos pueden descargarse aquí. Todavía no genera vídeos.
+   Respeta el idioma final del formulario. Para cambiar el modelo, vuelve al paso 1
+   y selecciona de nuevo la canción; no hay un segundo selector en el paso 4.
+   El proceso siempre analiza el audio con Whisper y alinea el texto conocido con CTC,
+   también cuando LRCLIB aporta word sync. La letra y su estructura son la referencia;
+   los tiempos finales se calculan sobre tu audio. La comprobación acústica ya no es opcional
+   y se elimina la casilla **Verificar_tiempos**. Al terminar informa del motor utilizado y
+   de los tiempos estimados o problemas pendientes. El render de un proyecto ya preparado
+   utiliza el YAML actual sin volver a alinear. La separación de audio se mantiene.
+   La revisión opcional **4b** se recorre de arriba abajo: **4b.1** descarga voces,
+   **4b.2** descarga YAML, **4b.3** enlaza a LyricsEditor y explica qué abrir/exportar,
+   y **4b.4** recibe el YAML corregido. Espera **YAML actualizado** al importarlo.
+   Puedes omitir la sección completa y continuar con la letra actual.
+   En **4c.1 · Elegir fondo**, pulsa ▶ para abrir el diseño guardado y después elige una opción: Clásico, Fluido,
+   Cósmico, Color, Imagen, Vídeo o Vídeo de origen. No hay dos selectores que puedan
+   contradecirse. Los tres fondos predefinidos tienen una muestra generada por el motor;
+   se oculta al elegir un archivo o color. No simula la letra ni el movimiento.
+   El fondo de color ofrece siete opciones con muestra visual y un selector personalizado.
+   Solo aparecen los campos correspondientes al tipo de fondo elegido.
+   En **4c.2 · Aplicar diseño**, pulsa ▶ y sube la imagen/vídeo si se solicita. Los archivos
+   se validan y guardan en el proyecto; los clips cortos se repiten sin sustituir el audio.
+   Espera **Diseño aplicado**. Cambiar cualquier valor exige aplicarlo de nuevo; el render
+   rechaza cambios pendientes en vez de usar silenciosamente una selección anterior.
+   Abrir los controles sin cambiar valores no exige 4c.2 ni descarta el vídeo anterior;
+   volver a los valores guardados elimina el estado pendiente.
+   Elegir Clásico, Fluido o Cósmico recupera ese fondo predefinido. Los fondos personalizados
+   usan la tipografía clásica; no heredan una selección oculta anterior.
+   Omitir 4c conserva el aspecto guardado del proyecto, sin forzar otro preset durante el render.
+5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, y la calidad. Usa la letra actual sin una casilla
+   adicional de confirmación. Cambiar el aspecto no repite la preparación.
 6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
    si quieres conservarlo antes de cerrar Colab.
 
-La celda 4b usa el formulario y la transferencia nativos de Colab, sin botones `ipywidgets`.
+Las celdas 4b usan la transferencia nativa de Colab, sin botones `ipywidgets` ni menú de acciones.
 Permite descargar `vocals.flac` y `lyrics.lyricsfile.yaml` individualmente, sin repetir el paso 4.
 El YAML corregido se valida antes de reemplazar la letra; se conserva una copia anterior
 en el proyecto. Importarlo no repite la separación ni la transcripción. El ZIP editable
 se crea al descargarlo para incluir la versión actual, sin los renders ni diagnósticos.
 
 No hace falta editar rutas ni montar Google Drive. El audio se procesa
-en la sesión de tu cuenta; la búsqueda opcional de letras consulta proveedores externos.
-Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio autorizado.
-La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
-interruptor no significa «ignorar mi archivo». La CLI conserva la semántica de sus flags.
-Los controles necesitan una sesión activa: aparecen al ejecutar su celda, no al
-abrir un cuaderno sin ejecutar. Cambiar archivos o datos conserva el último proyecto y vídeo;
-el render exige revertir los cambios o preparar los nuevos datos. Para otra canción, reemplaza el audio y revisa también metadatos
-y TXT; los proyectos ya generados permanecen en disco. El formulario usa `ipywidgets`
+en la sesión de tu cuenta. Sin TXT, la búsqueda automática consulta proveedores externos;
+con TXT, se usa ese archivo. Los modelos pueden necesitar Internet también al usar TXT.
+Usa audio autorizado. La CLI conserva la semántica de sus flags.
+Los formularios nativos (`@param`) se editan **antes de ejecutar su celda**; no aplican
+cambios automáticamente. El botón de subida (`files.upload`) aparece **al ejecutar** y
+espera la transferencia. Los paneles del paso 3 y 4c.1 se editan **después de ejecutar**.
+No uses «Ejecutar todas»: hay rutas alternativas y subidas opcionales.
+Al cambiar archivos o datos se conserva el último proyecto y vídeo completos.
+El render queda bloqueado si los datos actuales no corresponden a esa preparación:
+revierte los cambios o ejecuta el paso 4. Corregir título o artista puede cambiar la búsqueda
+de letras, por lo que no se considera automáticamente un cambio solo visual.
+Un intento fallido no sustituye los resultados anteriores, y un formulario antiguo no
+invalida la canción activa. Para otra canción, reemplaza el audio y revisa metadatos
+y TXT; los proyectos anteriores siguen disponibles para exportar. El formulario usa `ipywidgets`
 del entorno anfitrión de Colab; el motor conserva su entorno aislado.
 
 ### Probar el flujo real con una canción local
@@ -71,8 +108,9 @@ sin evidencia o con anclas insuficientes sigue indicado como pendiente de revisi
 
 Después genera el video, comprueba audio/subtítulos en la previsualización y descarga
 el MP4 y el proyecto editable. Repite solo el render si cambias el aspecto. La entrada
-YouTube se adquiere con el mismo servicio que la CLI. Si solicita autenticación, selecciona
-**Subir cookies.txt** y repite el paso 2 con un archivo Netscape. Se intenta primero sin
+YouTube se adquiere con el mismo servicio que la CLI. Si solicita autenticación, marca
+**Subir_cookies** y ejecuta de nuevo **2b**: aparecerá el botón nativo para subir un archivo
+Netscape. Espera **Cookies recibidas** y después **Archivo listo**. Se intenta primero sin
 cookies; la copia temporal se usa solo para reintentar y no se incluye en el proyecto.
 Las cookies subidas se eliminan al terminar el intento. La CLI conserva la descarga de
 audio por defecto; el notebook solicita vídeo y reutiliza el audio para la preparación.
@@ -86,21 +124,45 @@ usarse desde otros entornos con sus dependencias disponibles.
 
 ## Distribuir el cuaderno sin compartir credenciales
 
-El mantenedor construye el paquete desde una revisión concreta:
+El cuaderno fija una versión y el SHA-256 exacto del wheel, no una rama mutable ni `latest`.
+El repositorio público distribuye el wheel y ese mismo cuaderno juntos en GitHub Releases.
+No hace falta mantener un archivo de checksum aparte. El hash detecta mezclas de entregas
+y descargas alteradas o incompletas; no es una firma independiente.
+
+Edita únicamente `notebooks/generate_video.ipynb`. Para regenerar su motor desde
+`src/karaoke_app/` y `colab/`, usa `uv run python scripts/build_notebook.py`.
+El comando construye en un directorio temporal, valida el contenido y deja un único wheel
+en `notebooks/`, con versión y SHA-256 actualizados en el cuaderno. `--check` detecta un
+wheel desactualizado respecto al código local o mezclado con otro cuaderno.
+
+### Publicar una versión
+
+Tras revisar los cambios, ejecutar los checks y autorizar la publicación:
+
+1. Actualiza la versión en `pyproject.toml`, sin reutilizar una ya publicada.
+2. Ejecuta `uv run python scripts/build_notebook.py` y luego el mismo comando con `--check`.
+   `uv` actualiza el lockfile; el constructor actualiza la versión y el hash del cuaderno.
+3. Confirma el código, el lockfile y el cuaderno de esa misma revisión.
+4. Crea y publica el tag correspondiente a la versión del paquete.
+
+El workflow `.github/workflows/release.yml` comprueba que tag, paquete y cuaderno
+coincidan, verifica la exclusión de logos locales y ejecuta el mismo constructor. Rechaza
+la publicación si reconstruir cambia el cuaderno confirmado en Git. Publica los dos
+archivos de `notebooks/` mediante el token del propio workflow. **Publicar el tag activa la publicación**;
+no se ejecuta por un push normal ni por abrir un PR. No requiere tokens en el cuaderno.
+Si la release ya existe, falla en vez de reemplazar sus archivos silenciosamente.
+
+Para inspeccionar el paquete localmente, sin publicar:
 
 ```bash
-uv build --wheel
-sha256sum dist/lyrics_generator-0.1.1-py3-none-any.whl
+uv run python scripts/build_notebook.py --check
 ```
 
-Entrega el wheel, su checksum, la revisión y el cuaderno correspondiente por el canal
-privado acordado. El usuario final solo los sube. Un cambio del paquete requiere distribuir
-el wheel nuevo junto con el cuaderno; no uses enlaces con tokens ni publiques el repositorio
-o el paquete privado sin autorización. Ninguna celda descarga código de una rama mutable.
-
-El wheel incluye módulos, scripts de runtime, recursos visuales y sus licencias. No
-incluye canciones, modelos, credenciales, Chromium ni FFmpeg del sistema. Switzer se
+El wheel incluye módulos, scripts de runtime, recursos visuales genéricos y sus licencias. No
+incluye logos personales, canciones, modelos, credenciales, Chromium ni FFmpeg del sistema. Switzer se
 obtiene de Fontshare cuando se necesita; no se redistribuye dentro del wheel.
+Los archivos de `logos/` permanecen locales e ignorados por Git, y solo se usan si se
+seleccionan explícitamente. Retirarlos del árbol actual no los elimina del historial Git.
 
 ## Un motor, dos interfaces
 
@@ -136,11 +198,35 @@ tiene un identificador distinto. Los renders quedan en `PROYECTO/renders/`; los 
 conservan diagnósticos bajo `.runs/`. No borres esas rutas antes de revisar un error.
 Todos estos archivos son temporales: descarga lo que necesites antes de cerrar la sesión.
 
+La caché de Whisper se conserva en `/content/karaoke-notebook/models`, fuera de las carpetas
+de trabajo desechables y de los ZIP exportados. Detección y preparación usan el mismo modelo
+y caché; cada proceso vuelve a cargar los pesos en memoria, pero no necesita descargarlos otra vez.
+La caché no sobrevive a la eliminación del entorno de Colab.
+
 Prefiere audio frente a un video grande: la preparación del notebook conserva la fuente
 original en el proyecto. El ZIP editable contiene el proyecto preparado, no sus renders;
 descarga también el paquete de videos si necesitas ambos.
 
 ## Verificación y límites
+
+Referencias de interacción: [formularios de Colab](https://colab.research.google.com/notebooks/forms.ipynb)
+y [código oficial de `files.upload`](https://github.com/googlecolab/colabtools/blob/main/google/colab/files.py).
+`upload()` crea el input de archivo en la salida y bloquea hasta recibir los archivos.
+La revisión de UX separa 2a/2b y las tres transferencias de 4b; 4c exige aplicar explícitamente
+la selección. La comprobación sintáctica de estas celdas no sustituye su recorrido en navegador.
+
+El panel visual toma como referencias los cuadernos oficiales de ipywidgets
+[Widget List](https://github.com/jupyter-widgets/ipywidgets/blob/main/docs/source/examples/Widget%20List.ipynb)
+y [Widget Styling](https://github.com/jupyter-widgets/ipywidgets/blob/main/docs/source/examples/Widget%20Styling.ipynb):
+controles reales, `ColorPicker`, muestras HTML y contenedores que se adaptan al ancho.
+Las muestras de estilos se calculan en el entorno del motor con `preparation_visuals`
+y `background_frame`; no requieren otro wheel ni representan un render completo de la letra.
+
+Se ejecutaron los widgets y el adaptador reales sobre una copia del proyecto de Jorja:
+paleta, color personalizado, persistencia de configuración, retorno al fondo del preset y
+bloqueo de render con cambios pendientes. El HTML embebido del panel se inspeccionó en
+Chromium local a 1080 y 390 px, sin desbordamiento horizontal en la vista estrecha.
+Esto verifica la presentación local; el recorrido interactivo dentro de Colab sigue pendiente.
 
 Las pruebas locales protegen servicios, contratos de CLI, archivos, cancelación y
 recuperación. No se añade una batería de tests de celdas o controles del notebook.
@@ -157,7 +243,7 @@ desactivada y la alineación CTC: texto suministrado y tiempos generados con pro
 conservaron sus hashes. La comprobación independiente de anclas ASR indicó anclas
 insuficientes: no equivale a una validación completa de precisión temporal.
 
-**Sigue pendiente el recorrido real de controles, reproducción y descargas en el navegador.**
+**Sigue pendiente el recorrido completo de controles, reproducción y descargas dentro de Colab.**
 La versión anterior del formulario se comprobó localmente con widgets reales: carga y
 persistencia de ambos archivos, eliminación del TXT, rechazo de una extensión incorrecta,
 limpieza del contenido del widget e invalidación al editar. También pasaron las 26 pruebas
@@ -195,7 +281,7 @@ H.264/AAC a 720p, con color, imagen y un clip de ocho segundos repetido como fon
 Los tres se decodificaron completos; los hashes descargados coincidieron. El ZIP editable
 conservó el fondo final y la letra actual, sin cookies ni metadatos privados del descargador.
 Las cookies temporales se eliminaron y la sesión se cerró. Los archivos están en
-`dist/results/youtube-backgrounds/`. Fue ejecución real por CLI, sin tests ni mocks;
+`outputs/notebook-examples/youtube-backgrounds/`. Fue ejecución real por CLI, sin tests ni mocks;
 la interacción de los selectores del navegador permanece como comprobación humana.
 
 El 10 de noviembre de 2026 se ejecutó la canción completa «Ocean Eyes» (199,545 s) en
@@ -227,16 +313,3 @@ datos de entrada o enlaces temporales. La CLI mantiene su nivel de diagnóstico 
 
 Una prueba corta demuestra funcionamiento, no precisión para toda canción ni disponibilidad
 garantizada. Revisa las letras y tiempos; conserva un resultado descargado para demostraciones.
-
-## Detección de idioma con el modelo seleccionado
-
-Elige `small`, `medium` o `large-v3` en el paso 1. El paso 3 detecta el idioma antes
-del formulario usando ese mismo modelo, sin descargar otro pequeño. Puedes corregir
-el idioma; si no hay evidencia suficiente, debes seleccionarlo manualmente.
-El paso 4 respeta tu selección y reutiliza los pesos guardados en
-`/content/karaoke-notebook/models`, fuera de las carpetas de trabajo desechables.
-Cada proceso carga sus pesos en memoria; la caché dura mientras exista la sesión.
-
-Editar los datos no borra el último proyecto ni vídeo completos. Si ya no corresponden
-a los datos actuales, revierte los cambios o repite el paso 4 antes de generar.
-Un intento fallido conserva los resultados anteriores para descargarlos.
