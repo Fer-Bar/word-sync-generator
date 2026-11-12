@@ -20,15 +20,17 @@ El paso 1 instala y comprueba la GPU. Ejecuta **2 · Tu canción** para abrir el
 el audio es la entrada principal y **Aportar mi letra · opcional** permite subir o quitar
 un TXT. El paso 3 crea las voces, el instrumental y la letra sincronizada; todavía no vídeos.
 Revisa la letra y genera el vídeo sin casillas adicionales de confirmación. Cambiar las
-entradas invalida la preparación anterior. El diagnóstico de disponibilidad de GPU no
+entradas conserva los resultados, pero bloquea el render si ya no corresponden. El diagnóstico de disponibilidad de GPU no
 demuestra que un proceso esté usándola en ese momento.
 La subida usa el selector nativo de Colab y espera a terminar la transferencia.
 La subida del audio y el formulario están en celdas separadas: después de recibir el
 archivo, ejecuta «Datos de la canción» para leer sus metadatos y confirmar los campos editables.
-El modelo Whisper se elige en el formulario nativo del paso 4, antes de preparar la canción.
+El modelo Whisper se elige al iniciar; detección y preparación reutilizan sus pesos.
 El paso 2 acepta archivos locales o un enlace de YouTube con metadatos; si hace falta,
-puedes aportar cookies temporales. La celda opcional 4c permite usar un color, imagen
-o vídeo como fondo sin repetir la preparación del audio. Usa el notebook con el wheel 0.1.1.
+puedes aportar cookies temporales. En **4c.1**, abre el diseño guardado: puedes elegir Clásico,
+Fluido, Cósmico, Color, Imagen, Vídeo o Vídeo de origen. Abrirlo sin editar no exige aplicarlo.
+Los cambios se aplican en **4c.2** antes de generar. El render conserva el diseño guardado
+sin forzar otro preset; personalizarlo no repite la preparación del audio.
 Después de la preparación, la celda opcional 4b permite descargar voces y YAML,
 corregirlos en LyricsEditor y subir la
 letra corregida sin repetir la preparación. La descarga final predeterminada es MP4.

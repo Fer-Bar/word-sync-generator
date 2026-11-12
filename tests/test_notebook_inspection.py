@@ -80,3 +80,15 @@ def test_inspect_unknown_anchor_keeps_project_readable(prepared_project, tmp_pat
     assert info["timed_lines"][0]["words"][1]["end_ms"] == 800
     after = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob("*") if p.is_file()}
     assert after == before
+
+
+def test_inspect_exposes_saved_design_without_changing_project(prepared_project):
+    from karaoke_app.job_document import load_job_document
+    from karaoke_app.notebook_runner import project_info
+
+    before = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
+    document = load_job_document(prepared_project)
+    result = project_info(prepared_project)
+    assert result['design'] == {'background': document['background'], 'style': document.get('style', {})}
+    after = {p.relative_to(prepared_project): p.read_bytes() for p in prepared_project.rglob('*') if p.is_file()}
+    assert after == before

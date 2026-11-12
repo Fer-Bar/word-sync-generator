@@ -21,18 +21,21 @@ Recibe del responsable el cuaderno y su paquete `.whl`; no construyas el paquete
    y activada por defecto. Estos controles no están ocultos en acordeones.
 4. **Crear voces y letra sincronizada:** valida el archivo y prepara voces, instrumental
    y letra con tiempos. La primera vez descarga modelos; todavía no genera vídeos.
-   Antes de ejecutar, selecciona **Modelo** en el formulario nativo: `small`, `medium` o
-   `large-v3` (predeterminado). El modelo elegido se muestra al iniciar la preparación.
+   Selecciona **Modelo** al iniciar el cuaderno: `small`, `medium` o `large-v3` (predeterminado).
+   Detección y preparación reutilizan ese modelo y sus pesos descargados.
    La celda independiente **4b · Revisar en LyricsEditor (opcional)** muestra el enlace al editor.
    Elige **Descargar voces**, ejecútala, y repite con **Descargar letra**. Abre ambos archivos
    en LyricsEditor. Para aplicar cambios, elige **Importar YAML corregido** y sube el YAML
    exportado. Puedes omitir esta celda y continuar con la letra actual.
-   **4c · Fondo del vídeo (opcional)** permite elegir color (`#RRGGBB`), imagen, vídeo
-   subido o vídeo de origen. Los archivos se validan y guardan dentro del proyecto;
-   los vídeos cortos se repiten y su audio no sustituye la canción. Ajusta **Oscurecer**
-   para mejorar la lectura. **Según estilo** vuelve al fondo del preset seleccionado.
-5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos**, estilo y calidad. Usa la letra actual sin una casilla
-   adicional de confirmación. Cambiar el aspecto no repite la preparación.
+   **4c.1 · Elegir fondo** abre los controles con el diseño guardado. Clásico, Fluido y Cósmico
+   tienen muestras; Color ofrece paleta y selector. Imagen, Vídeo y Vídeo de origen muestran
+   únicamente sus ajustes. Abrir el panel sin editar no exige aplicarlo ni descarta el vídeo.
+   **4c.2 · Aplicar diseño** guarda los cambios y solicita el archivo cuando corresponde.
+   Los vídeos cortos se repiten sin sustituir la canción. Cambiar valores bloquea el render
+   hasta aplicarlos; volver a los valores guardados elimina ese estado pendiente.
+5. **Generar el vídeo:** elige **Lyrics**, **Karaoke** o **Ambos** y calidad. Usa la letra actual sin una casilla
+   adicional de confirmación. Conserva el aspecto guardado, sin forzar otro preset.
+   Cambiar el aspecto no repite la preparación.
 6. **Descargar:** MP4 está seleccionado por defecto. Guarda también el proyecto editable
    si quieres conservarlo antes de cerrar Colab.
 
@@ -48,8 +51,8 @@ Los modelos necesitan Internet incluso con esa búsqueda desactivada. Usa audio 
 La letra TXT que subas tiene prioridad aunque desactives la búsqueda en línea; el
 interruptor no significa «ignorar mi archivo». La CLI conserva la semántica de sus flags.
 Los controles necesitan una sesión activa: aparecen al ejecutar su celda, no al
-abrir un cuaderno sin ejecutar. Al cambiar archivos o datos se invalida la preparación
-y revisión anterior. Para otra canción, reemplaza el audio y revisa también metadatos
+abrir un cuaderno sin ejecutar. Cambiar archivos o datos conserva el último proyecto y vídeo;
+el render exige revertir los cambios o preparar los nuevos datos. Para otra canción, reemplaza el audio y revisa también metadatos
 y TXT; los proyectos ya generados permanecen en disco. El formulario usa `ipywidgets`
 del entorno anfitrión de Colab; el motor conserva su entorno aislado.
 

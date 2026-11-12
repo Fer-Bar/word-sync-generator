@@ -34,6 +34,7 @@ def project_info(directory: Path) -> dict:
             "anchor_status": anchor_check.get("status") if isinstance(anchor_check, dict) else None,
         },
         "timed_lines": lyrics["lines"],
+        "design": {"background": document["background"], "style": document.get("style", {})},
     }
 
 

@@ -13,8 +13,8 @@ Verification: executable notebook logic probes outside the workspace, Ruff, focu
 ## Tasks
 
 - T0 [S1] inline; completed; commit `63fa5b4`; isolated snapshot: 59 tests passed; prior shared-loader verification remains recorded in memory.
-- T1 [S2] inline; verified, commit pending; no writer trigger: one coupled form/preparation behavior; RED lost outputs, GREEN callback/snapshot/failure probes and Ruff.
-- T2 [S3-S4] inline; pending; commit pending; same notebook surface requires sequential work, not parallel writers.
+- T1 [S2] inline; completed; commit `458d2bd`; no writer trigger: one coupled form/preparation behavior; RED lost outputs, GREEN callback/snapshot/failure probes and Ruff on the isolated commit candidate.
+- T2 [S3-S4] inline; focused checks passed, final suite pending; commit pending; same notebook surface requires sequential work, not parallel writers.
 - T3 [S5] inline orchestration; blocked on remote session/access authorization; evidence and verification commit pending.
 
 ## Log
@@ -24,3 +24,5 @@ Verification: executable notebook logic probes outside the workspace, Ruff, focu
 - L3: Existing staged logo deletions and extensive release/branding/reference changes are outside scope. T0 used an isolated index; staged logo deletions remained unchanged. No push or publication is authorized by local commit requests.
 - L4: RDD is globally disabled. Do not enable it. Wrong-song lyric acceptance and checkpoint/project import are not included in these tasks.
 - L5: T1 keeps successful project/video pointers while inputs differ, blocks stale rendering, ignores retired forms, restores compatibility on reversion, and only replaces outputs after a successful matching attempt. Metadata lookup inputs conservatively require re-preparation; the previous editable project remains exportable. Mixed CRLF notebook lines were normalized before functional checks.
+- L6: T1 commit `458d2bd` excludes the existing design/release/branding changes. T0 and T1 left the three staged logo deletions unchanged. Risk: none (notebook-local state behavior).
+- L7: T2 RED reproduced missing saved-design inspection and false pending state on opening. GREEN: 22 focused service tests, saved solid/fluid/cosmic/image/video logic probes, changed/reverted/retired-form checks, retained render on failure, and Ruff. The JSON inspection adds optional saved-design data; rendering no longer reapplies presets over the saved document. Local probes are not browser/Colab proof.
