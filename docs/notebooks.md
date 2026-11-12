@@ -233,3 +233,7 @@ el idioma; si no hay evidencia suficiente, debes seleccionarlo manualmente.
 El paso 4 respeta tu selección y reutiliza los pesos guardados en
 `/content/karaoke-notebook/models`, fuera de las carpetas de trabajo desechables.
 Cada proceso carga sus pesos en memoria; la caché dura mientras exista la sesión.
+
+Editar los datos no borra el último proyecto ni vídeo completos. Si ya no corresponden
+a los datos actuales, revierte los cambios o repite el paso 4 antes de generar.
+Un intento fallido conserva los resultados anteriores para descargarlos.
