@@ -6,7 +6,7 @@ la tipografía o la marca de agua no requiere separar voces ni alinear otra vez.
 
 ## Empezar desde el navegador
 
-Abre [Generar un video con letras](notebooks/generate_video.ipynb) en Google Colab y
+Abre [Crea tu video de Lyrics o Karaoke](notebooks/generate_video.ipynb) en Google Colab y
 selecciona una GPU T4. El paso 1 descarga el motor de su versión y verifica el SHA-256
 fijado en el cuaderno. Si la entrega local aún no está publicada, pide subir el wheel
 que está junto al cuaderno en `notebooks/`.
@@ -36,7 +36,8 @@ Usa siempre el cuaderno y el wheel de la misma entrega. Ejecuta las celdas indiv
    Imagen, Vídeo o Vídeo de origen. Cada opción muestra únicamente sus ajustes;
    los colores tienen paleta, muestra visual y selector personalizado.
    Ejecuta **4c.2 · Aplicar fondo** para aplicar el diseño y subir la imagen/vídeo cuando corresponda.
-5. **Generar:** elige Lyrics (con voz) o Karaoke (sin voz), y la calidad antes de ▶.
+5. **Generar:** en **Tipo de video**, elige Lyrics (voz y letras sincronizadas)
+   o Karaoke (instrumental y letras sincronizadas), y la calidad antes de ▶.
    Conserva el diseño guardado, incluso si omites 4c.
 6. **Descargar:** pulsa ▶ para descargar directamente el MP4.
 

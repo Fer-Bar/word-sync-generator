@@ -65,7 +65,8 @@ versión anterior como sustituto: comprueba versión, SHA-256 y capacidades del 
    Elegir Clásico, Fluido o Cósmico recupera ese fondo predefinido. Los fondos personalizados
    usan la tipografía clásica; no heredan una selección oculta anterior.
    Omitir 4c conserva el aspecto guardado del proyecto, sin forzar otro preset durante el render.
-5. **Generar el video:** elige **Lyrics (con voz)** o **Karaoke (sin voz)** y la calidad:
+5. **Generar el video:** en **Tipo de video**, elige **Lyrics (voz y letras sincronizadas)**
+   o **Karaoke (instrumental y letras sincronizadas)** y la calidad:
    **720p (rápido)** o **1080p (mayor calidad)**. Usa la letra actual y el fondo aplicado.
    Para obtener ambos modos, genera y descarga cada uno por separado.
 6. **Descargar:** pulsa ▶ para descargar el MP4 directamente. El cuaderno no ofrece
